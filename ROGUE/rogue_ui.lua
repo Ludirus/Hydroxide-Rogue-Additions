@@ -13741,9 +13741,310 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
             local currently_dropping = false
             local droppedTools = {}
-            local click_play_from_start_menu
-            local wait_for_character_root
-            local prepare_restart_from_point_one
+
+            local function should_restart_path_after_hop(settings)
+                if settings and settings.auto_restart_after_hop ~= nil then
+                    return settings.auto_restart_after_hop
+                end
+
+                if Toggles.AutoRestartAfterHop ~= nil then
+                    return Toggles.AutoRestartAfterHop.Value
+                end
+
+                return cheat_client.config.auto_restart_after_hop ~= false
+            end
+
+            local function should_use_deepforest_restart(settings)
+                return path_uses_deepforest_restart(settings)
+            end
+
+            local function restart_preflight_check()
+                if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
+                    return false, "character not ready"
+                end
+
+                local root_position = plr.Character.HumanoidRootPart.Position
+                local critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 0
+                local proximity_check_distance = Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                local check_distance = math.max(critical_distance, proximity_check_distance)
+
+                if check_distance <= 0 then
+                    return true
+                end
+
+                for _, other_player in next, plrs:GetPlayers() do
+                    if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                        local distance = (other_player.Character.HumanoidRootPart.Position - root_position).Magnitude
+                        if critical_distance > 0 and distance <= critical_distance then
+                            return false, string.format("player %s within critical distance %.0f", other_player.Name, distance)
+                        end
+                        if proximity_check_distance > 0 and distance <= proximity_check_distance then
+                            return false, string.format("player %s within proximity distance %.0f", other_player.Name, distance)
+                        end
+                    end
+                end
+
+                return true
+            end
+
+            local function get_nearest_gate_location_to_position(target_position)
+                if not target_position or typeof(target_position) ~= "Vector3" then
+                    return nil, nil, nil, nil, math.huge
+                end
+
+                local nearest_gate_location = nil
+                local nearest_gate_index = nil
+                local nearest_destination_index = nil
+                local nearest_destination_position = nil
+                local nearest_destination_distance = math.huge
+
+                for index, point in ipairs(trinket_bot.path_points) do
+                    if point.is_gate_point and point.position and typeof(point.position) == "Vector3" and point.gate_location and point.gate_location ~= "" then
+                        local destination_point = trinket_bot.path_points[index + 1]
+                        if destination_point and destination_point.position and typeof(destination_point.position) == "Vector3" then
+                            local distance = (target_position - destination_point.position).Magnitude
+                            if distance < nearest_destination_distance then
+                                nearest_gate_location = point.gate_location
+                                nearest_destination_position = destination_point.position
+                                nearest_destination_index = index + 1
+                                nearest_destination_distance = distance
+                                nearest_gate_index = index
+                            end
+                        end
+                    end
+                end
+
+                return nearest_gate_location, nearest_gate_index, nearest_destination_index, nearest_destination_position, nearest_destination_distance
+            end
+
+            local function get_gate_destination_for_location(gate_location)
+                for index, point in ipairs(trinket_bot.path_points) do
+                    if point.is_gate_point and point.gate_location == gate_location then
+                        local destination_point = trinket_bot.path_points[index + 1]
+                        if destination_point and destination_point.position and typeof(destination_point.position) == "Vector3" then
+                            return destination_point.position
+                        end
+                    end
+                end
+
+                return nil
+            end
+
+            local function distance_to_point_one()
+                local character = plr.Character
+                local first_point = trinket_bot.path_points[1] and trinket_bot.path_points[1].position
+                if not character or not FindFirstChild(character, "HumanoidRootPart") or not first_point or typeof(first_point) ~= "Vector3" then
+                    return math.huge
+                end
+
+                return (character.HumanoidRootPart.Position - first_point).Magnitude
+            end
+
+            local function set_restart_distance_mode()
+                local point_one_distance = distance_to_point_one()
+
+                if point_one_distance <= RESTART_POINT_ONE_MAX_DISTANCE then
+                    trinket_bot.skip_distance_check = true
+                    return true, point_one_distance
+                end
+
+                trinket_bot.skip_distance_check = false
+                return false, point_one_distance
+            end
+
+            local function clear_spawn_forcefield_for_restart()
+                local character = plr.Character
+                if not character or not FindFirstChild(character, "HumanoidRootPart") then
+                    return false
+                end
+
+                if not FindFirstChildOfClass(character, "ForceField") then
+                    return true
+                end
+
+                local hrp = character.HumanoidRootPart
+                local platform = Instance.new("Part")
+                platform.Size = Vector3.new(7, 1, 7)
+                platform.Position = hrp.Position + Vector3.new(0, -3, 18)
+                platform.Anchored = true
+                platform.CanCollide = true
+                platform.Transparency = 1
+                platform.Parent = workspace
+
+                trinket_bot.path_running = true
+                SmoothTeleport(platform.Position + Vector3.new(0, 4, 0))
+                task.wait(1.5)
+
+                if platform then
+                    platform:Destroy()
+                end
+
+                return character and not FindFirstChildOfClass(character, "ForceField")
+            end
+
+            local function prepare_restart_from_point_one()
+                local character = plr.Character
+                if not character or not FindFirstChild(character, "HumanoidRootPart") then
+                    return false, "character not ready"
+                end
+
+                local first_point = trinket_bot.path_points[1] and trinket_bot.path_points[1].position
+                if not first_point or typeof(first_point) ~= "Vector3" then
+                    return false, "invalid first point"
+                end
+
+                local root = character.HumanoidRootPart
+                local point_one_distance = distance_to_point_one()
+
+                local preflight_ok, preflight_reason = restart_preflight_check()
+                if not preflight_ok then
+                    return false, preflight_reason
+                end
+
+                if should_use_deepforest_restart() then
+                    if point_one_distance <= 75 then
+                        trinket_bot.skip_distance_check = true
+                        trinket_bot.path_running = false
+                        return true, "already at point 1"
+                    end
+
+                    library:Notify("Restart after hop: gating to Deepforest 5 for uploaded path")
+
+                    if not clear_spawn_forcefield_for_restart() then
+                        trinket_bot.path_running = false
+                        return false, "could not clear ForceField before Deepforest restart"
+                    end
+
+                    trinket_bot.path_running = true
+                    local deepforest_expected_destination = get_gate_destination_for_location(DEEPFOREST_RESTART_GATE)
+                    local deepforest_gate_success = Gate(DEEPFOREST_RESTART_GATE, deepforest_expected_destination)
+                    trinket_bot.path_running = false
+
+                    if not deepforest_gate_success then
+                        return false, "Deepforest 5 restart gate failed"
+                    end
+
+                    local restart_ready, post_gate_distance = set_restart_distance_mode()
+                    if not restart_ready then
+                        return false, string.format(
+                            "Deepforest 5 landed %.0f studs from point 1 (max %.0f)",
+                            post_gate_distance,
+                            RESTART_POINT_ONE_MAX_DISTANCE
+                        )
+                    end
+
+                    trinket_bot.skip_distance_check = true
+                    return true, "gated to Deepforest 5"
+                end
+
+                local point_one_ready
+                point_one_ready, point_one_distance = set_restart_distance_mode()
+                if point_one_ready and point_one_distance <= 75 then
+                    trinket_bot.path_running = false
+                    return true, "already near point 1"
+                end
+
+                local nearest_gate_location, nearest_gate_index, nearest_destination_index, nearest_destination_position, nearest_destination_distance = get_nearest_gate_location_to_position(first_point)
+
+                if nearest_gate_location then
+                    library:Notify(string.format(
+                        "Restart after hop: gating to %s (destination point %d, %.0f studs from point 1)",
+                        nearest_gate_location,
+                        nearest_destination_index,
+                        nearest_destination_distance
+                    ))
+
+                    if not clear_spawn_forcefield_for_restart() then
+                        trinket_bot.path_running = false
+                        return false, "could not clear ForceField before restart gate"
+                    end
+
+                    trinket_bot.path_running = true
+                    local gate_success = Gate(nearest_gate_location, nearest_destination_position)
+                    trinket_bot.path_running = false
+
+                    if not gate_success then
+                        return false, "nearest restart gate failed"
+                    end
+
+                    local restart_ready, post_gate_distance = set_restart_distance_mode()
+                    if not restart_ready then
+                        return false, string.format("gate landed %.0f studs from point 1", post_gate_distance)
+                    end
+
+                    return true, string.format("gated to %s from path gate point %d", nearest_gate_location, nearest_gate_index)
+                end
+
+                local distance_to_first = (root.Position - first_point).Magnitude
+                if distance_to_first <= RESTART_POINT_ONE_MAX_DISTANCE then
+                    library:Notify("Restart after hop: no inferred gate locations found, moving directly to point 1")
+                    trinket_bot.path_running = false
+                    trinket_bot.skip_distance_check = true
+                    return true, "no gate points; direct restart"
+                end
+
+                return false, string.format(
+                    "no inferred gate locations and point 1 is %.0f studs away (max %.0f)",
+                    distance_to_first,
+                    RESTART_POINT_ONE_MAX_DISTANCE
+                )
+            end
+
+            local function click_play_from_start_menu(timeout)
+                timeout = timeout or 30
+                local deadline = tick() + timeout
+
+                while tick() < deadline and not shared.is_unloading do
+                    local player_gui = plr and FindFirstChild(plr, "PlayerGui")
+                    local start_menu = player_gui and FindFirstChild(player_gui, "StartMenu")
+                    local choices = start_menu and FindFirstChild(start_menu, "Choices")
+                    local play_button = choices and FindFirstChild(choices, "Play")
+
+                    if play_button then
+                        pcall(function()
+                            firesignal(play_button.MouseButton1Click)
+                        end)
+                        pcall(function()
+                            firesignal(play_button.MouseButton1Down)
+                        end)
+                        pcall(function()
+                            firesignal(play_button.Activated)
+                        end)
+
+                        if vim and play_button.AbsolutePosition and play_button.AbsoluteSize then
+                            pcall(function()
+                                local center = play_button.AbsolutePosition + (play_button.AbsoluteSize / 2)
+                                vim:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 1)
+                                task.wait(0.05)
+                                vim:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 1)
+                            end)
+                        end
+
+                        task.wait(0.35)
+                        if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                            return true
+                        end
+                    end
+
+                    task.wait(0.25)
+                end
+
+                return plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") ~= nil
+            end
+
+            local function wait_for_character_root(timeout)
+                timeout = timeout or 45
+                local deadline = tick() + timeout
+
+                while tick() < deadline and not shared.is_unloading do
+                    if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                        return true
+                    end
+                    task.wait(0.25)
+                end
+
+                return false
+            end
 
             local function ExecutePath(test_mode)
                 if not cheat_client or not cheat_client.config then
@@ -13835,7 +14136,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     return
                 end
 
-                if not test_mode and prepare_restart_from_point_one and path_uses_deepforest_restart() and not trinket_bot.skip_distance_check then
+                if not test_mode and path_uses_deepforest_restart() and not trinket_bot.skip_distance_check then
                     local distance_before_gate = (root.Position - first_point).Magnitude
                     if distance_before_gate > 75 then
                         library:Notify("Gating to Deepforest 5 before starting path...")
@@ -17180,310 +17481,6 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     trinket_bot.path_points = {}
                     return false
                 end
-            end
-
-            local function should_restart_path_after_hop(settings)
-                if settings and settings.auto_restart_after_hop ~= nil then
-                    return settings.auto_restart_after_hop
-                end
-
-                if Toggles.AutoRestartAfterHop ~= nil then
-                    return Toggles.AutoRestartAfterHop.Value
-                end
-
-                return cheat_client.config.auto_restart_after_hop ~= false
-            end
-
-            local function should_use_deepforest_restart(settings)
-                return path_uses_deepforest_restart(settings)
-            end
-
-            local function restart_preflight_check()
-                if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
-                    return false, "character not ready"
-                end
-
-                local root_position = plr.Character.HumanoidRootPart.Position
-                local critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 0
-                local proximity_check_distance = Options.ProximityCheck and Options.ProximityCheck.Value or 0
-                local check_distance = math.max(critical_distance, proximity_check_distance)
-
-                if check_distance <= 0 then
-                    return true
-                end
-
-                for _, other_player in next, plrs:GetPlayers() do
-                    if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
-                        local distance = (other_player.Character.HumanoidRootPart.Position - root_position).Magnitude
-                        if critical_distance > 0 and distance <= critical_distance then
-                            return false, string.format("player %s within critical distance %.0f", other_player.Name, distance)
-                        end
-                        if proximity_check_distance > 0 and distance <= proximity_check_distance then
-                            return false, string.format("player %s within proximity distance %.0f", other_player.Name, distance)
-                        end
-                    end
-                end
-
-                return true
-            end
-
-            local function get_nearest_gate_location_to_position(target_position)
-                if not target_position or typeof(target_position) ~= "Vector3" then
-                    return nil, nil, nil, nil, math.huge
-                end
-
-                local nearest_gate_location = nil
-                local nearest_gate_index = nil
-                local nearest_destination_index = nil
-                local nearest_destination_position = nil
-                local nearest_destination_distance = math.huge
-
-                for index, point in ipairs(trinket_bot.path_points) do
-                    if point.is_gate_point and point.position and typeof(point.position) == "Vector3" and point.gate_location and point.gate_location ~= "" then
-                        local destination_point = trinket_bot.path_points[index + 1]
-                        if destination_point and destination_point.position and typeof(destination_point.position) == "Vector3" then
-                            local distance = (target_position - destination_point.position).Magnitude
-                            if distance < nearest_destination_distance then
-                                nearest_gate_location = point.gate_location
-                                nearest_destination_position = destination_point.position
-                                nearest_destination_index = index + 1
-                                nearest_destination_distance = distance
-                                nearest_gate_index = index
-                            end
-                        end
-                    end
-                end
-
-                return nearest_gate_location, nearest_gate_index, nearest_destination_index, nearest_destination_position, nearest_destination_distance
-            end
-
-            local function get_gate_destination_for_location(gate_location)
-                for index, point in ipairs(trinket_bot.path_points) do
-                    if point.is_gate_point and point.gate_location == gate_location then
-                        local destination_point = trinket_bot.path_points[index + 1]
-                        if destination_point and destination_point.position and typeof(destination_point.position) == "Vector3" then
-                            return destination_point.position
-                        end
-                    end
-                end
-
-                return nil
-            end
-
-            local function distance_to_point_one()
-                local character = plr.Character
-                local first_point = trinket_bot.path_points[1] and trinket_bot.path_points[1].position
-                if not character or not FindFirstChild(character, "HumanoidRootPart") or not first_point or typeof(first_point) ~= "Vector3" then
-                    return math.huge
-                end
-
-                return (character.HumanoidRootPart.Position - first_point).Magnitude
-            end
-
-            local function set_restart_distance_mode()
-                local point_one_distance = distance_to_point_one()
-
-                if point_one_distance <= RESTART_POINT_ONE_MAX_DISTANCE then
-                    trinket_bot.skip_distance_check = true
-                    return true, point_one_distance
-                end
-
-                trinket_bot.skip_distance_check = false
-                return false, point_one_distance
-            end
-
-            local function clear_spawn_forcefield_for_restart()
-                local character = plr.Character
-                if not character or not FindFirstChild(character, "HumanoidRootPart") then
-                    return false
-                end
-
-                if not FindFirstChildOfClass(character, "ForceField") then
-                    return true
-                end
-
-                local hrp = character.HumanoidRootPart
-                local platform = Instance.new("Part")
-                platform.Size = Vector3.new(7, 1, 7)
-                platform.Position = hrp.Position + Vector3.new(0, -3, 18)
-                platform.Anchored = true
-                platform.CanCollide = true
-                platform.Transparency = 1
-                platform.Parent = workspace
-
-                trinket_bot.path_running = true
-                SmoothTeleport(platform.Position + Vector3.new(0, 4, 0))
-                task.wait(1.5)
-
-                if platform then
-                    platform:Destroy()
-                end
-
-                return character and not FindFirstChildOfClass(character, "ForceField")
-            end
-
-            prepare_restart_from_point_one = function()
-                local character = plr.Character
-                if not character or not FindFirstChild(character, "HumanoidRootPart") then
-                    return false, "character not ready"
-                end
-
-                local first_point = trinket_bot.path_points[1] and trinket_bot.path_points[1].position
-                if not first_point or typeof(first_point) ~= "Vector3" then
-                    return false, "invalid first point"
-                end
-
-                local root = character.HumanoidRootPart
-                local point_one_distance = distance_to_point_one()
-
-                local preflight_ok, preflight_reason = restart_preflight_check()
-                if not preflight_ok then
-                    return false, preflight_reason
-                end
-
-                if should_use_deepforest_restart() then
-                    if point_one_distance <= 75 then
-                        trinket_bot.skip_distance_check = true
-                        trinket_bot.path_running = false
-                        return true, "already at point 1"
-                    end
-
-                    library:Notify("Restart after hop: gating to Deepforest 5 for uploaded path")
-
-                    if not clear_spawn_forcefield_for_restart() then
-                        trinket_bot.path_running = false
-                        return false, "could not clear ForceField before Deepforest restart"
-                    end
-
-                    trinket_bot.path_running = true
-                    local deepforest_expected_destination = get_gate_destination_for_location(DEEPFOREST_RESTART_GATE)
-                    local deepforest_gate_success = Gate(DEEPFOREST_RESTART_GATE, deepforest_expected_destination)
-                    trinket_bot.path_running = false
-
-                    if not deepforest_gate_success then
-                        return false, "Deepforest 5 restart gate failed"
-                    end
-
-                    local restart_ready, post_gate_distance = set_restart_distance_mode()
-                    if not restart_ready then
-                        return false, string.format(
-                            "Deepforest 5 landed %.0f studs from point 1 (max %.0f)",
-                            post_gate_distance,
-                            RESTART_POINT_ONE_MAX_DISTANCE
-                        )
-                    end
-
-                    trinket_bot.skip_distance_check = true
-                    return true, "gated to Deepforest 5"
-                end
-
-                local point_one_ready
-                point_one_ready, point_one_distance = set_restart_distance_mode()
-                if point_one_ready and point_one_distance <= 75 then
-                    trinket_bot.path_running = false
-                    return true, "already near point 1"
-                end
-
-                local nearest_gate_location, nearest_gate_index, nearest_destination_index, nearest_destination_position, nearest_destination_distance = get_nearest_gate_location_to_position(first_point)
-
-                if nearest_gate_location then
-                    library:Notify(string.format(
-                        "Restart after hop: gating to %s (destination point %d, %.0f studs from point 1)",
-                        nearest_gate_location,
-                        nearest_destination_index,
-                        nearest_destination_distance
-                    ))
-
-                    if not clear_spawn_forcefield_for_restart() then
-                        trinket_bot.path_running = false
-                        return false, "could not clear ForceField before restart gate"
-                    end
-
-                    trinket_bot.path_running = true
-                    local gate_success = Gate(nearest_gate_location, nearest_destination_position)
-                    trinket_bot.path_running = false
-
-                    if not gate_success then
-                        return false, "nearest restart gate failed"
-                    end
-
-                    local restart_ready, post_gate_distance = set_restart_distance_mode()
-                    if not restart_ready then
-                        return false, string.format("gate landed %.0f studs from point 1", post_gate_distance)
-                    end
-
-                    return true, string.format("gated to %s from path gate point %d", nearest_gate_location, nearest_gate_index)
-                end
-
-                local distance_to_first = (root.Position - first_point).Magnitude
-                if distance_to_first <= RESTART_POINT_ONE_MAX_DISTANCE then
-                    library:Notify("Restart after hop: no inferred gate locations found, moving directly to point 1")
-                    trinket_bot.path_running = false
-                    trinket_bot.skip_distance_check = true
-                    return true, "no gate points; direct restart"
-                end
-
-                return false, string.format(
-                    "no inferred gate locations and point 1 is %.0f studs away (max %.0f)",
-                    distance_to_first,
-                    RESTART_POINT_ONE_MAX_DISTANCE
-                )
-            end
-
-            click_play_from_start_menu = function(timeout)
-                timeout = timeout or 30
-                local deadline = tick() + timeout
-
-                while tick() < deadline and not shared.is_unloading do
-                    local player_gui = plr and FindFirstChild(plr, "PlayerGui")
-                    local start_menu = player_gui and FindFirstChild(player_gui, "StartMenu")
-                    local choices = start_menu and FindFirstChild(start_menu, "Choices")
-                    local play_button = choices and FindFirstChild(choices, "Play")
-
-                    if play_button then
-                        pcall(function()
-                            firesignal(play_button.MouseButton1Click)
-                        end)
-                        pcall(function()
-                            firesignal(play_button.MouseButton1Down)
-                        end)
-                        pcall(function()
-                            firesignal(play_button.Activated)
-                        end)
-
-                        if vim and play_button.AbsolutePosition and play_button.AbsoluteSize then
-                            pcall(function()
-                                local center = play_button.AbsolutePosition + (play_button.AbsoluteSize / 2)
-                                vim:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 1)
-                                task.wait(0.05)
-                                vim:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 1)
-                            end)
-                        end
-
-                        task.wait(0.35)
-                        if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
-                            return true
-                        end
-                    end
-
-                    task.wait(0.25)
-                end
-
-                return plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") ~= nil
-            end
-
-            wait_for_character_root = function(timeout)
-                timeout = timeout or 45
-                local deadline = tick() + timeout
-
-                while tick() < deadline and not shared.is_unloading do
-                    if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
-                        return true
-                    end
-                    task.wait(0.25)
-                end
-
-                return false
             end
 
             local function has_character_root()
