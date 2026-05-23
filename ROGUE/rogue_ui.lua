@@ -8179,7 +8179,8 @@ if is_hydroxide_supported_place() then
         end
     end
     
-    do
+    local Tabs
+    local function hydroxide_setup_interface_tabs()
         local Options = library.Options
         local Toggles = library.Toggles
 
@@ -8202,7 +8203,7 @@ if is_hydroxide_supported_place() then
             debug_print("[HYDROXIDE] Bootstrap: load complete - press RightShift for menu")
         end)
 
-        local Tabs = {
+        Tabs = {
             Combat = window:AddTab("Combat", "sword"),
             Visuals = window:AddTab("Visuals", "eye"),
             World = window:AddTab("World", "globe"),
@@ -12898,8 +12899,10 @@ if is_hydroxide_supported_place() then
                 end
             })
         end
+    end
+    hydroxide_setup_interface_tabs()
 
-        do
+    local function hydroxide_setup_trinket_bot()
             local trinket_bot = {
                 path_points = {},
                 point_visualizations = {},
@@ -18928,9 +18931,9 @@ if is_hydroxide_supported_place() then
 
             do
             local group_trinket_config = Tabs.Botting:AddRightGroupbox("Trinket Bot Config")
-            local current_path_label
             trinket_bot.update_path_label = function(path_name)
                 trinket_bot.current_path_name = path_name or ""
+                local current_path_label = trinket_bot.ui_current_path_label
                 if current_path_label and current_path_label.Text then
                     if path_name and path_name ~= "" then
                         current_path_label:SetText("Currently Editing: " .. path_name)
@@ -20080,7 +20083,7 @@ if is_hydroxide_supported_place() then
                 end
             end)
 
-            current_path_label = group_trinket_config:AddLabel("Currently Editing: None")
+            trinket_bot.ui_current_path_label = group_trinket_config:AddLabel("Currently Editing: None")
             group_trinket_config:AddDivider()
 
             group_trinket_config:AddInput("PathName", {
@@ -20943,7 +20946,8 @@ if is_hydroxide_supported_place() then
                 trinket_bot.setup_backpack_monitoring()
             end)
             end
-        end
+    end
+    hydroxide_setup_trinket_bot()
 
         do
             local macro_system = {
