@@ -118,8 +118,43 @@ local function generate_key()
 end
 
 local key = generate_key()
+
+local function hydroxide_pending_trinket_resume()
+    if getgenv and getgenv().HYDROXIDE_TRINKET_PENDING_RESUME then
+        return true
+    end
+
+    if getgenv and getgenv().HYDROXIDE_TRINKET_RESUME_STATE and getgenv().HYDROXIDE_TRINKET_RESUME_STATE.resume_after_hop then
+        return true
+    end
+
+    local pending = false
+    pcall(function()
+        local memService = game:GetService("MemStorageService")
+        if memService:HasItem("trinket_bot_resume_after_hop") and memService:GetItem("trinket_bot_resume_after_hop") == "true" then
+            pending = true
+        elseif memService:HasItem("trinket_bot_restart_after_hop") and memService:GetItem("trinket_bot_restart_after_hop") == "true" then
+            pending = true
+        elseif memService:HasItem("botstarted") and memService:GetItem("botstarted") == "true" then
+            pending = true
+        end
+    end)
+
+    return pending
+end
+
 if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 109732117428502 or game.PlaceId == 14341521240 then
-    if getgenv()[key] and type(getgenv()[key]) == "table" then return end
+    if getgenv()[key] and type(getgenv()[key]) == "table" then
+        if not hydroxide_pending_trinket_resume() then
+            return
+        end
+
+        print(string.format("[HYDROXIDE] Allowing reload for trinket bot resume (job=%s)", tostring(game.JobId)))
+        getgenv()[key] = nil
+    end
+    if hydroxide_pending_trinket_resume() then
+        print(string.format("[HYDROXIDE] Trinket bot resume pending on load (job=%s)", tostring(game.JobId)))
+    end
     getgenv()[key] = setmetatable({}, { __tostring = function() return "nil" end })
 
     local success, err = xpcall(function()
@@ -12238,6 +12273,116 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 return true
             end
 
+            local function get_trinket_bot_mem_snapshot()
+                local snapshot = {
+                    job_id = game.JobId,
+                    place_id = game.PlaceId,
+                }
+
+                local tracked_keys = {
+                    "botstarted",
+                    "trinket_bot_path",
+                    "trinket_bot_resume_after_hop",
+                    "trinket_bot_restart_after_hop",
+                    "trinket_bot_restart_reason",
+                    "trinket_bot_resume_in_progress",
+                    "serverhop_count",
+                }
+
+                for _, item_key in ipairs(tracked_keys) do
+                    if mem:HasItem(item_key) then
+                        snapshot[item_key] = mem:GetItem(item_key)
+                    end
+                end
+
+                return snapshot
+            end
+
+            local function trinket_bot_debug_log(step, extra)
+                local snapshot = get_trinket_bot_mem_snapshot()
+                local httpService = Services.HttpService
+                local snapshot_json = ""
+                pcall(function()
+                    snapshot_json = httpService:JSONEncode(snapshot)
+                end)
+
+                local message = string.format(
+                    "[TRINKET BOT][%s] %s | snapshot=%s",
+                    tostring(step),
+                    tostring(extra or ""),
+                    snapshot_json
+                )
+
+                print(message)
+
+                if utility and utility.plain_webhook then
+                    pcall(function()
+                        utility:plain_webhook(message)
+                    end)
+                end
+            end
+
+            local function persist_trinket_resume_state_for_hop(reason)
+                local resume_state = {
+                    resume_after_hop = true,
+                    restart_after_hop = mem:HasItem("trinket_bot_restart_after_hop") and mem:GetItem("trinket_bot_restart_after_hop") == "true",
+                    botstarted = mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true",
+                    path_name = trinket_bot.current_path_name or (mem:HasItem("trinket_bot_path") and mem:GetItem("trinket_bot_path")) or "",
+                    from_job = game.JobId,
+                    reason = tostring(reason or "serverhop"),
+                }
+
+                if getgenv then
+                    getgenv().HYDROXIDE_TRINKET_PENDING_RESUME = true
+                    getgenv().HYDROXIDE_TRINKET_RESUME_STATE = resume_state
+                    if key then
+                        getgenv()[key] = nil
+                    end
+                end
+
+                mem:SetItem("trinket_bot_resume_after_hop", "true")
+                mem:SetItem("botstarted", "true")
+                if resume_state.path_name ~= "" then
+                    mem:SetItem("trinket_bot_path", resume_state.path_name)
+                end
+
+                trinket_bot_debug_log("PERSIST_RESUME", "reason=" .. tostring(reason))
+            end
+
+            local function restore_trinket_resume_state_from_backup()
+                if not getgenv or not getgenv().HYDROXIDE_TRINKET_RESUME_STATE then
+                    return false
+                end
+
+                local resume_state = getgenv().HYDROXIDE_TRINKET_RESUME_STATE
+                if not resume_state.resume_after_hop then
+                    return false
+                end
+
+                mem:SetItem("botstarted", "true")
+                mem:SetItem("trinket_bot_resume_after_hop", "true")
+
+                if resume_state.path_name and resume_state.path_name ~= "" then
+                    mem:SetItem("trinket_bot_path", resume_state.path_name)
+                    trinket_bot.current_path_name = resume_state.path_name
+                end
+
+                if resume_state.restart_after_hop then
+                    mem:SetItem("trinket_bot_restart_after_hop", "true")
+                end
+
+                return true
+            end
+
+            local function release_hydroxide_instance_lock_for_rejoin()
+                if getgenv then
+                    getgenv().HYDROXIDE_TRINKET_PENDING_RESUME = true
+                    if key then
+                        getgenv()[key] = nil
+                    end
+                end
+            end
+
             local visited_positions = {}
             local collected_trinket_ids = {}
             local COLLECTED_IDS_MAX_SIZE = 500
@@ -13327,6 +13472,14 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     mem:RemoveItem("trinket_bot_restart_reason")
                 end
 
+                if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true"
+                    or mem:HasItem("trinket_bot_resume_after_hop") and mem:GetItem("trinket_bot_resume_after_hop") == "true" then
+                    persist_trinket_resume_state_for_hop(reason)
+                    release_hydroxide_instance_lock_for_rejoin()
+                end
+
+                trinket_bot_debug_log("SERVERHOP", tostring(reason))
+
                 if utility then
                     utility:add_server_to_history(game.JobId)
                 end
@@ -13464,11 +13617,19 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                 queue_func(loader_script)
                             end)
 
-                            if not success then
-                                utility:plain_webhook(string.format("FAILED to queue script: %s", tostring(err)))
+                            if success then
+                                trinket_bot_debug_log("QUEUE_TELEPORT", "queued loader for trinket serverhop")
+                            else
+                                trinket_bot_debug_log("QUEUE_TELEPORT_FAIL", tostring(err))
+                                if utility then
+                                    utility:plain_webhook(string.format("FAILED to queue script: %s", tostring(err)))
+                                end
                             end
                         else
-                            utility:plain_webhook("WARNING: queueteleport/queue_on_teleport not available - script will NOT auto-load!")
+                            trinket_bot_debug_log("QUEUE_TELEPORT_FAIL", "queueteleport/queue_on_teleport unavailable")
+                            if utility then
+                                utility:plain_webhook("WARNING: queueteleport/queue_on_teleport not available - script will NOT auto-load!")
+                            end
                         end
                     end)
                 end
@@ -14230,8 +14391,21 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
             local function ExecutePath(test_mode)
                 if not cheat_client or not cheat_client.config then
+                    trinket_bot_debug_log("EXECUTE_PATH_ABORT", "cheat_client.config missing")
                     return
                 end
+
+                trinket_bot_debug_log(
+                    "EXECUTE_PATH",
+                    string.format(
+                        "test_mode=%s points=%d path=%s resume=%s restart=%s",
+                        tostring(test_mode),
+                        #trinket_bot.path_points,
+                        tostring(trinket_bot.current_path_name),
+                        mem:HasItem("trinket_bot_resume_after_hop") and mem:GetItem("trinket_bot_resume_after_hop") or "nil",
+                        mem:HasItem("trinket_bot_restart_after_hop") and mem:GetItem("trinket_bot_restart_after_hop") or "nil"
+                    )
+                )
 
                 test_mode = test_mode or false
                 trinket_bot.test_mode = test_mode
@@ -17690,25 +17864,40 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             end
 
             local function should_auto_resume_trinket_bot()
+                restore_trinket_resume_state_from_backup()
+
                 if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
-                    return true
+                    return true, "botstarted"
                 end
 
                 if mem:HasItem("trinket_bot_resume_after_hop") and mem:GetItem("trinket_bot_resume_after_hop") == "true" then
                     mem:SetItem("botstarted", "true")
-                    return true
+                    return true, "trinket_bot_resume_after_hop"
                 end
 
                 if mem:HasItem("trinket_bot_restart_after_hop") and mem:GetItem("trinket_bot_restart_after_hop") == "true" then
                     mem:SetItem("botstarted", "true")
                     mem:SetItem("trinket_bot_resume_after_hop", "true")
-                    return true
+                    return true, "trinket_bot_restart_after_hop"
                 end
 
-                return false
+                if getgenv and getgenv().HYDROXIDE_TRINKET_PENDING_RESUME then
+                    restore_trinket_resume_state_from_backup()
+                    if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                        return true, "getgenv_pending_resume"
+                    end
+                end
+
+                return false, "no_resume_flags"
             end
 
             task.spawn(function()
+                trinket_bot_debug_log("AUTO_RESUME_TASK", "spawned")
+
+                if getgenv and getgenv().HYDROXIDE_TRINKET_PENDING_RESUME then
+                    getgenv().HYDROXIDE_TRINKET_PENDING_RESUME = nil
+                end
+
                 if getgenv and getgenv().HYDROXIDE_TRINKET_RESUME_JOB and getgenv().HYDROXIDE_TRINKET_RESUME_JOB ~= game.JobId then
                     getgenv().HYDROXIDE_TRINKET_RESUME_JOB = nil
                 end
@@ -17716,13 +17905,20 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     mem:RemoveItem("trinket_bot_resume_in_progress")
                 end
 
-                if not should_auto_resume_trinket_bot() then
+                local should_resume, resume_reason = should_auto_resume_trinket_bot()
+                if not should_resume then
+                    trinket_bot_debug_log("AUTO_RESUME_SKIP", "reason=" .. tostring(resume_reason))
                     return
                 end
+
+                trinket_bot_debug_log("AUTO_RESUME_BEGIN", "trigger=" .. tostring(resume_reason))
 
                 if not try_claim_trinket_bot_resume() then
                     if is_trinket_bot_resume_claimed_by_other() then
                         library:Notify("Trinket bot resume already in progress")
+                        trinket_bot_debug_log("AUTO_RESUME_SKIP", "resume already claimed by another instance")
+                    else
+                        trinket_bot_debug_log("AUTO_RESUME_SKIP", "try_claim failed while executing")
                     end
                     return
                 end
@@ -17731,10 +17927,12 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 task.wait(3)
 
                 if is_trinket_bot_executing() then
+                    trinket_bot_debug_log("AUTO_RESUME_SKIP", "path already executing after wait")
                     clear_trinket_bot_session_locks()
                     return
                 end
 
+                local resume_ok, resume_err = pcall(function()
                     trinket_bot.path_running = false
 
                     local should_skip_illusionist = false
@@ -17888,10 +18086,14 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                 end
 
                                 mem:RemoveItem("trinket_bot_resume_after_hop")
+                                if getgenv then
+                                    getgenv().HYDROXIDE_TRINKET_RESUME_STATE = nil
+                                end
                                 if is_trinket_bot_executing() then
                                     clear_trinket_bot_session_locks()
                                     return
                                 end
+                                trinket_bot_debug_log("AUTO_RESUME_EXECUTE", "restart from point 1 after hop")
                                 ExecutePath(false)
                                 return
                             else
@@ -18477,10 +18679,14 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             end
 
                             mem:RemoveItem("trinket_bot_resume_after_hop")
+                            if getgenv then
+                                getgenv().HYDROXIDE_TRINKET_RESUME_STATE = nil
+                            end
                             if is_trinket_bot_executing() then
                                 clear_trinket_bot_session_locks()
                                 return
                             end
+                            trinket_bot_debug_log("AUTO_RESUME_EXECUTE", "fallback path start")
                             ExecutePath(false)
                         else
                             if auto_start_death_connection then
@@ -18493,10 +18699,24 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             mem:RemoveItem("trinket_bot_restart_after_hop")
                             mem:RemoveItem("trinket_bot_restart_reason")
                             mem:RemoveItem("trinket_bot_resume_after_hop")
+                            if getgenv then
+                                getgenv().HYDROXIDE_TRINKET_RESUME_STATE = nil
+                            end
                             task.wait(0.5)
                             plr:Kick("Character lost after path load during auto-start")
                             return
                         end
+                end)
+
+                if not resume_ok then
+                    trinket_bot_debug_log("AUTO_RESUME_ERROR", tostring(resume_err))
+                    clear_trinket_bot_session_locks()
+                    if utility and utility.plain_webhook then
+                        utility:plain_webhook("@here Trinket bot auto-resume crashed: " .. tostring(resume_err))
+                    end
+                else
+                    trinket_bot_debug_log("AUTO_RESUME_DONE", "resume task finished")
+                end
             end)
 
             current_path_label = group_trinket_config:AddLabel("Currently Editing: None")
@@ -27966,6 +28186,16 @@ end
                             end
                             queue_func(loader_script)
                         end)
+
+                        local queue_msg = success and "[HYDROXIDE] Queued loader on teleport (execute_on_serverhop)" or ("[HYDROXIDE] Queue on teleport failed: " .. tostring(err))
+                        print(queue_msg)
+                        if utility and utility.plain_webhook then
+                            pcall(function()
+                                utility:plain_webhook(queue_msg)
+                            end)
+                        end
+                    else
+                        print("[HYDROXIDE] execute_on_serverhop enabled but queue_on_teleport unavailable")
                     end
                 end
             end)
