@@ -142,21 +142,35 @@ local function hydroxide_pending_trinket_resume()
         end
     end)
 
+    if not pending and readfile and isfile then
+        pcall(function()
+            if isfile("HYDROXIDE/trinket_resume_session.json") then
+                pending = true
+            end
+        end)
+    end
+
     return pending
 end
 
 if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 109732117428502 or game.PlaceId == 14341521240 then
-    if getgenv()[key] and type(getgenv()[key]) == "table" then
-        if not hydroxide_pending_trinket_resume() then
-            return
+    if getgenv and getgenv()[key] and type(getgenv()[key]) == "table" then
+        if hydroxide_pending_trinket_resume() then
+            print(string.format("[HYDROXIDE] Reloading for trinket bot resume (job=%s)", tostring(game.JobId)))
+        else
+            warn(string.format("[HYDROXIDE] Replacing previous script instance (job=%s)", tostring(game.JobId)))
+            if getgenv().HYDROXIDE_SHARED then
+                getgenv().HYDROXIDE_SHARED.is_unloading = true
+            end
         end
-
-        print(string.format("[HYDROXIDE] Allowing reload for trinket bot resume (job=%s)", tostring(game.JobId)))
         getgenv()[key] = nil
     end
+
     if hydroxide_pending_trinket_resume() then
         print(string.format("[HYDROXIDE] Trinket bot resume pending on load (job=%s)", tostring(game.JobId)))
     end
+
+    print(string.format("[HYDROXIDE] Initializing (place=%s job=%s)", tostring(game.PlaceId), tostring(game.JobId)))
     getgenv()[key] = setmetatable({}, { __tostring = function() return "nil" end })
 
     local success, err = xpcall(function()
@@ -596,6 +610,11 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
         windowActive = true,
         notifications = {},
     }
+
+    if getgenv then
+        getgenv().HYDROXIDE_SHARED = shared
+    end
+
     local cheat_client = {
         config = {
             anticheat_mode = "Normal",
@@ -18507,6 +18526,12 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             task.spawn(function()
                 task.wait(0.25)
                 restore_trinket_session_on_load()
+
+                local restored_path = get_saved_trinket_path_name()
+                if restored_path ~= "" then
+                    trinket_bot.current_path_name = restored_path
+                end
+
                 trinket_bot_debug_log("AUTO_RESUME_TASK", "spawned")
 
                 if getgenv and getgenv().HYDROXIDE_TRINKET_PENDING_RESUME then
