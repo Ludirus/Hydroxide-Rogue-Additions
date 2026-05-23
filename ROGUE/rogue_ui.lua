@@ -301,6 +301,12 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             end
         end
 
+        if getgenv and getgenv().HYDROXIDE_LAST_QUEUED_TRINKET_PAYLOAD then
+            if apply_trinket_resume_payload_to_mem(getgenv().HYDROXIDE_LAST_QUEUED_TRINKET_PAYLOAD) then
+                return true
+            end
+        end
+
         if mem:HasItem(TRINKET_SESSION_MEM_KEY) then
             local ok, payload = pcall(function()
                 return Services.HttpService:JSONDecode(mem:GetItem(TRINKET_SESSION_MEM_KEY))
@@ -314,6 +320,11 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
     end
 
     restore_trinket_session_on_load()
+
+    if getgenv then
+        getgenv().HYDROXIDE_TELEPORT_QUEUED = nil
+        getgenv().HYDROXIDE_TELEPORT_QUEUED_AT = nil
+    end
 
     local rps  = Services.ReplicatedStorage
     local cs   = Services.CollectionService
@@ -2860,36 +2871,47 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
             local function attemptTeleport(jobId, maxRetries)
                 maxRetries = maxRetries or 3
-                local retries = 0
+                local start_job_id = game.JobId
 
-                while retries < maxRetries do
+                for attempt = 1, maxRetries do
                     teleport_failed = false
                     teleport_fail_reason = ""
 
                     join_server:FireServer(jobId)
 
-                    local timeout = tick() + 20
-                    while tick() < timeout and not teleport_failed do
+                    local deadline = tick() + 35
+                    while tick() < deadline do
+                        if game.JobId ~= start_job_id then
+                            print(string.format("[TELEPORT] Job changed %s -> %s", start_job_id, game.JobId))
+                            if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                                mem:SetItem("trinket_bot_resume_after_hop", "true")
+                            end
+                            return true
+                        end
+
+                        if teleport_failed then
+                            break
+                        end
+
                         task.wait(0.1)
                     end
 
-                    if not teleport_failed then
-                        print("[TELEPORT] Teleport appears successful, waiting for transition...")
+                    if game.JobId ~= start_job_id then
                         if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
                             mem:SetItem("trinket_bot_resume_after_hop", "true")
                         end
-                        task.wait(5)
                         return true
-                    else
-                        retries = retries + 1
-                        if retries < maxRetries then
-                            warn(string.format("[RETRY %d/%d] Teleport failed: %s - Trying another server...", retries, maxRetries, teleport_fail_reason))
-                            return false
-                        else
-                            warn(string.format("[MAX RETRIES] Failed to teleport after %d attempts", maxRetries))
-                            return false
-                        end
                     end
+
+                    warn(string.format(
+                        "[TELEPORT] Attempt %d/%d to %s failed (reason=%s, still on %s)",
+                        attempt,
+                        maxRetries,
+                        tostring(jobId),
+                        teleport_fail_reason ~= "" and teleport_fail_reason or "timeout",
+                        game.JobId
+                    ))
+                    task.wait(0.35 + (attempt * 0.25))
                 end
 
                 return false
@@ -3033,7 +3055,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 if min_player_count > 0 then
                     local api_success = joinServerWithMinPlayers(min_player_count)
                     if api_success then
-                        return
+                        return true
                     end
                 end
 
@@ -3096,7 +3118,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                 print(string.format("[SERVERHOP] Attempt %d/%d: Trying server %s", attempt, max_attempts, jobId))
 
                                 if attemptTeleport(jobId, 3) then
-                                    return
+                                    return true
                                 end
 
                                 for i, server in ipairs(available_servers) do
@@ -3145,7 +3167,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                 print(string.format("[SERVERHOP FALLBACK] Attempt %d/%d: Trying server %s", attempt, max_fallback_attempts, jobId))
 
                                 if attemptTeleport(jobId, 3) then
-                                    return
+                                    return true
                                 end
 
                                 for i, server in ipairs(fallback_servers) do
@@ -3164,6 +3186,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         utility:plain_webhook("@here SERVERHOP FAILED: All servers full or unavailable after 24 attempts. Kicking bot. if this happens dm zyu")
                         task.wait(0.5)
                         plr:Kick("Serverhop failed, dm zyu if this occurs [1]")
+                        return false
                     else
                         warn("[!] No servers found in ServerInfo, using fallback")
                         if blockTarget then
@@ -3172,6 +3195,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         tps:Teleport(3016661674)
                         task.wait(0.1)
                         utility:Unload(true)
+                        return false
                     end
                 else
                     warn("[!] ServerInfo not found, using fallback teleport")
@@ -3181,7 +3205,10 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     tps:Teleport(3016661674)
                     task.wait(0.1)
                     utility:Unload(true)
+                    return false
                 end
+
+                return false
             end
 
             local join_oldest = false
@@ -3211,13 +3238,22 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 end
             end
 
+            local hop_success = false
             if plrs:GetChildren()[2] then
                 local blockTarget = Services.Players:GetChildren()[2]
                 task.wait(0.05)
-                joinRandomServer(blockTarget)
+                hop_success = joinRandomServer(blockTarget) == true
             else
                 task.wait(0.05)
-                joinRandomServer()
+                hop_success = joinRandomServer() == true
+            end
+
+            if hop_success then
+                return true
+            end
+
+            if game.JobId then
+                return false
             end
 
             return false
@@ -3348,6 +3384,32 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
         local loader_url = resolve_repo_file_url(has_entrypoint and entrypoint or "loader.lua")
         local entrypoint_assignment = has_entrypoint and (" getgenv().HYDROXIDE_ENTRYPOINT=" .. lua_string_literal(entrypoint)) or " getgenv().HYDROXIDE_ENTRYPOINT=nil"
         return resume_prefix .. [[if getgenv then getgenv().HYDROXIDE_REPO=]] .. lua_string_literal(repo_url) .. entrypoint_assignment .. [[ end if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1) local s,code=pcall(function() return game:HttpGet(]] .. lua_string_literal(loader_url) .. [[,true) end) if not s then print("[QUEUE ERROR] HttpGet failed:",code) return end local fn,compileErr=loadstring(code) if not fn then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) return end local ok,runErr=pcall(fn) if not ok then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
+    end
+
+    local function queue_hydroxide_loader_for_teleport(resume_payload)
+        resume_payload = resume_payload or build_trinket_resume_payload_from_mem()
+
+        if resume_payload and getgenv then
+            getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD = resume_payload
+            getgenv().HYDROXIDE_LAST_QUEUED_TRINKET_PAYLOAD = resume_payload
+        end
+
+        local queue_func = queueteleport or queue_on_teleport
+        if not queue_func then
+            return false, "queueteleport/queue_on_teleport unavailable"
+        end
+
+        local loader_script = get_queued_loader_script(resume_payload)
+        local success, err = pcall(function()
+            queue_func(loader_script)
+        end)
+
+        if success and getgenv then
+            getgenv().HYDROXIDE_TELEPORT_QUEUED = true
+            getgenv().HYDROXIDE_TELEPORT_QUEUED_AT = tick()
+        end
+
+        return success, err
     end
     local success, library_func = pcall(function()
         return loadstring(game:HttpGet(repo .. "DEPENDENCIES/Library.lua", true))()
@@ -13623,6 +13685,14 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                 trinket_bot_debug_log("SERVERHOP", tostring(reason))
 
+                local resume_payload = (getgenv and getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD) or build_trinket_resume_payload_from_mem()
+                local pre_queue_ok, pre_queue_err = queue_hydroxide_loader_for_teleport(resume_payload)
+                if pre_queue_ok then
+                    trinket_bot_debug_log("PRE_QUEUE_TELEPORT", "queued loader before serverhop")
+                else
+                    trinket_bot_debug_log("PRE_QUEUE_TELEPORT_FAIL", tostring(pre_queue_err))
+                end
+
                 if utility then
                     utility:add_server_to_history(game.JobId)
                 end
@@ -13748,31 +13818,20 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         end
                         teleport_debounce = true
 
-                        local queue_func = queueteleport or queue_on_teleport
-                        if queue_func then
-                            local success, err = pcall(function()
-                                local loader_script
-                                if readfile and isfile and isfile("bazaar_loader.lua") and not (getgenv and getgenv().HYDROXIDE_REPO) then
-                                    loader_script = [[local code=readfile("bazaar_loader.lua") local fn,compileErr=loadstring(code) if not fn then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Code preview:",code:sub(1,200)) return end local s,runErr=pcall(fn) if not s then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
-                                else
-                                    local resume_payload = (getgenv and getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD) or build_trinket_resume_payload_from_mem()
-                                    loader_script = get_queued_loader_script(resume_payload)
-                                end
-                                queue_func(loader_script)
-                            end)
+                        if getgenv and getgenv().HYDROXIDE_TELEPORT_QUEUED then
+                            trinket_bot_debug_log("QUEUE_TELEPORT", "loader already pre-queued for trinket serverhop")
+                            return
+                        end
 
-                            if success then
-                                trinket_bot_debug_log("QUEUE_TELEPORT", "queued loader for trinket serverhop")
-                            else
-                                trinket_bot_debug_log("QUEUE_TELEPORT_FAIL", tostring(err))
-                                if utility then
-                                    utility:plain_webhook(string.format("FAILED to queue script: %s", tostring(err)))
-                                end
-                            end
+                        local resume_payload = (getgenv and getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD) or build_trinket_resume_payload_from_mem()
+                        local success, err = queue_hydroxide_loader_for_teleport(resume_payload)
+
+                        if success then
+                            trinket_bot_debug_log("QUEUE_TELEPORT", "queued loader for trinket serverhop (OnTeleport)")
                         else
-                            trinket_bot_debug_log("QUEUE_TELEPORT_FAIL", "queueteleport/queue_on_teleport unavailable")
+                            trinket_bot_debug_log("QUEUE_TELEPORT_FAIL", tostring(err))
                             if utility then
-                                utility:plain_webhook("WARNING: queueteleport/queue_on_teleport not available - script will NOT auto-load!")
+                                utility:plain_webhook(string.format("FAILED to queue script: %s", tostring(err)))
                             end
                         end
                     end)
@@ -13863,15 +13922,21 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     trinket_bot.pending_artifact_logs = {}
                 end
 
+                local serverhop_start_job = game.JobId
                 local serverhop_success = false
                 if InAir() then
-                    serverhop_success = utility:Serverhop()
+                    serverhop_success = utility:Serverhop() == true
                 else
                     pcall(function()
                         rps.Requests.ReturnToMenu:InvokeServer()
                     end)
-                    task.wait(0.1)
-                    serverhop_success = utility:Serverhop()
+                    task.wait(0.35)
+                    serverhop_success = utility:Serverhop() == true
+                end
+
+                if not serverhop_success and game.JobId ~= serverhop_start_job then
+                    serverhop_success = true
+                    trinket_bot_debug_log("SERVERHOP", "job changed during hop; treating as success")
                 end
 
                 if not serverhop_success then
@@ -13880,12 +13945,19 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         utility:plain_webhook("@here SERVERHOP FAILED - retrying serverhop...")
                     end
 
+                    persist_trinket_resume_state_for_hop("serverhop_retry:" .. tostring(reason))
+                    queue_hydroxide_loader_for_teleport((getgenv and getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD) or build_trinket_resume_payload_from_mem())
+
                     pcall(function()
                         rps.Requests.ReturnToMenu:InvokeServer()
                     end)
-                    task.wait(1)
+                    task.wait(0.75)
 
-                    serverhop_success = utility:Serverhop()
+                    serverhop_success = utility:Serverhop() == true
+                    if not serverhop_success and game.JobId ~= serverhop_start_job then
+                        serverhop_success = true
+                    end
+
                     if not serverhop_success then
                         local character = plr.Character
 
@@ -18038,6 +18110,8 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             end
 
             task.spawn(function()
+                task.wait(0.25)
+                restore_trinket_session_on_load()
                 trinket_bot_debug_log("AUTO_RESUME_TASK", "spawned")
 
                 if getgenv and getgenv().HYDROXIDE_TRINKET_PENDING_RESUME then
@@ -28323,28 +28397,20 @@ end
                 teleport_debounce = true
 
                 if cheat_client.config.execute_on_serverhop then
-                    local queue_func = queueteleport or queue_on_teleport
-                    if queue_func then
-                        local success, err = pcall(function()
-                            local loader_script
-                            if readfile and isfile and isfile("bazaar_loader.lua") and not (getgenv and getgenv().HYDROXIDE_REPO) then
-                                loader_script = [[local code=readfile("bazaar_loader.lua") local fn,compileErr=loadstring(code) if not fn then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Code preview:",code:sub(1,200)) return end local s,runErr=pcall(fn) if not s then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
-                            else
-                                local resume_payload = build_trinket_resume_payload_from_mem()
-                                loader_script = get_queued_loader_script(resume_payload)
-                            end
-                            queue_func(loader_script)
-                        end)
+                    if getgenv and getgenv().HYDROXIDE_TELEPORT_QUEUED then
+                        print("[HYDROXIDE] Skipping duplicate teleport queue (trinket pre-queued)")
+                        return
+                    end
 
-                        local queue_msg = success and "[HYDROXIDE] Queued loader on teleport (execute_on_serverhop)" or ("[HYDROXIDE] Queue on teleport failed: " .. tostring(err))
-                        print(queue_msg)
-                        if utility and utility.plain_webhook then
-                            pcall(function()
-                                utility:plain_webhook(queue_msg)
-                            end)
-                        end
-                    else
-                        print("[HYDROXIDE] execute_on_serverhop enabled but queue_on_teleport unavailable")
+                    local resume_payload = (getgenv and getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD) or build_trinket_resume_payload_from_mem()
+                    local success, err = queue_hydroxide_loader_for_teleport(resume_payload)
+
+                    local queue_msg = success and "[HYDROXIDE] Queued loader on teleport (execute_on_serverhop)" or ("[HYDROXIDE] Queue on teleport failed: " .. tostring(err))
+                    print(queue_msg)
+                    if utility and utility.plain_webhook then
+                        pcall(function()
+                            utility:plain_webhook(queue_msg)
+                        end)
                     end
                 end
             end)
