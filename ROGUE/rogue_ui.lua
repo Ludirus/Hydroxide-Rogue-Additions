@@ -15787,6 +15787,9 @@ if is_hydroxide_supported_place() then
                     end
 
                     if point_one_distance < DEEPFOREST_PREP_MIN_DISTANCE then
+                        if point_one_distance <= RESTART_POINT_ONE_MAX_DISTANCE then
+                            trinket_bot.skip_distance_check = true
+                        end
                         return true, "near point 1, skipping Deepforest prep"
                     end
 
@@ -16020,7 +16023,7 @@ if is_hydroxide_supported_place() then
                 local resuming_after_hop = not test_mode
                     and mem:HasItem("trinket_bot_resume_after_hop")
                     and mem:GetItem("trinket_bot_resume_after_hop") == "true"
-                if not resuming_after_hop then
+                if not resuming_after_hop and not trinket_bot.skip_distance_check then
                     trinket_bot.skip_distance_check = false
                 end
 
@@ -16084,6 +16087,7 @@ if is_hydroxide_supported_place() then
                         end
 
                         trinket_bot.path_running = true
+                        trinket_bot.skip_distance_check = true
                         if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
                             root = plr.Character.HumanoidRootPart
                         else
@@ -20944,18 +20948,43 @@ if is_hydroxide_supported_place() then
                 return tostring(item_name or ""):lower():gsub("[^%w]", "")
             end
 
+            trinket_bot.auto_drop_names_match = function(item_name, list_name)
+                local normalized_item_name = trinket_bot.normalize_auto_drop_name(item_name)
+                local normalized_list_name = trinket_bot.normalize_auto_drop_name(list_name)
+
+                if normalized_item_name == "" or normalized_list_name == "" then
+                    return false
+                end
+
+                if normalized_item_name == normalized_list_name then
+                    return true
+                end
+
+                local scroll_prefix = "scrollof"
+                if normalized_list_name:sub(1, #scroll_prefix) == scroll_prefix
+                    and normalized_item_name == normalized_list_name:sub(#scroll_prefix + 1) then
+                    return true
+                end
+
+                if normalized_item_name:sub(1, #scroll_prefix) == scroll_prefix
+                    and normalized_list_name == normalized_item_name:sub(#scroll_prefix + 1) then
+                    return true
+                end
+
+                return false
+            end
+
             trinket_bot.should_auto_drop_item_name = function(item_name)
                 if not (Options.AutoDropItems and Options.AutoDropItems.Value) then
                     return false
                 end
 
-                local normalized_item_name = trinket_bot.normalize_auto_drop_name(item_name)
-                if normalized_item_name == "" then
+                if trinket_bot.normalize_auto_drop_name(item_name) == "" then
                     return false
                 end
 
                 for dropdown_name, enabled in pairs(Options.AutoDropItems.Value) do
-                    if enabled and normalized_item_name == trinket_bot.normalize_auto_drop_name(dropdown_name) then
+                    if enabled == true and trinket_bot.auto_drop_names_match(item_name, dropdown_name) then
                         return true
                     end
                 end
@@ -20964,12 +20993,15 @@ if is_hydroxide_supported_place() then
             end
 
             trinket_bot.find_inventory_tool_by_name = function(item_name)
-                local normalized_item_name = trinket_bot.normalize_auto_drop_name(item_name)
                 local character = plr.Character
+
+                local function matches_target(tool)
+                    return tool:IsA("Tool") and trinket_bot.auto_drop_names_match(tool.Name, item_name)
+                end
 
                 if character then
                     for _, child in ipairs(character:GetChildren()) do
-                        if child:IsA("Tool") and trinket_bot.normalize_auto_drop_name(child.Name) == normalized_item_name then
+                        if matches_target(child) then
                             return child
                         end
                     end
@@ -20977,7 +21009,7 @@ if is_hydroxide_supported_place() then
 
                 if plr.Backpack then
                     for _, child in ipairs(plr.Backpack:GetChildren()) do
-                        if child:IsA("Tool") and trinket_bot.normalize_auto_drop_name(child.Name) == normalized_item_name then
+                        if matches_target(child) then
                             return child
                         end
                     end
