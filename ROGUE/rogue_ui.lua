@@ -43,6 +43,21 @@ local function debug_warn(...)
     end
 end
 
+local function set_hydroxide_load_stage(stage, detail)
+    if not getgenv then
+        return
+    end
+
+    local env = getgenv()
+    env.HYDROXIDE_LOAD_STAGE = tostring(stage)
+    env.HYDROXIDE_LOAD_DETAIL = detail == nil and nil or tostring(detail)
+end
+
+set_hydroxide_load_stage("rogue_source_start")
+if getgenv then
+    getgenv().HYDROXIDE_LAST_ERROR = nil
+end
+
 local cloneref = cloneref or function(v) return v end
 local Services = setmetatable({}, {
     __index = function(self, name)
@@ -61,6 +76,7 @@ local local_player_deadline = os.clock() + 20
 repeat task.wait() until Players.LocalPlayer or os.clock() >= local_player_deadline
 
 if not Players.LocalPlayer then
+    set_hydroxide_load_stage("rogue_local_player_timeout")
     debug_warn("[HYDROXIDE] LocalPlayer was not available after 20s; aborting load")
     return
 end
@@ -70,13 +86,17 @@ if getgenv and getgenv().HYDROXIDE_DEBUG == nil then
 end
 
 debug_print(string.format("[HYDROXIDE] Debug mode %s for %s", tostring(is_hydroxide_debug_enabled()), tostring(Players.LocalPlayer.Name)))
+set_hydroxide_load_stage("rogue_local_player_ready", Players.LocalPlayer.Name)
 
 local backpack_deadline = os.clock() + 20
 while not Players.LocalPlayer.Backpack and os.clock() < backpack_deadline do
     task.wait(0.05)
 end
 if not Players.LocalPlayer.Backpack then
+    set_hydroxide_load_stage("rogue_backpack_timeout_continue")
     debug_warn("[HYDROXIDE] Backpack not available after 20s; continuing bootstrap for menu/loading state")
+else
+    set_hydroxide_load_stage("rogue_backpack_ready")
 end
 
 local StarterGui = Services.StarterGui
@@ -276,6 +296,7 @@ if is_hydroxide_supported_place() then
         tostring(game.GameId),
         tostring(game.JobId)
     ))
+    set_hydroxide_load_stage("rogue_main_init", tostring(game.JobId))
     getgenv()[key] = setmetatable({}, { __tostring = function() return "nil" end })
 
     local success, err = xpcall(function()
@@ -3879,6 +3900,7 @@ if is_hydroxide_supported_place() then
     end
     debug_print("[HYDROXIDE] Bootstrap: loading UI library from " .. tostring(repo))
     local success, library_func = pcall(function()
+        set_hydroxide_load_stage("rogue_ui_library_fetch", repo)
         return loadstring(game:HttpGet(repo .. "DEPENDENCIES/Library.lua", true))()
     end)
 
@@ -3912,13 +3934,16 @@ if is_hydroxide_supported_place() then
         shared.SaveManager = SaveManager
         shared.ThemeManager = ThemeManager
         debug_print("[HYDROXIDE] Bootstrap: UI library ready")
+        set_hydroxide_load_stage("rogue_ui_library_ready")
     else
+        set_hydroxide_load_stage("rogue_ui_library_error", library_func)
         debug_warn("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
         debug_print("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
         return
     end
 
     if not library or type(library) ~= "table" or not library.Notify then
+        set_hydroxide_load_stage("rogue_ui_library_invalid")
         debug_warn("[HYDROXIDE] UI library loaded but is invalid; aborting script load")
         debug_print("[HYDROXIDE] UI library loaded but is invalid; aborting script load")
         return
@@ -13675,6 +13700,16 @@ if is_hydroxide_supported_place() then
                 return LocationName
             end
 
+            local RAYCAST_EXCLUDE_FILTER = (function()
+                local ok, filter_type = pcall(function()
+                    return Enum.RaycastFilterType.Exclude
+                end)
+                if ok and filter_type then
+                    return filter_type
+                end
+                return Enum.RaycastFilterType.Blacklist
+            end)()
+
             local function is_character_grounded(character)
                 if not character or not FindFirstChild(character, "HumanoidRootPart") then
                     return false
@@ -13682,7 +13717,7 @@ if is_hydroxide_supported_place() then
 
                 local hrp = character.HumanoidRootPart
                 local ray_params = RaycastParams.new()
-                ray_params.FilterType = Enum.RaycastFilterType.Blacklist
+                ray_params.FilterType = RAYCAST_EXCLUDE_FILTER
                 ray_params.FilterDescendantsInstances = { character }
 
                 local result = ws:Raycast(hrp.Position, Vector3.new(0, -14, 0), ray_params)
@@ -13721,7 +13756,7 @@ if is_hydroxide_supported_place() then
                 end
 
                 local ray_params = RaycastParams.new()
-                ray_params.FilterType = Enum.RaycastFilterType.Blacklist
+                ray_params.FilterType = RAYCAST_EXCLUDE_FILTER
                 ray_params.FilterDescendantsInstances = filter
                 return ray_params
             end
@@ -13813,13 +13848,25 @@ if is_hydroxide_supported_place() then
                 end
 
                 local hrp = character.HumanoidRootPart
-                local open_direction = select(1, find_most_open_horizontal_direction(character))
+                local open_direction = prefer_direction
+                if typeof(open_direction) == "Vector3" then
+                    open_direction = Vector3.new(open_direction.X, 0, open_direction.Z)
+                    if open_direction.Magnitude > 0.05 then
+                        open_direction = open_direction.Unit
+                    else
+                        open_direction = nil
+                    end
+                else
+                    open_direction = nil
+                end
+                open_direction = open_direction or select(1, find_most_open_horizontal_direction(character))
                 local perpendicular = Vector3.new(-open_direction.Z, 0, open_direction.X)
 
                 local probe_offsets = {
                     Vector3.new(0, 0, 0),
                     open_direction * 2,
                     open_direction * 3.5,
+                    open_direction * 5,
                     -open_direction * 2,
                     perpendicular * 2,
                     -perpendicular * 2,
@@ -13881,6 +13928,14 @@ if is_hydroxide_supported_place() then
                     return false
                 end
 
+                local was_path_running = trinket_bot.path_running
+                local function finish(result)
+                    if not was_path_running then
+                        trinket_bot.path_running = false
+                    end
+                    return result
+                end
+
                 if not FindFirstChildOfClass(character, "ForceField") then
                     return wait_for_character_grounded(character, 3)
                 end
@@ -13900,7 +13955,7 @@ if is_hydroxide_supported_place() then
                 end
 
                 if not safe_position then
-                    return false
+                    return finish(false)
                 end
 
                 local platform = Instance.new("Part")
@@ -13922,10 +13977,12 @@ if is_hydroxide_supported_place() then
 
                 if not is_stand_position_clear(safe_position, character, { platform }) then
                     platform:Destroy()
-                    return false
+                    return finish(false)
                 end
 
-                trinket_bot.path_running = true
+                if not trinket_bot.path_running then
+                    trinket_bot.path_running = true
+                end
                 SmoothTeleport(safe_position)
                 task.wait(1.25)
 
@@ -13941,9 +13998,9 @@ if is_hydroxide_supported_place() then
                     platform:Destroy()
                 end
 
-                return character
+                return finish(character
                     and not FindFirstChildOfClass(character, "ForceField")
-                    and wait_for_character_grounded(character, 2)
+                    and wait_for_character_grounded(character, 2))
             end
 
             local function Gate(where, expected_destination)
@@ -29494,12 +29551,18 @@ end
         if key then
             getgenv()[key] = nil
         end
+        if getgenv then
+            getgenv().HYDROXIDE_LAST_ERROR = tostring(err)
+        end
+        set_hydroxide_load_stage("rogue_source_error", err)
         debug_warn("[HYDROXIDE] Script error:", err)
         debug_print("[HYDROXIDE] Script error:", err)
     else
+        set_hydroxide_load_stage("rogue_source_ready")
         debug_print("[HYDROXIDE] Bootstrap: main init finished without errors")
     end
 else
+    set_hydroxide_load_stage("rogue_unsupported_place", tostring(game.GameId))
     debug_warn(string.format(
         "[HYDROXIDE] Unsupported place/game (PlaceId=%s GameId=%s). Run Hydroxide in Rogue Lineage (Gaia/Khei/RLP).",
         tostring(game.PlaceId),

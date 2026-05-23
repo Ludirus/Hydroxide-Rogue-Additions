@@ -111,6 +111,16 @@ local function debug_print(...)
     end
 end
 
+local function set_hydroxide_load_stage(stage, detail)
+    if not getgenv then
+        return
+    end
+
+    local env = getgenv()
+    env.HYDROXIDE_LOAD_STAGE = tostring(stage)
+    env.HYDROXIDE_LOAD_DETAIL = detail == nil and nil or tostring(detail)
+end
+
 local seed = {seed}
 local carry = {carry}
 local byte = string.byte
@@ -165,15 +175,44 @@ local function decrypt(chunks)
     return table.concat(output)
 end
 
+if getgenv then
+    getgenv().HYDROXIDE_LAST_ERROR = nil
+end
+set_hydroxide_load_stage("dist_decrypting", "{entrypoint}")
 debug_print("[HYDROXIDE] Encrypted artifact decrypting")
 local code = decrypt(payload)
+set_hydroxide_load_stage("dist_decrypted", #code)
 debug_print("[HYDROXIDE] Encrypted artifact decrypted", #code)
 local loaded, compile_error = loadstring(code)
 if not loaded then
+    if getgenv then
+        getgenv().HYDROXIDE_LAST_ERROR = tostring(compile_error)
+    end
+    set_hydroxide_load_stage("dist_compile_error", compile_error)
     error("[HYDROXIDE] encrypted artifact compile failed: " .. tostring(compile_error))
 end
 
-return loaded()
+local function trace_error(err)
+    if debug and debug.traceback then
+        return debug.traceback(err, 2)
+    end
+    return tostring(err)
+end
+
+set_hydroxide_load_stage("dist_source_running", "{entrypoint}")
+local run_ok, result = xpcall(loaded, trace_error)
+if not run_ok then
+    if getgenv then
+        getgenv().HYDROXIDE_LAST_ERROR = tostring(result)
+    end
+    set_hydroxide_load_stage("dist_runtime_error", result)
+    error(result)
+end
+
+if not (getgenv and getgenv().HYDROXIDE_LAST_ERROR) then
+    set_hydroxide_load_stage("dist_done", "{entrypoint}")
+end
+return result
 """
     return script, seed, carry, len(plaintext)
 
