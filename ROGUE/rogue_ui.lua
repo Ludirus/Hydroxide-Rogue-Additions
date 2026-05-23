@@ -8179,8 +8179,7 @@ if is_hydroxide_supported_place() then
         end
     end
     
-    local Tabs
-    local function hydroxide_setup_interface_tabs()
+    do
         local Options = library.Options
         local Toggles = library.Toggles
 
@@ -8203,7 +8202,7 @@ if is_hydroxide_supported_place() then
             debug_print("[HYDROXIDE] Bootstrap: load complete - press RightShift for menu")
         end)
 
-        Tabs = {
+        local Tabs = {
             Combat = window:AddTab("Combat", "sword"),
             Visuals = window:AddTab("Visuals", "eye"),
             World = window:AddTab("World", "globe"),
@@ -12899,10 +12898,8 @@ if is_hydroxide_supported_place() then
                 end
             })
         end
-    end
-    hydroxide_setup_interface_tabs()
 
-    local function hydroxide_setup_trinket_bot()
+        local function hydroxide_setup_trinket_bot()
             local trinket_bot = {
                 path_points = {},
                 point_visualizations = {},
@@ -20946,8 +20943,8 @@ if is_hydroxide_supported_place() then
                 trinket_bot.setup_backpack_monitoring()
             end)
             end
-    end
-    hydroxide_setup_trinket_bot()
+        end
+        hydroxide_setup_trinket_bot()
 
         do
             local macro_system = {
