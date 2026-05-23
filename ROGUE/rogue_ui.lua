@@ -13244,6 +13244,277 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 return LocationName
             end
 
+            local function is_character_grounded(character)
+                if not character or not FindFirstChild(character, "HumanoidRootPart") then
+                    return false
+                end
+
+                local hrp = character.HumanoidRootPart
+                local ray_params = RaycastParams.new()
+                ray_params.FilterType = Enum.RaycastFilterType.Blacklist
+                ray_params.FilterDescendantsInstances = { character }
+
+                local result = ws:Raycast(hrp.Position, Vector3.new(0, -14, 0), ray_params)
+                if not result then
+                    return false
+                end
+
+                return (hrp.Position.Y - result.Position.Y) <= 5.5
+            end
+
+            local function wait_for_character_grounded(character, max_wait)
+                max_wait = max_wait or 6
+                local deadline = tick() + max_wait
+
+                while tick() < deadline do
+                    if is_character_grounded(character) then
+                        return true
+                    end
+                    task.wait(0.1)
+                end
+
+                return is_character_grounded(character)
+            end
+
+            local CHARACTER_CLEARANCE_RADIUS = 2.25
+            local CHARACTER_CLEARANCE_HEIGHT = 5
+
+            local function make_character_raycast_params(character, extra_ignore)
+                local filter = { character }
+                if extra_ignore then
+                    for _, instance in ipairs(extra_ignore) do
+                        if instance then
+                            table.insert(filter, instance)
+                        end
+                    end
+                end
+
+                local ray_params = RaycastParams.new()
+                ray_params.FilterType = Enum.RaycastFilterType.Blacklist
+                ray_params.FilterDescendantsInstances = filter
+                return ray_params
+            end
+
+            local function has_clear_path_to_position(from_position, to_position, character, extra_ignore)
+                local delta = to_position - from_position
+                local distance = delta.Magnitude
+                if distance < 0.35 then
+                    return true
+                end
+
+                local ray_params = make_character_raycast_params(character, extra_ignore)
+                local hit = ws:Raycast(from_position + Vector3.new(0, 2.5, 0), delta.Unit * distance, ray_params)
+                if not hit then
+                    return true
+                end
+
+                return hit.Distance >= (distance - 0.75)
+            end
+
+            local function is_stand_position_clear(stand_position, character, extra_ignore)
+                local ray_params = make_character_raycast_params(character, extra_ignore)
+
+                local ground = ws:Raycast(stand_position + Vector3.new(0, 6, 0), Vector3.new(0, -14, 0), ray_params)
+                if not ground then
+                    return false
+                end
+
+                if math.abs(stand_position.Y - ground.Position.Y) > 6 then
+                    return false
+                end
+
+                local horizontal_checks = {
+                    Vector3.new(1, 0, 0),
+                    Vector3.new(-1, 0, 0),
+                    Vector3.new(0, 0, 1),
+                    Vector3.new(0, 0, -1),
+                    Vector3.new(0.707, 0, 0.707),
+                    Vector3.new(-0.707, 0, 0.707),
+                }
+                local height_checks = { 1, 2.5, 4 }
+
+                for _, direction in ipairs(horizontal_checks) do
+                    for _, height in ipairs(height_checks) do
+                        local origin = stand_position + Vector3.new(0, height, 0)
+                        local hit = ws:Raycast(origin, direction * (CHARACTER_CLEARANCE_RADIUS + 0.35), ray_params)
+                        if hit and hit.Distance < CHARACTER_CLEARANCE_RADIUS then
+                            return false
+                        end
+                    end
+                end
+
+                local ceiling = ws:Raycast(stand_position + Vector3.new(0, 1, 0), Vector3.new(0, CHARACTER_CLEARANCE_HEIGHT, 0), ray_params)
+                if ceiling and ceiling.Distance < (CHARACTER_CLEARANCE_HEIGHT - 0.5) then
+                    return false
+                end
+
+                return true
+            end
+
+            local function find_most_open_horizontal_direction(character, extra_ignore)
+                if not character or not FindFirstChild(character, "HumanoidRootPart") then
+                    return Vector3.new(0, 0, -1), 0
+                end
+
+                local hrp = character.HumanoidRootPart
+                local ray_params = make_character_raycast_params(character, extra_ignore)
+                local best_direction = Vector3.new(0, 0, -1)
+                local best_clearance = 0
+
+                for angle = 0, 315, 45 do
+                    local radians = math.rad(angle)
+                    local direction = Vector3.new(math.cos(radians), 0, math.sin(radians))
+                    local hit = ws:Raycast(hrp.Position + Vector3.new(0, 2.5, 0), direction * 14, ray_params)
+                    local clearance = hit and hit.Distance or 14
+
+                    if clearance > best_clearance then
+                        best_clearance = clearance
+                        best_direction = direction
+                    end
+                end
+
+                return best_direction, best_clearance
+            end
+
+            local function find_safe_forcefield_exit_position(character, prefer_direction)
+                if not character or not FindFirstChild(character, "HumanoidRootPart") then
+                    return nil
+                end
+
+                local hrp = character.HumanoidRootPart
+                local open_direction = select(1, find_most_open_horizontal_direction(character))
+                local perpendicular = Vector3.new(-open_direction.Z, 0, open_direction.X)
+
+                local probe_offsets = {
+                    Vector3.new(0, 0, 0),
+                    open_direction * 2,
+                    open_direction * 3.5,
+                    -open_direction * 2,
+                    perpendicular * 2,
+                    -perpendicular * 2,
+                    perpendicular * 3.5,
+                    -perpendicular * 3.5,
+                    open_direction * 2 + perpendicular * 2,
+                    open_direction * 2 - perpendicular * 2,
+                }
+
+                local ray_params = make_character_raycast_params(character)
+
+                local best_position = nil
+                local best_score = -math.huge
+
+                for _, offset in ipairs(probe_offsets) do
+                    local probe_origin = hrp.Position + offset + Vector3.new(0, 10, 0)
+                    local ground_result = ws:Raycast(probe_origin, Vector3.new(0, -60, 0), ray_params)
+                    if ground_result then
+                        local stand_position = ground_result.Position + Vector3.new(0, 4.25, 0)
+                        if not is_stand_position_clear(stand_position, character) then
+                            continue
+                        end
+
+                        if not has_clear_path_to_position(hrp.Position, stand_position, character) then
+                            continue
+                        end
+
+                        local horizontal_distance = (Vector3.new(stand_position.X, 0, stand_position.Z) - Vector3.new(hrp.Position.X, 0, hrp.Position.Z)).Magnitude
+                        local flat_offset = Vector3.new(offset.X, 0, offset.Z)
+                        local open_alignment = 0
+                        if flat_offset.Magnitude > 0.05 then
+                            open_alignment = flat_offset.Unit:Dot(open_direction)
+                        end
+
+                        local score = 250 - (horizontal_distance * 12) + (open_alignment * 3)
+
+                        if score > best_score then
+                            best_score = score
+                            best_position = stand_position
+                        end
+                    end
+                end
+
+                if best_position then
+                    return best_position
+                end
+
+                local fallback = hrp.Position + Vector3.new(0, 3, 0)
+                if is_stand_position_clear(fallback, character) then
+                    return fallback
+                end
+
+                return nil
+            end
+
+            local function clear_spawn_forcefield_for_restart(prefer_direction)
+                local character = plr.Character
+                if not character or not FindFirstChild(character, "HumanoidRootPart") then
+                    return false
+                end
+
+                if not FindFirstChildOfClass(character, "ForceField") then
+                    return wait_for_character_grounded(character, 3)
+                end
+
+                local hrp = character.HumanoidRootPart
+                local safe_position = find_safe_forcefield_exit_position(character, prefer_direction)
+
+                if not safe_position then
+                    local ray_params = make_character_raycast_params(character)
+                    local ground_result = ws:Raycast(hrp.Position + Vector3.new(0, 10, 0), Vector3.new(0, -40, 0), ray_params)
+                    if ground_result then
+                        local snapped_position = ground_result.Position + Vector3.new(0, 4.25, 0)
+                        if is_stand_position_clear(snapped_position, character) then
+                            safe_position = snapped_position
+                        end
+                    end
+                end
+
+                if not safe_position then
+                    return false
+                end
+
+                local platform = Instance.new("Part")
+                platform.Size = Vector3.new(8, 1, 8)
+                platform.Anchored = true
+                platform.CanCollide = true
+                platform.Transparency = 1
+                platform.Parent = workspace
+
+                local platform_ray_params = make_character_raycast_params(character, { platform })
+                local ground_result = ws:Raycast(safe_position + Vector3.new(0, 8, 0), Vector3.new(0, -40, 0), platform_ray_params)
+
+                if ground_result then
+                    platform.Position = ground_result.Position + Vector3.new(0, -0.5, 0)
+                    safe_position = platform.Position + Vector3.new(0, 4.25, 0)
+                else
+                    platform.Position = safe_position + Vector3.new(0, -4.5, 0)
+                end
+
+                if not is_stand_position_clear(safe_position, character, { platform }) then
+                    platform:Destroy()
+                    return false
+                end
+
+                trinket_bot.path_running = true
+                SmoothTeleport(safe_position)
+                task.wait(1.25)
+
+                local forcefield_wait_start = tick()
+                while tick() - forcefield_wait_start < 6 do
+                    if not FindFirstChildOfClass(character, "ForceField") and wait_for_character_grounded(character, 1.5) then
+                        break
+                    end
+                    task.wait(0.1)
+                end
+
+                if platform then
+                    platform:Destroy()
+                end
+
+                return character
+                    and not FindFirstChildOfClass(character, "ForceField")
+                    and wait_for_character_grounded(character, 2)
+            end
+
             local function Gate(where, expected_destination)
                 if not trinket_bot.path_running then
                     return false
@@ -14560,277 +14831,6 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 end
 
                 return ""
-            end
-
-            local function is_character_grounded(character)
-                if not character or not FindFirstChild(character, "HumanoidRootPart") then
-                    return false
-                end
-
-                local hrp = character.HumanoidRootPart
-                local ray_params = RaycastParams.new()
-                ray_params.FilterType = Enum.RaycastFilterType.Blacklist
-                ray_params.FilterDescendantsInstances = { character }
-
-                local result = ws:Raycast(hrp.Position, Vector3.new(0, -14, 0), ray_params)
-                if not result then
-                    return false
-                end
-
-                return (hrp.Position.Y - result.Position.Y) <= 5.5
-            end
-
-            local function wait_for_character_grounded(character, max_wait)
-                max_wait = max_wait or 6
-                local deadline = tick() + max_wait
-
-                while tick() < deadline do
-                    if is_character_grounded(character) then
-                        return true
-                    end
-                    task.wait(0.1)
-                end
-
-                return is_character_grounded(character)
-            end
-
-            local CHARACTER_CLEARANCE_RADIUS = 2.25
-            local CHARACTER_CLEARANCE_HEIGHT = 5
-
-            local function make_character_raycast_params(character, extra_ignore)
-                local filter = { character }
-                if extra_ignore then
-                    for _, instance in ipairs(extra_ignore) do
-                        if instance then
-                            table.insert(filter, instance)
-                        end
-                    end
-                end
-
-                local ray_params = RaycastParams.new()
-                ray_params.FilterType = Enum.RaycastFilterType.Blacklist
-                ray_params.FilterDescendantsInstances = filter
-                return ray_params
-            end
-
-            local function has_clear_path_to_position(from_position, to_position, character, extra_ignore)
-                local delta = to_position - from_position
-                local distance = delta.Magnitude
-                if distance < 0.35 then
-                    return true
-                end
-
-                local ray_params = make_character_raycast_params(character, extra_ignore)
-                local hit = ws:Raycast(from_position + Vector3.new(0, 2.5, 0), delta.Unit * distance, ray_params)
-                if not hit then
-                    return true
-                end
-
-                return hit.Distance >= (distance - 0.75)
-            end
-
-            local function is_stand_position_clear(stand_position, character, extra_ignore)
-                local ray_params = make_character_raycast_params(character, extra_ignore)
-
-                local ground = ws:Raycast(stand_position + Vector3.new(0, 6, 0), Vector3.new(0, -14, 0), ray_params)
-                if not ground then
-                    return false
-                end
-
-                if math.abs(stand_position.Y - ground.Position.Y) > 6 then
-                    return false
-                end
-
-                local horizontal_checks = {
-                    Vector3.new(1, 0, 0),
-                    Vector3.new(-1, 0, 0),
-                    Vector3.new(0, 0, 1),
-                    Vector3.new(0, 0, -1),
-                    Vector3.new(0.707, 0, 0.707),
-                    Vector3.new(-0.707, 0, 0.707),
-                }
-                local height_checks = { 1, 2.5, 4 }
-
-                for _, direction in ipairs(horizontal_checks) do
-                    for _, height in ipairs(height_checks) do
-                        local origin = stand_position + Vector3.new(0, height, 0)
-                        local hit = ws:Raycast(origin, direction * (CHARACTER_CLEARANCE_RADIUS + 0.35), ray_params)
-                        if hit and hit.Distance < CHARACTER_CLEARANCE_RADIUS then
-                            return false
-                        end
-                    end
-                end
-
-                local ceiling = ws:Raycast(stand_position + Vector3.new(0, 1, 0), Vector3.new(0, CHARACTER_CLEARANCE_HEIGHT, 0), ray_params)
-                if ceiling and ceiling.Distance < (CHARACTER_CLEARANCE_HEIGHT - 0.5) then
-                    return false
-                end
-
-                return true
-            end
-
-            local function find_most_open_horizontal_direction(character, extra_ignore)
-                if not character or not FindFirstChild(character, "HumanoidRootPart") then
-                    return Vector3.new(0, 0, -1), 0
-                end
-
-                local hrp = character.HumanoidRootPart
-                local ray_params = make_character_raycast_params(character, extra_ignore)
-                local best_direction = Vector3.new(0, 0, -1)
-                local best_clearance = 0
-
-                for angle = 0, 315, 45 do
-                    local radians = math.rad(angle)
-                    local direction = Vector3.new(math.cos(radians), 0, math.sin(radians))
-                    local hit = ws:Raycast(hrp.Position + Vector3.new(0, 2.5, 0), direction * 14, ray_params)
-                    local clearance = hit and hit.Distance or 14
-
-                    if clearance > best_clearance then
-                        best_clearance = clearance
-                        best_direction = direction
-                    end
-                end
-
-                return best_direction, best_clearance
-            end
-
-            local function find_safe_forcefield_exit_position(character, prefer_direction)
-                if not character or not FindFirstChild(character, "HumanoidRootPart") then
-                    return nil
-                end
-
-                local hrp = character.HumanoidRootPart
-                local open_direction = select(1, find_most_open_horizontal_direction(character))
-                local perpendicular = Vector3.new(-open_direction.Z, 0, open_direction.X)
-
-                local probe_offsets = {
-                    Vector3.new(0, 0, 0),
-                    open_direction * 2,
-                    open_direction * 3.5,
-                    -open_direction * 2,
-                    perpendicular * 2,
-                    -perpendicular * 2,
-                    perpendicular * 3.5,
-                    -perpendicular * 3.5,
-                    open_direction * 2 + perpendicular * 2,
-                    open_direction * 2 - perpendicular * 2,
-                }
-
-                local ray_params = make_character_raycast_params(character)
-
-                local best_position = nil
-                local best_score = -math.huge
-
-                for _, offset in ipairs(probe_offsets) do
-                    local probe_origin = hrp.Position + offset + Vector3.new(0, 10, 0)
-                    local ground_result = ws:Raycast(probe_origin, Vector3.new(0, -60, 0), ray_params)
-                    if ground_result then
-                        local stand_position = ground_result.Position + Vector3.new(0, 4.25, 0)
-                        if not is_stand_position_clear(stand_position, character) then
-                            continue
-                        end
-
-                        if not has_clear_path_to_position(hrp.Position, stand_position, character) then
-                            continue
-                        end
-
-                        local horizontal_distance = (Vector3.new(stand_position.X, 0, stand_position.Z) - Vector3.new(hrp.Position.X, 0, hrp.Position.Z)).Magnitude
-                        local flat_offset = Vector3.new(offset.X, 0, offset.Z)
-                        local open_alignment = 0
-                        if flat_offset.Magnitude > 0.05 then
-                            open_alignment = flat_offset.Unit:Dot(open_direction)
-                        end
-
-                        local score = 250 - (horizontal_distance * 12) + (open_alignment * 3)
-
-                        if score > best_score then
-                            best_score = score
-                            best_position = stand_position
-                        end
-                    end
-                end
-
-                if best_position then
-                    return best_position
-                end
-
-                local fallback = hrp.Position + Vector3.new(0, 3, 0)
-                if is_stand_position_clear(fallback, character) then
-                    return fallback
-                end
-
-                return nil
-            end
-
-            local function clear_spawn_forcefield_for_restart(prefer_direction)
-                local character = plr.Character
-                if not character or not FindFirstChild(character, "HumanoidRootPart") then
-                    return false
-                end
-
-                if not FindFirstChildOfClass(character, "ForceField") then
-                    return wait_for_character_grounded(character, 3)
-                end
-
-                local hrp = character.HumanoidRootPart
-                local safe_position = find_safe_forcefield_exit_position(character, prefer_direction)
-
-                if not safe_position then
-                    local ray_params = make_character_raycast_params(character)
-                    local ground_result = ws:Raycast(hrp.Position + Vector3.new(0, 10, 0), Vector3.new(0, -40, 0), ray_params)
-                    if ground_result then
-                        local snapped_position = ground_result.Position + Vector3.new(0, 4.25, 0)
-                        if is_stand_position_clear(snapped_position, character) then
-                            safe_position = snapped_position
-                        end
-                    end
-                end
-
-                if not safe_position then
-                    return false
-                end
-
-                local platform = Instance.new("Part")
-                platform.Size = Vector3.new(8, 1, 8)
-                platform.Anchored = true
-                platform.CanCollide = true
-                platform.Transparency = 1
-                platform.Parent = workspace
-
-                local platform_ray_params = make_character_raycast_params(character, { platform })
-                local ground_result = ws:Raycast(safe_position + Vector3.new(0, 8, 0), Vector3.new(0, -40, 0), platform_ray_params)
-
-                if ground_result then
-                    platform.Position = ground_result.Position + Vector3.new(0, -0.5, 0)
-                    safe_position = platform.Position + Vector3.new(0, 4.25, 0)
-                else
-                    platform.Position = safe_position + Vector3.new(0, -4.5, 0)
-                end
-
-                if not is_stand_position_clear(safe_position, character, { platform }) then
-                    platform:Destroy()
-                    return false
-                end
-
-                trinket_bot.path_running = true
-                SmoothTeleport(safe_position)
-                task.wait(1.25)
-
-                local forcefield_wait_start = tick()
-                while tick() - forcefield_wait_start < 6 do
-                    if not FindFirstChildOfClass(character, "ForceField") and wait_for_character_grounded(character, 1.5) then
-                        break
-                    end
-                    task.wait(0.1)
-                end
-
-                if platform then
-                    platform:Destroy()
-                end
-
-                return character
-                    and not FindFirstChildOfClass(character, "ForceField")
-                    and wait_for_character_grounded(character, 2)
             end
 
             local function prepare_restart_from_point_one()
