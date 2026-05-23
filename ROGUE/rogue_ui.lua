@@ -2232,11 +2232,12 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 mem:RemoveItem("no_kick")
                 mem:RemoveItem("daygoal")
 
-                if not removeitem then
+                if removeitem ~= true then
                     mem:RemoveItem("botstarted")
                     mem:RemoveItem("loaded_config")
                     mem:RemoveItem("trinket_bot_restart_after_hop")
                     mem:RemoveItem("trinket_bot_restart_reason")
+                    mem:RemoveItem("trinket_bot_resume_after_hop")
                 end
             end)
 
@@ -2758,6 +2759,9 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                     if not teleport_failed then
                         print("[TELEPORT] Teleport appears successful, waiting for transition...")
+                        if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                            mem:SetItem("trinket_bot_resume_after_hop", "true")
+                        end
                         task.wait(5)
                         return true
                     else
@@ -13229,6 +13233,10 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     mem:SetItem("trinket_bot_path", trinket_bot.current_path_name)
                 end
 
+                if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                    mem:SetItem("trinket_bot_resume_after_hop", "true")
+                end
+
                 if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
                     local pos = plr.Character.HumanoidRootPart.Position
                     mem:SetItem("lastPlayerPosition", string.format("%s,%s,%s", pos.X, pos.Y, pos.Z))
@@ -17489,28 +17497,58 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
             local function ensure_trinket_bot_character_spawned(play_timeout, spawn_timeout)
                 play_timeout = play_timeout or 30
-                spawn_timeout = spawn_timeout or 45
+                spawn_timeout = spawn_timeout or 60
 
                 if has_character_root() then
                     return true
                 end
 
-                pcall(function()
-                    plr.PlayerGui:WaitForChild("StartMenu", math.min(play_timeout, 30))
-                end)
+                local play_deadline = tick() + play_timeout
+                while tick() < play_deadline and not shared.is_unloading do
+                    pcall(function()
+                        if plr.PlayerGui and not plr.PlayerGui:FindFirstChild("StartMenu") then
+                            plr.PlayerGui:WaitForChild("StartMenu", 2)
+                        end
+                    end)
 
-                if plr.PlayerGui:FindFirstChild("StartMenu") or not has_character_root() then
-                    if not click_play_from_start_menu(play_timeout) then
-                        library:Notify("StartMenu Play click did not confirm character; waiting for spawn")
+                    click_play_from_start_menu(5)
+
+                    if wait_for_character_root(5) then
+                        return true
                     end
+
+                    task.wait(0.5)
                 end
 
                 return wait_for_character_root(spawn_timeout)
             end
 
-            task.spawn(function()
+            local function should_auto_resume_trinket_bot()
                 if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
-                    task.wait(2)
+                    return true
+                end
+
+                if mem:HasItem("trinket_bot_resume_after_hop") and mem:GetItem("trinket_bot_resume_after_hop") == "true" then
+                    mem:SetItem("botstarted", "true")
+                    return true
+                end
+
+                if mem:HasItem("trinket_bot_restart_after_hop") and mem:GetItem("trinket_bot_restart_after_hop") == "true" then
+                    mem:SetItem("botstarted", "true")
+                    mem:SetItem("trinket_bot_resume_after_hop", "true")
+                    return true
+                end
+
+                return false
+            end
+
+            task.spawn(function()
+                if not should_auto_resume_trinket_bot() then
+                    return
+                end
+
+                library:Notify("Resuming trinket bot after serverhop...")
+                task.wait(3)
 
                     trinket_bot.path_running = false
 
@@ -17545,7 +17583,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         end
                     end
 
-                    if not ensure_trinket_bot_character_spawned(30, 45) then
+                    if not ensure_trinket_bot_character_spawned(45, 60) then
                         utility:plain_webhook("@everyone CRITICAL: Character did not spawn during auto-start - serverhopping")
                         library:Notify("Character did not spawn after Play - serverhopping")
                         TrinketBotServerhop("Character did not spawn after auto-start Play")
@@ -17664,6 +17702,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                     auto_start_death_connection = nil
                                 end
 
+                                mem:RemoveItem("trinket_bot_resume_after_hop")
                                 ExecutePath(false)
                                 return
                             else
@@ -18248,6 +18287,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                 auto_start_death_connection = nil
                             end
 
+                            mem:RemoveItem("trinket_bot_resume_after_hop")
                             ExecutePath(false)
                         else
                             if auto_start_death_connection then
@@ -18259,11 +18299,11 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             mem:RemoveItem("botstarted")
                             mem:RemoveItem("trinket_bot_restart_after_hop")
                             mem:RemoveItem("trinket_bot_restart_reason")
+                            mem:RemoveItem("trinket_bot_resume_after_hop")
                             task.wait(0.5)
                             plr:Kick("Character lost after path load during auto-start")
                             return
                         end
-                end
             end)
 
             current_path_label = group_trinket_config:AddLabel("Currently Editing: None")
@@ -18485,6 +18525,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         mem:RemoveItem("serverhop_count")
                         mem:RemoveItem("trinket_bot_restart_after_hop")
                         mem:RemoveItem("trinket_bot_restart_reason")
+                        mem:RemoveItem("trinket_bot_resume_after_hop")
 
                         kick_after_path = false
                         kick_debounce = false
@@ -18603,6 +18644,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         mem:RemoveItem("serverhop_count")
                         mem:RemoveItem("trinket_bot_restart_after_hop")
                         mem:RemoveItem("trinket_bot_restart_reason")
+                        mem:RemoveItem("trinket_bot_resume_after_hop")
 
                         if was_botstarted then
                             library:Notify("Bot state reset (was in inconsistent state)")
@@ -21379,6 +21421,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             return
                         end
 
+                        mem:RemoveItem("trinket_bot_resume_after_hop")
                         utility:Unload()
                     end
                 })
@@ -21429,6 +21472,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             return
                         end
 
+                        mem:RemoveItem("trinket_bot_resume_after_hop")
                         utility:Unload()
                     end
                 })
