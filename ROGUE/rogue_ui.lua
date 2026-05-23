@@ -12140,6 +12140,24 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 uploaded_deepforest_restart_path_keys[normalize_trinket_path_name(uploaded_path_name)] = true
             end
 
+            local function path_uses_deepforest_restart(settings)
+                local enabled
+                if settings and settings.deepforest_restart_for_uploaded_path ~= nil then
+                    enabled = settings.deepforest_restart_for_uploaded_path
+                elseif Toggles.DeepforestRestartForUploadedPath ~= nil then
+                    enabled = Toggles.DeepforestRestartForUploadedPath.Value
+                else
+                    enabled = cheat_client.config.deepforest_restart_for_uploaded_path ~= false
+                end
+
+                if not enabled then
+                    return false
+                end
+
+                local path_name = trinket_bot.current_path_name or ""
+                return uploaded_deepforest_restart_path_keys[normalize_trinket_path_name(path_name)] == true
+            end
+
             local visited_positions = {}
             local collected_trinket_ids = {}
             local COLLECTED_IDS_MAX_SIZE = 500
@@ -13817,7 +13835,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     return
                 end
 
-                if not test_mode and prepare_restart_from_point_one and should_use_deepforest_restart() and not trinket_bot.skip_distance_check then
+                if not test_mode and prepare_restart_from_point_one and path_uses_deepforest_restart() and not trinket_bot.skip_distance_check then
                     local distance_before_gate = (root.Position - first_point).Magnitude
                     if distance_before_gate > 75 then
                         library:Notify("Gating to Deepforest 5 before starting path...")
@@ -17177,21 +17195,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             end
 
             local function should_use_deepforest_restart(settings)
-                local enabled
-                if settings and settings.deepforest_restart_for_uploaded_path ~= nil then
-                    enabled = settings.deepforest_restart_for_uploaded_path
-                elseif Toggles.DeepforestRestartForUploadedPath ~= nil then
-                    enabled = Toggles.DeepforestRestartForUploadedPath.Value
-                else
-                    enabled = cheat_client.config.deepforest_restart_for_uploaded_path ~= false
-                end
-
-                if not enabled then
-                    return false
-                end
-
-                local path_name = trinket_bot.current_path_name or ""
-                return uploaded_deepforest_restart_path_keys[normalize_trinket_path_name(path_name)] == true
+                return path_uses_deepforest_restart(settings)
             end
 
             local function restart_preflight_check()
