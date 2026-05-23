@@ -10,13 +10,13 @@ DIST = ROOT / "dist"
 DEFAULT_REPO_BASE = "https://raw.githubusercontent.com/Ludirus/Hydroxide-Rogue-Additions/main/"
 
 TARGETS = {
-    "rogue_lineage.encrypted.lua": {
+    "rogue_lineage.lua": {
         "source": ROOT / "ROGUE" / "rogue_ui.lua",
-        "entrypoint": "dist/rogue_lineage.encrypted.lua",
+        "entrypoint": "dist/rogue_lineage.lua",
     },
-    "rogue_battlegrounds.encrypted.lua": {
+    "rogue_battlegrounds.lua": {
         "source": ROOT / "ROGUE_BATTLEGROUNDS" / "rlb.lua",
-        "entrypoint": "dist/rogue_battlegrounds.encrypted.lua",
+        "entrypoint": "dist/rogue_battlegrounds.lua",
     },
 }
 
@@ -169,12 +169,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--rogue-entrypoint",
-        default=TARGETS["rogue_lineage.encrypted.lua"]["entrypoint"],
+        default=TARGETS["rogue_lineage.lua"]["entrypoint"],
         help="Repo-relative or absolute URL that queued Rogue teleports should reload.",
     )
     parser.add_argument(
         "--battlegrounds-entrypoint",
-        default=TARGETS["rogue_battlegrounds.encrypted.lua"]["entrypoint"],
+        default=TARGETS["rogue_battlegrounds.lua"]["entrypoint"],
         help="Repo-relative or absolute URL that queued Battlegrounds teleports should reload.",
     )
     args = parser.parse_args()
@@ -186,8 +186,8 @@ def main() -> None:
     DIST.mkdir(exist_ok=True)
 
     entrypoints = {
-        "rogue_lineage.encrypted.lua": args.rogue_entrypoint,
-        "rogue_battlegrounds.encrypted.lua": args.battlegrounds_entrypoint,
+        "rogue_lineage.lua": args.rogue_entrypoint,
+        "rogue_battlegrounds.lua": args.battlegrounds_entrypoint,
     }
 
     for output_name, target in TARGETS.items():

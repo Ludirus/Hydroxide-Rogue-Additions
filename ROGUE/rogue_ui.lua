@@ -12122,6 +12122,23 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 ["SERVER_LOOT - Copy (2)"] = true
             }
 
+            local function normalize_trinket_path_name(path_name)
+                if not path_name or path_name == "" then
+                    return ""
+                end
+
+                path_name = path_name:gsub("%.json$", "")
+                return string.lower(path_name:gsub("^%s+", ""):gsub("%s+$", ""))
+            end
+
+            local uploaded_deepforest_restart_path_keys = {
+                ["server_loot - copy (2)"] = true,
+                ["server_loot - copy 2"] = true,
+            }
+            for uploaded_path_name in pairs(uploaded_deepforest_restart_paths) do
+                uploaded_deepforest_restart_path_keys[normalize_trinket_path_name(uploaded_path_name)] = true
+            end
+
             local visited_positions = {}
             local collected_trinket_ids = {}
             local COLLECTED_IDS_MAX_SIZE = 500
@@ -13777,9 +13794,16 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 trinket_bot.path_running = true
 
                 if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
-                    trinket_bot.path_running = false
-                    library:Notify("Character not found!")
-                    return
+                    pcall(function()
+                        plr.PlayerGui:WaitForChild("StartMenu", 15)
+                    end)
+                    click_play_from_start_menu(30)
+                    if not wait_for_character_root(45) then
+                        trinket_bot.path_running = false
+                        library:Notify("Character not found! Click Play on StartMenu or spawn first.")
+                        return
+                    end
+                    library:Notify("Spawned character from StartMenu")
                 end
 
                 local root = plr.Character.HumanoidRootPart
@@ -17124,8 +17148,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 end
 
                 local path_name = trinket_bot.current_path_name or ""
-                path_name = path_name:gsub("%.json$", "")
-                return uploaded_deepforest_restart_paths[path_name] == true
+                return uploaded_deepforest_restart_path_keys[normalize_trinket_path_name(path_name)] == true
             end
 
             local function restart_preflight_check()
@@ -17402,6 +17425,31 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 return false
             end
 
+            local function has_character_root()
+                return plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") ~= nil
+            end
+
+            local function ensure_trinket_bot_character_spawned(play_timeout, spawn_timeout)
+                play_timeout = play_timeout or 30
+                spawn_timeout = spawn_timeout or 45
+
+                if has_character_root() then
+                    return true
+                end
+
+                pcall(function()
+                    plr.PlayerGui:WaitForChild("StartMenu", math.min(play_timeout, 30))
+                end)
+
+                if plr.PlayerGui:FindFirstChild("StartMenu") or not has_character_root() then
+                    if not click_play_from_start_menu(play_timeout) then
+                        library:Notify("StartMenu Play click did not confirm character; waiting for spawn")
+                    end
+                end
+
+                return wait_for_character_root(spawn_timeout)
+            end
+
             task.spawn(function()
                 if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
                     task.wait(2)
@@ -17439,27 +17487,16 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         end
                     end
 
-                    local success = pcall(function()
-                        plr.PlayerGui:WaitForChild("StartMenu", 30)
-                    end)
+                    if not ensure_trinket_bot_character_spawned(30, 45) then
+                        utility:plain_webhook("@everyone CRITICAL: Character did not spawn during auto-start - serverhopping")
+                        library:Notify("Character did not spawn after Play - serverhopping")
+                        TrinketBotServerhop("Character did not spawn after auto-start Play")
+                        return
+                    end
 
-                    if success and plr.PlayerGui:FindFirstChild("StartMenu") then
-                        task.wait(1)
+                    task.wait(1)
 
-                        if not click_play_from_start_menu(30) then
-                            library:Notify("StartMenu Play click did not confirm character; waiting for spawn")
-                        end
-
-                        if not wait_for_character_root(45) then
-                            utility:plain_webhook("@everyone CRITICAL: Character did not spawn during auto-start - serverhopping")
-                            library:Notify("Character did not spawn after Play - serverhopping")
-                            TrinketBotServerhop("Character did not spawn after auto-start Play")
-                            return
-                        end
-
-                        task.wait(1)
-
-                        local auto_start_death_connection
+                    local auto_start_death_connection
                         local character = plr.Character
                         if character then
                             local humanoid = character:FindFirstChildOfClass("Humanoid")
@@ -18165,7 +18202,6 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             plr:Kick("Character lost after path load during auto-start")
                             return
                         end
-                    end
                 end
             end)
 
