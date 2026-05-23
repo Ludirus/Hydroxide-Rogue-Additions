@@ -12969,6 +12969,29 @@ if is_hydroxide_supported_place() then
                 mem:RemoveItem("trinket_bot_resume_in_progress")
             end
 
+            local function release_trinket_execute_lock()
+                trinket_bot.path_running = false
+                clear_trinket_bot_session_locks()
+            end
+
+            local function abort_execute_path_start(message, kick_message)
+                if message then
+                    library:Notify(message)
+                end
+
+                if kick_message then
+                    pcall(function()
+                        if utility and utility.plain_webhook then
+                            utility:plain_webhook(kick_message)
+                        end
+                    end)
+                    task.wait(0.3)
+                    plr:Kick(kick_message)
+                end
+
+                release_trinket_execute_lock()
+            end
+
             local function is_trinket_bot_executing()
                 if trinket_bot.path_running then
                     return true
@@ -15535,7 +15558,6 @@ if is_hydroxide_supported_place() then
                 if should_use_deepforest_restart() then
                     if point_one_distance <= 75 then
                         trinket_bot.skip_distance_check = true
-                        trinket_bot.path_running = false
                         return true, "already at point 1"
                     end
 
@@ -15555,9 +15577,9 @@ if is_hydroxide_supported_place() then
                     trinket_bot.path_running = true
                     local deepforest_expected_destination = get_gate_destination_for_location(DEEPFOREST_RESTART_GATE)
                     local deepforest_gate_success = Gate(DEEPFOREST_RESTART_GATE, deepforest_expected_destination)
-                    trinket_bot.path_running = false
 
                     if not deepforest_gate_success then
+                        trinket_bot.path_running = false
                         return false, "Deepforest 5 restart gate failed"
                     end
 
@@ -15577,7 +15599,6 @@ if is_hydroxide_supported_place() then
                 local point_one_ready
                 point_one_ready, point_one_distance = set_restart_distance_mode()
                 if point_one_ready and point_one_distance <= 75 then
-                    trinket_bot.path_running = false
                     return true, "already near point 1"
                 end
 
@@ -15604,9 +15625,9 @@ if is_hydroxide_supported_place() then
 
                     trinket_bot.path_running = true
                     local gate_success = Gate(nearest_gate_location, nearest_destination_position)
-                    trinket_bot.path_running = false
 
                     if not gate_success then
+                        trinket_bot.path_running = false
                         return false, "nearest restart gate failed"
                     end
 
@@ -15621,7 +15642,6 @@ if is_hydroxide_supported_place() then
                 local distance_to_first = (root.Position - first_point).Magnitude
                 if distance_to_first <= RESTART_POINT_ONE_MAX_DISTANCE then
                     library:Notify("Restart after hop: no inferred gate locations found, moving directly to point 1")
-                    trinket_bot.path_running = false
                     trinket_bot.skip_distance_check = true
                     return true, "no gate points; direct restart"
                 end
@@ -15770,6 +15790,13 @@ if is_hydroxide_supported_place() then
 
                 mark_trinket_bot_executing()
 
+                local resuming_after_hop = not test_mode
+                    and mem:HasItem("trinket_bot_resume_after_hop")
+                    and mem:GetItem("trinket_bot_resume_after_hop") == "true"
+                if not resuming_after_hop then
+                    trinket_bot.skip_distance_check = false
+                end
+
                 if not test_mode then
                     ensure_trinket_f1_stop_listener()
                     pcall(function()
@@ -15784,8 +15811,7 @@ if is_hydroxide_supported_place() then
                     end)
                     click_play_from_start_menu(30)
                     if not wait_for_character_root(45) then
-                        trinket_bot.path_running = false
-                        library:Notify("Character not found! Click Play on StartMenu or spawn first.")
+                        abort_execute_path_start("Character not found! Click Play on StartMenu or spawn first.")
                         return
                     end
                     library:Notify("Spawned character from StartMenu")
@@ -15795,32 +15821,33 @@ if is_hydroxide_supported_place() then
                 local first_point = trinket_bot.path_points[1] and trinket_bot.path_points[1].position
 
                 if not first_point or typeof(first_point) ~= "Vector3" then
-                    trinket_bot.path_running = false
-                    library:Notify("Invalid path data! Please reload or recreate the path.")
+                    abort_execute_path_start("Invalid path data! Please reload or recreate the path.")
                     return
                 end
 
                 if serverhop_if_players_too_close_for_start(test_mode, "Start path blocked") then
+                    release_trinket_execute_lock()
                     return
                 end
 
-                if not test_mode and path_uses_deepforest_restart() and not trinket_bot.skip_distance_check then
+                if not test_mode and path_uses_deepforest_restart() then
                     local distance_before_gate = (root.Position - first_point).Magnitude
-                    if distance_before_gate > 75 then
+                    if distance_before_gate > 75 or (distance_before_gate > 400 and not trinket_bot.skip_distance_check) then
                         library:Notify("Gating to Deepforest 5 before starting path...")
                         local prep_ok, prep_msg = prepare_restart_from_point_one()
                         if not prep_ok then
-                            trinket_bot.path_running = false
                             if serverhop_if_players_too_close_for_start(test_mode, "Deepforest prep blocked") then
+                                release_trinket_execute_lock()
                                 return
                             end
                             if not test_mode and prep_msg and (prep_msg:find("within critical") or prep_msg:find("within proximity")) then
                                 stage_trinket_bot_session_for_hop()
                                 library:Notify("Players nearby during gate setup - serverhopping")
                                 TrinketBotServerhop("Deepforest prep blocked: " .. tostring(prep_msg))
+                                release_trinket_execute_lock()
                                 return
                             end
-                            library:Notify("Deepforest setup failed: " .. tostring(prep_msg))
+                            abort_execute_path_start("Deepforest setup failed: " .. tostring(prep_msg))
                             return
                         end
 
@@ -15828,12 +15855,13 @@ if is_hydroxide_supported_place() then
                         if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
                             root = plr.Character.HumanoidRootPart
                         else
-                            trinket_bot.path_running = false
-                            library:Notify("Character lost after Deepforest gate")
+                            abort_execute_path_start("Character lost after Deepforest gate")
                             return
                         end
                     end
                 end
+
+                trinket_bot.path_running = true
 
                 local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
                 local skip_distance = trinket_bot.skip_distance_check or false
@@ -15851,25 +15879,30 @@ if is_hydroxide_supported_place() then
                 if not stay_in_server then
                     local distance_to_first = (root.Position - first_point).Magnitude
                     if distance_to_first > max_start_distance then
-                        trinket_bot.path_running = false
-                        library:Notify(string.format(
-                            "Too far from first point! Distance: %.1f studs (max: %.0f)",
-                            distance_to_first,
-                            max_start_distance
-                        ))
+                        local kick_message = nil
                         if not test_mode and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
-                            utility:plain_webhook(string.format(
-                                "**BOT KICKED**: Too far from first point (%.1f studs, max: %.0f) @here",
-                                distance_to_first,
-                                max_start_distance
-                            ))
-                            task.wait(1)
-                            plr:Kick(string.format(
+                            kick_message = string.format(
                                 "Too far from first point: %.1f studs (max: %.0f)",
                                 distance_to_first,
                                 max_start_distance
-                            ))
+                            )
+                            pcall(function()
+                                utility:plain_webhook(string.format(
+                                    "**BOT KICKED**: Too far from first point (%.1f studs, max: %.0f) @here",
+                                    distance_to_first,
+                                    max_start_distance
+                                ))
+                            end)
                         end
+
+                        abort_execute_path_start(
+                            string.format(
+                                "Too far from first point! Distance: %.1f studs (max: %.0f)",
+                                distance_to_first,
+                                max_start_distance
+                            ),
+                            kick_message
+                        )
                         return
                     end
                 end
@@ -15939,23 +15972,25 @@ if is_hydroxide_supported_place() then
                             end
                         end))
                     else
-                        trinket_bot.path_running = false
+                        local kick_message = nil
                         if not test_mode and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
-                            utility:plain_webhook("@everyone CRITICAL: Humanoid not found in ExecutePath - kicking for safety")
-                            library:Notify("CRITICAL: Humanoid not found - kicking")
-                            task.wait(0.5)
-                            plr:Kick("Humanoid not found - cannot set up death protection")
+                            pcall(function()
+                                utility:plain_webhook("@everyone CRITICAL: Humanoid not found in ExecutePath - kicking for safety")
+                            end)
+                            kick_message = "Humanoid not found - cannot set up death protection"
                         end
+                        abort_execute_path_start("CRITICAL: Humanoid not found - kicking", kick_message)
                         return
                     end
                 else
-                    trinket_bot.path_running = false
+                    local kick_message = nil
                     if not test_mode and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
-                        utility:plain_webhook("@everyone CRITICAL: Character not found in ExecutePath - kicking for safety")
-                        library:Notify("CRITICAL: Character not found - kicking")
-                        task.wait(0.5)
-                        plr:Kick("Character not found - cannot set up death protection")
+                        pcall(function()
+                            utility:plain_webhook("@everyone CRITICAL: Character not found in ExecutePath - kicking for safety")
+                        end)
+                        kick_message = "Character not found - cannot set up death protection"
                     end
+                    abort_execute_path_start("CRITICAL: Character not found - kicking", kick_message)
                     return
                 end
 
@@ -16718,6 +16753,17 @@ if is_hydroxide_supported_place() then
                     end
                     wait_for_character_grounded(character, 3)
                 end
+
+                trinket_bot.path_running = true
+                trinket_bot_debug_log(
+                    "PATH_LOOP_START",
+                    string.format(
+                        "points=%d distance_to_p1=%.0f skip_distance=%s",
+                        #trinket_bot.path_points,
+                        distance_to_point_one(),
+                        tostring(trinket_bot.skip_distance_check)
+                    )
+                )
 
                 local i = 1
                 while i <= #trinket_bot.path_points do
@@ -19111,6 +19157,8 @@ if is_hydroxide_supported_place() then
                     trinket_bot.apply_settings(save_data.settings)
 
                     library:Notify(string.format("Loaded path '%s' with %d points", path_name, #trinket_bot.path_points))
+                    trinket_bot.current_path_name = path_name
+                    trinket_bot.skip_distance_check = false
                     trinket_bot.update_path_label(path_name)
 
                     if Options.PathName then
