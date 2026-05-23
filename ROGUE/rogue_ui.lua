@@ -13472,6 +13472,48 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     end
                 end
 
+                if not wait_for_character_grounded(character, 4) then
+                    local first_point = trinket_bot.path_points[1] and trinket_bot.path_points[1].position
+                    local gate_preference = first_point and (first_point - character.HumanoidRootPart.Position) or nil
+                    local safe_position = find_safe_forcefield_exit_position(character, gate_preference)
+                    if safe_position then
+                        local landing_platform = Instance.new("Part")
+                        landing_platform.Size = Vector3.new(8, 1, 8)
+                        landing_platform.Anchored = true
+                        landing_platform.CanCollide = true
+                        landing_platform.Transparency = 1
+                        landing_platform.Parent = workspace
+
+                        local ground_result = ws:Raycast(safe_position + Vector3.new(0, 8, 0), Vector3.new(0, -40, 0), (function()
+                            local ray_params = RaycastParams.new()
+                            ray_params.FilterType = Enum.RaycastFilterType.Blacklist
+                            ray_params.FilterDescendantsInstances = { character, landing_platform }
+                            return ray_params
+                        end)())
+
+                        if ground_result then
+                            landing_platform.Position = ground_result.Position + Vector3.new(0, -0.5, 0)
+                            safe_position = landing_platform.Position + Vector3.new(0, 4.25, 0)
+                        else
+                            landing_platform.Position = safe_position + Vector3.new(0, -4.5, 0)
+                        end
+
+                        trinket_bot.path_running = true
+                        SmoothTeleport(safe_position)
+                        task.wait(1)
+                        landing_platform:Destroy()
+                        wait_for_character_grounded(character, 3)
+                    end
+                end
+
+                if not wait_for_character_grounded(character, 2) then
+                    warn("Gate aborted: character not grounded")
+                    if INPUT_BLOCKED then
+                        unblockInputs()
+                    end
+                    return false
+                end
+
                 task.wait(0.05)
                 utility:RightClick()
                 task.wait(0.8)
@@ -14506,34 +14548,191 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 return false, point_one_distance
             end
 
-            local function clear_spawn_forcefield_for_restart()
+            local function get_saved_trinket_path_name()
+                if trinket_bot.current_path_name and trinket_bot.current_path_name ~= "" then
+                    return trinket_bot.current_path_name
+                end
+
+                if getgenv then
+                    local queued = getgenv().HYDROXIDE_QUEUED_TRINKET_RESUME
+                    if queued and queued.path_name and queued.path_name ~= "" then
+                        return queued.path_name
+                    end
+
+                    local queue_payload = getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD
+                    if queue_payload and queue_payload.path_name and queue_payload.path_name ~= "" then
+                        return queue_payload.path_name
+                    end
+
+                    local resume_state = getgenv().HYDROXIDE_TRINKET_RESUME_STATE
+                    if resume_state and resume_state.path_name and resume_state.path_name ~= "" then
+                        return resume_state.path_name
+                    end
+
+                    local last_queued = getgenv().HYDROXIDE_LAST_QUEUED_TRINKET_PAYLOAD
+                    if last_queued and last_queued.path_name and last_queued.path_name ~= "" then
+                        return last_queued.path_name
+                    end
+                end
+
+                local file_payload = load_trinket_session_from_file()
+                if file_payload and file_payload.path_name and file_payload.path_name ~= "" then
+                    return file_payload.path_name
+                end
+
+                if mem:HasItem("trinket_bot_path") then
+                    local mem_path = mem:GetItem("trinket_bot_path")
+                    if mem_path and mem_path ~= "" then
+                        return mem_path
+                    end
+                end
+
+                return ""
+            end
+
+            local function is_character_grounded(character)
+                if not character or not FindFirstChild(character, "HumanoidRootPart") then
+                    return false
+                end
+
+                local hrp = character.HumanoidRootPart
+                local ray_params = RaycastParams.new()
+                ray_params.FilterType = Enum.RaycastFilterType.Blacklist
+                ray_params.FilterDescendantsInstances = { character }
+
+                local result = ws:Raycast(hrp.Position, Vector3.new(0, -14, 0), ray_params)
+                if not result then
+                    return false
+                end
+
+                return (hrp.Position.Y - result.Position.Y) <= 5.5
+            end
+
+            local function wait_for_character_grounded(character, max_wait)
+                max_wait = max_wait or 6
+                local deadline = tick() + max_wait
+
+                while tick() < deadline do
+                    if is_character_grounded(character) then
+                        return true
+                    end
+                    task.wait(0.1)
+                end
+
+                return is_character_grounded(character)
+            end
+
+            local function find_safe_forcefield_exit_position(character, prefer_direction)
+                if not character or not FindFirstChild(character, "HumanoidRootPart") then
+                    return nil
+                end
+
+                local hrp = character.HumanoidRootPart
+                local horizontal_preference = prefer_direction or Vector3.new(0, 0, -1)
+                horizontal_preference = Vector3.new(horizontal_preference.X, 0, horizontal_preference.Z)
+                if horizontal_preference.Magnitude < 0.05 then
+                    horizontal_preference = Vector3.new(0, 0, -1)
+                else
+                    horizontal_preference = horizontal_preference.Unit
+                end
+
+                local perpendicular = Vector3.new(-horizontal_preference.Z, 0, horizontal_preference.X)
+                local probe_offsets = {
+                    horizontal_preference * 5,
+                    horizontal_preference * 3,
+                    horizontal_preference * 7 + perpendicular * 2,
+                    horizontal_preference * 7 - perpendicular * 2,
+                    perpendicular * 3,
+                    -perpendicular * 3,
+                    Vector3.new(0, 0, 0),
+                }
+
+                local ray_params = RaycastParams.new()
+                ray_params.FilterType = Enum.RaycastFilterType.Blacklist
+                ray_params.FilterDescendantsInstances = { character }
+
+                local best_position = nil
+                local best_score = -math.huge
+
+                for _, offset in ipairs(probe_offsets) do
+                    local probe_origin = hrp.Position + offset + Vector3.new(0, 10, 0)
+                    local ground_result = ws:Raycast(probe_origin, Vector3.new(0, -60, 0), ray_params)
+                    if ground_result then
+                        local stand_position = ground_result.Position + Vector3.new(0, 4.25, 0)
+                        local horizontal_distance = (Vector3.new(stand_position.X, 0, stand_position.Z) - Vector3.new(hrp.Position.X, 0, hrp.Position.Z)).Magnitude
+                        local flat_offset = Vector3.new(offset.X, 0, offset.Z)
+                        local alignment = 0
+                        if flat_offset.Magnitude > 0.05 then
+                            alignment = flat_offset.Unit:Dot(horizontal_preference)
+                        end
+                        local score = 100 - horizontal_distance + (alignment * 8)
+
+                        if score > best_score then
+                            best_score = score
+                            best_position = stand_position
+                        end
+                    end
+                end
+
+                return best_position
+            end
+
+            local function clear_spawn_forcefield_for_restart(prefer_direction)
                 local character = plr.Character
                 if not character or not FindFirstChild(character, "HumanoidRootPart") then
                     return false
                 end
 
                 if not FindFirstChildOfClass(character, "ForceField") then
-                    return true
+                    return wait_for_character_grounded(character, 3)
                 end
 
                 local hrp = character.HumanoidRootPart
+                local safe_position = find_safe_forcefield_exit_position(character, prefer_direction)
+                if not safe_position then
+                    safe_position = hrp.Position + Vector3.new(0, 2, 0)
+                end
+
                 local platform = Instance.new("Part")
-                platform.Size = Vector3.new(7, 1, 7)
-                platform.Position = hrp.Position + Vector3.new(0, -3, 18)
+                platform.Size = Vector3.new(8, 1, 8)
                 platform.Anchored = true
                 platform.CanCollide = true
                 platform.Transparency = 1
                 platform.Parent = workspace
 
+                local ground_result = ws:Raycast(safe_position + Vector3.new(0, 8, 0), Vector3.new(0, -40, 0), (function()
+                    local ray_params = RaycastParams.new()
+                    ray_params.FilterType = Enum.RaycastFilterType.Blacklist
+                    ray_params.FilterDescendantsInstances = { character, platform }
+                    return ray_params
+                end)())
+
+                if ground_result then
+                    platform.Position = ground_result.Position + Vector3.new(0, -0.5, 0)
+                    safe_position = platform.Position + Vector3.new(0, 4.25, 0)
+                else
+                    platform.Position = safe_position + Vector3.new(0, -4.5, 0)
+                end
+
                 trinket_bot.path_running = true
-                SmoothTeleport(platform.Position + Vector3.new(0, 4, 0))
-                task.wait(1.5)
+                SmoothTeleport(safe_position)
+                task.wait(1.25)
+
+                local forcefield_wait_start = tick()
+                while tick() - forcefield_wait_start < 6 do
+                    if not FindFirstChildOfClass(character, "ForceField") and wait_for_character_grounded(character, 1.5) then
+                        break
+                    end
+                    task.wait(0.1)
+                end
 
                 if platform then
                     platform:Destroy()
                 end
 
-                return character and not FindFirstChildOfClass(character, "ForceField")
+                return character
+                    and not FindFirstChildOfClass(character, "ForceField")
+                    and wait_for_character_grounded(character, 2)
             end
 
             local function prepare_restart_from_point_one()
@@ -14564,9 +14763,15 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                     library:Notify("Restart after hop: gating to Deepforest 5 for uploaded path")
 
-                    if not clear_spawn_forcefield_for_restart() then
+                    local gate_preference = (first_point - root.Position)
+                    if not clear_spawn_forcefield_for_restart(gate_preference) then
                         trinket_bot.path_running = false
                         return false, "could not clear ForceField before Deepforest restart"
+                    end
+
+                    if not wait_for_character_grounded(character, 4) then
+                        trinket_bot.path_running = false
+                        return false, "not grounded before Deepforest restart gate"
                     end
 
                     trinket_bot.path_running = true
@@ -14608,9 +14813,15 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         nearest_destination_distance
                     ))
 
-                    if not clear_spawn_forcefield_for_restart() then
+                    local gate_preference = (nearest_destination_position - root.Position)
+                    if not clear_spawn_forcefield_for_restart(gate_preference) then
                         trinket_bot.path_running = false
                         return false, "could not clear ForceField before restart gate"
+                    end
+
+                    if not wait_for_character_grounded(character, 4) then
+                        trinket_bot.path_running = false
+                        return false, "not grounded before restart gate"
                     end
 
                     trinket_bot.path_running = true
@@ -15711,35 +15922,16 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 if plr.Character and FindFirstChildOfClass(plr.Character, "ForceField") then
                     library:Notify("Removing ForceField before starting path...")
                     local character = plr.Character
-                    local teleport_platform = nil
+                    local first_point = trinket_bot.path_points[1] and trinket_bot.path_points[1].position
+                    local gate_preference = first_point and character:FindFirstChild("HumanoidRootPart") and (first_point - character.HumanoidRootPart.Position) or nil
 
-                    if character and FindFirstChild(character, "HumanoidRootPart") then
-                        local hrp = character.HumanoidRootPart
-                        local start_pos = hrp.Position
-
-                        teleport_platform = Instance.new("Part")
-                        teleport_platform.Size = Vector3.new(7, 1, 7)
-                        teleport_platform.Position = start_pos + Vector3.new(0, -3, 18)
-                        teleport_platform.Anchored = true
-                        teleport_platform.CanCollide = true
-                        teleport_platform.Transparency = 1
-                        teleport_platform.Parent = workspace
-
-                        trinket_bot.path_running = true
-                        SmoothTeleport(teleport_platform.Position + Vector3.new(0, 4, 0))
-                        task.wait(1.5)
-
-                        if character and not FindFirstChildOfClass(character, "ForceField") then
-                            library:Notify("ForceField removed - starting path")
-                        end
-
-                        if teleport_platform then
-                            teleport_platform:Destroy()
-                        end
-
-                        SmoothTeleport(start_pos)
-                        task.wait(0.5)
+                    trinket_bot.path_running = true
+                    if not clear_spawn_forcefield_for_restart(gate_preference) then
+                        library:Notify("ForceField removal failed - continuing carefully")
+                    else
+                        library:Notify("ForceField removed - starting path")
                     end
+                    wait_for_character_grounded(character, 3)
                 end
 
                 local i = 1
@@ -18342,21 +18534,24 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             return
                         end
 
-                        local saved_path = mem:GetItem("trinket_bot_path")
-                        if not saved_path or saved_path == "" then
+                        local saved_path = get_saved_trinket_path_name()
+                        if saved_path == "" then
                             if auto_start_death_connection then
                                 pcall(function() auto_start_death_connection:Disconnect() end)
                                 auto_start_death_connection = nil
                             end
-                            utility:plain_webhook("@everyone CRITICAL: No saved path found during auto-start (trinket_bot_path empty) - kicking for safety")
-                            library:Notify("CRITICAL: No saved path found - kicking")
-                            mem:RemoveItem("botstarted")
-                            mem:RemoveItem("trinket_bot_restart_after_hop")
-                            mem:RemoveItem("trinket_bot_restart_reason")
-                            task.wait(0.5)
-                            plr:Kick("No saved path found during auto-start")
+                            trinket_bot_debug_log("AUTO_RESUME_SKIP", "saved path missing after session restore")
+                            utility:plain_webhook("@here Auto-resume missing saved path - serverhopping instead of kicking")
+                            library:Notify("No saved path for resume - serverhopping...")
+                            trinket_bot.path_running = false
+                            TrinketBotServerhop("Auto-resume missing saved path")
                             return
                         end
+
+                        trinket_bot.current_path_name = saved_path
+                        pcall(function()
+                            mem:SetItem("trinket_bot_path", saved_path)
+                        end)
 
                         local load_success = load_path_by_name(saved_path)
                         task.wait(1)
