@@ -20,7 +20,15 @@ repeat task.wait() until Players.LocalPlayer
 repeat task.wait() until Players.LocalPlayer.Backpack
 
 local StarterGui = Services.StarterGui
-repeat task.wait() until StarterGui:FindFirstChild("LeaderboardGui")
+do
+    local leaderboard_deadline = os.clock() + 15
+    repeat
+        task.wait()
+    until StarterGui:FindFirstChild("LeaderboardGui") or os.clock() >= leaderboard_deadline
+    if not StarterGui:FindFirstChild("LeaderboardGui") then
+        warn("[HYDROXIDE] LeaderboardGui not found in StarterGui after 15s; continuing load")
+    end
+end
 
 pcall(function()
     if getconnections then
@@ -142,15 +150,37 @@ local function hydroxide_pending_trinket_resume()
         end
     end)
 
-    if not pending and readfile and isfile then
-        pcall(function()
-            if isfile("HYDROXIDE/trinket_resume_session.json") then
-                pending = true
-            end
-        end)
+    return pending
+end
+
+local function is_trinket_hop_resume_context()
+    if getgenv and getgenv().HYDROXIDE_QUEUED_TRINKET_RESUME then
+        return true
     end
 
-    return pending
+    if getgenv and getgenv().HYDROXIDE_TRINKET_PENDING_RESUME then
+        return true
+    end
+
+    if getgenv and getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD and getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD.resume_after_hop then
+        return true
+    end
+
+    if getgenv and getgenv().HYDROXIDE_TRINKET_RESUME_STATE and getgenv().HYDROXIDE_TRINKET_RESUME_STATE.resume_after_hop then
+        return true
+    end
+
+    local mem_resume = false
+    pcall(function()
+        local memService = game:GetService("MemStorageService")
+        if memService:HasItem("trinket_bot_resume_after_hop") and memService:GetItem("trinket_bot_resume_after_hop") == "true" then
+            mem_resume = true
+        elseif memService:HasItem("trinket_bot_restart_after_hop") and memService:GetItem("trinket_bot_restart_after_hop") == "true" then
+            mem_resume = true
+        end
+    end)
+
+    return mem_resume
 end
 
 if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 109732117428502 or game.PlaceId == 14341521240 then
@@ -353,11 +383,14 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
     end
 
     local function restore_trinket_session_on_load()
-        local file_payload = load_trinket_session_from_file()
-        if file_payload then
-            if apply_trinket_resume_payload_to_mem(file_payload) then
-                print("[HYDROXIDE] Restored trinket session from file")
-                return true
+        local file_payload
+        if is_trinket_hop_resume_context() then
+            file_payload = load_trinket_session_from_file()
+            if file_payload then
+                if apply_trinket_resume_payload_to_mem(file_payload) then
+                    print("[HYDROXIDE] Restored trinket session from file")
+                    return true
+                end
             end
         end
 
@@ -396,7 +429,27 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
         return false
     end
 
-    restore_trinket_session_on_load()
+    local function clear_stale_trinket_resume_state()
+        clear_trinket_session_file()
+        pcall(function()
+            mem:RemoveItem("botstarted")
+            mem:RemoveItem("trinket_bot_resume_after_hop")
+            mem:RemoveItem("trinket_bot_restart_after_hop")
+            mem:RemoveItem("trinket_bot_restart_reason")
+            mem:RemoveItem("trinket_bot_resume_in_progress")
+            mem:RemoveItem(TRINKET_SESSION_MEM_KEY)
+        end)
+        if getgenv then
+            getgenv().HYDROXIDE_TRINKET_PENDING_RESUME = nil
+            getgenv().HYDROXIDE_TRINKET_RESUME_STATE = nil
+        end
+    end
+
+    if is_trinket_hop_resume_context() then
+        restore_trinket_session_on_load()
+    else
+        clear_stale_trinket_resume_state()
+    end
 
     if getgenv then
         getgenv().HYDROXIDE_TELEPORT_QUEUED = nil
@@ -501,6 +554,166 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
     local done = false
     local busy = false
+
+    local BOTTING_ACCOUNTS_FOLDER = "bottingaccounts"
+    local LOOTED_SERVER_COOLDOWN_SECONDS = 30 * 60
+
+    local bot_account_api = {}
+
+    local function sanitize_bot_account_filename(player_name)
+        local safe_name = tostring(player_name or "unknown"):gsub("[^%w%-_ ]", "_")
+        if safe_name == "" then
+            safe_name = "unknown"
+        end
+        return safe_name
+    end
+
+    function bot_account_api.get_file_path()
+        return string.format("%s/%s.hydro", BOTTING_ACCOUNTS_FOLDER, sanitize_bot_account_filename(plr.Name))
+    end
+
+    function bot_account_api.ensure_folder()
+        if makefolder then
+            pcall(function()
+                makefolder(BOTTING_ACCOUNTS_FOLDER)
+            end)
+        end
+    end
+
+    function bot_account_api.default_data()
+        return {
+            player_name = plr.Name,
+            user_id = plr.UserId,
+            current_path = "",
+            bot_active = false,
+            updated_at_unix = os.time(),
+            looted_servers = {},
+        }
+    end
+
+    function bot_account_api.prune_looted_servers(data)
+        if type(data) ~= "table" then
+            return
+        end
+
+        local now = os.time()
+        local kept = {}
+        for _, entry in ipairs(data.looted_servers or {}) do
+            if type(entry) == "table" and entry.job_id and entry.looted_at_unix then
+                if now - tonumber(entry.looted_at_unix) < LOOTED_SERVER_COOLDOWN_SECONDS then
+                    table.insert(kept, entry)
+                end
+            end
+        end
+        data.looted_servers = kept
+    end
+
+    function bot_account_api.load()
+        bot_account_api.ensure_folder()
+        local data = bot_account_api.default_data()
+
+        if not (readfile and isfile) then
+            return data
+        end
+
+        local file_path = bot_account_api.get_file_path()
+        if not isfile(file_path) then
+            return data
+        end
+
+        local ok, decoded = pcall(function()
+            return Services.HttpService:JSONDecode(readfile(file_path))
+        end)
+
+        if ok and type(decoded) == "table" then
+            for key, value in pairs(decoded) do
+                data[key] = value
+            end
+        end
+
+        bot_account_api.prune_looted_servers(data)
+        return data
+    end
+
+    function bot_account_api.save(data)
+        if type(data) ~= "table" or not writefile then
+            return false
+        end
+
+        bot_account_api.ensure_folder()
+        bot_account_api.prune_looted_servers(data)
+        data.player_name = plr.Name
+        data.user_id = plr.UserId
+        data.updated_at_unix = os.time()
+
+        local saved = false
+        pcall(function()
+            writefile(bot_account_api.get_file_path(), Services.HttpService:JSONEncode(data))
+            saved = true
+        end)
+
+        return saved
+    end
+
+    function bot_account_api.record_looted_server(job_id, path_name)
+        job_id = tostring(job_id or "")
+        if job_id == "" then
+            return false
+        end
+
+        local data = bot_account_api.load()
+        data.looted_servers = data.looted_servers or {}
+
+        local now = os.time()
+        local filtered = {}
+        for _, entry in ipairs(data.looted_servers) do
+            if type(entry) == "table" and entry.job_id ~= job_id then
+                table.insert(filtered, entry)
+            end
+        end
+        data.looted_servers = filtered
+
+        table.insert(data.looted_servers, 1, {
+            job_id = job_id,
+            looted_at_unix = now,
+            place_id = game.PlaceId,
+            path = tostring(path_name or data.current_path or ""),
+        })
+
+        if path_name and path_name ~= "" then
+            data.current_path = tostring(path_name)
+        end
+
+        return bot_account_api.save(data)
+    end
+
+    function bot_account_api.is_server_looted_recently(job_id)
+        job_id = tostring(job_id or "")
+        if job_id == "" then
+            return false
+        end
+
+        local data = bot_account_api.load()
+        local now = os.time()
+        for _, entry in ipairs(data.looted_servers or {}) do
+            if type(entry) == "table" and entry.job_id == job_id and entry.looted_at_unix then
+                if now - tonumber(entry.looted_at_unix) < LOOTED_SERVER_COOLDOWN_SECONDS then
+                    return true
+                end
+            end
+        end
+
+        return false
+    end
+
+    function bot_account_api.sync_session(path_name, bot_active)
+        local data = bot_account_api.load()
+        if path_name ~= nil then
+            data.current_path = tostring(path_name)
+        end
+        data.bot_active = bot_active == true
+        return bot_account_api.save(data)
+    end
 
     local game_client = {}
     local library = {}
@@ -2746,6 +2959,17 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 pcall(function()
                     mem:SetItem(SERVER_HISTORY_KEY, httpService:JSONEncode(history))
                 end)
+
+                local path_name = ""
+                pcall(function()
+                    if mem:HasItem("trinket_bot_path") then
+                        path_name = mem:GetItem("trinket_bot_path")
+                    end
+                end)
+
+                pcall(function()
+                    bot_account_api.record_looted_server(jobId, path_name)
+                end)
             end
 
             function utility:clear_server_history()
@@ -2761,6 +2985,13 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     end
                 end
                 return false
+            end
+
+            local function is_server_blocked_for_hop(jobId, history)
+                if bot_account_api.is_server_looted_recently(jobId) then
+                    return true
+                end
+                return is_server_recent(jobId, history)
             end
 
             function utility:get_largest_server()
@@ -2786,7 +3017,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     local data = httpService:JSONDecode(response.Body)
                     if data and data.data then
                         for _, server in ipairs(data.data) do
-                            if server.id and server.id ~= currentJobId and not is_server_recent(server.id, history) then
+                            if server.id and server.id ~= currentJobId and not is_server_blocked_for_hop(server.id, history) then
                                 return server.id
                             end
                         end
@@ -2825,7 +3056,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     local data = httpService:JSONDecode(response.Body)
                     if data and data.data then
                         for _, server in ipairs(data.data) do
-                            if server.id and server.id ~= currentJobId and not is_server_recent(server.id, history) then
+                            if server.id and server.id ~= currentJobId and not is_server_blocked_for_hop(server.id, history) then
                                 return server.id
                             end
                         end
@@ -2860,7 +3091,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     local lifespanValue = FindFirstChild(serverFolder, "Lifespan")
                     local playersValue = FindFirstChild(serverFolder, "Players")
 
-                    if lifespanValue and lifespanValue:IsA("IntValue") and jobId ~= currentJobId and not is_server_recent(jobId, history) then
+                    if lifespanValue and lifespanValue:IsA("IntValue") and jobId ~= currentJobId and not is_server_blocked_for_hop(jobId, history) then
                         local playerCount = 0
                         if playersValue and playersValue:IsA("StringValue") then
                             local success, playerData = pcall(function()
@@ -2903,7 +3134,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     local lifespanValue = FindFirstChild(serverFolder, "Lifespan")
                     local playersValue = FindFirstChild(serverFolder, "Players")
 
-                    if lifespanValue and lifespanValue:IsA("IntValue") and jobId ~= currentJobId and not is_server_recent(jobId, history) then
+                    if lifespanValue and lifespanValue:IsA("IntValue") and jobId ~= currentJobId and not is_server_blocked_for_hop(jobId, history) then
                         local playerCount = 0
                         if playersValue and playersValue:IsA("StringValue") then
                             local success, playerData = pcall(function()
@@ -3083,11 +3314,13 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     local playerCount = server.playing or 0
                     local maxPlayers = server.maxPlayers or 0
 
-                    local is_recent = false
-                    for _, recentJobId in ipairs(history) do
-                        if recentJobId == jobId then
-                            is_recent = true
-                            break
+                    local is_recent = bot_account_api.is_server_looted_recently(jobId)
+                    if not is_recent then
+                        for _, recentJobId in ipairs(history) do
+                            if recentJobId == jobId then
+                                is_recent = true
+                                break
+                            end
                         end
                     end
 
@@ -3162,10 +3395,14 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             local jobId = server.Name
                             local is_recent = false
 
-                            for _, recentJobId in ipairs(history) do
-                                if recentJobId == jobId then
-                                    is_recent = true
-                                    break
+                            if bot_account_api.is_server_looted_recently(jobId) then
+                                is_recent = true
+                            else
+                                for _, recentJobId in ipairs(history) do
+                                    if recentJobId == jobId then
+                                        is_recent = true
+                                        break
+                                    end
                                 end
                             end
 
@@ -3531,7 +3768,13 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
         shared.SaveManager = SaveManager
         shared.ThemeManager = ThemeManager
     else
-        print("Failed to load UI library: " .. tostring(library_func))
+        warn("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
+        return
+    end
+
+    if not library or type(library) ~= "table" or not library.Notify then
+        warn("[HYDROXIDE] UI library loaded but is invalid; aborting script load")
+        return
     end
 
     
@@ -12547,6 +12790,9 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 mem:RemoveItem("trinket_bot_resume_in_progress")
             end
 
+            local stop_trinket_bot_manually
+            local ensure_trinket_f1_stop_listener
+
             local function try_claim_trinket_bot_resume()
                 if is_trinket_bot_executing() then
                     return false
@@ -15106,6 +15352,14 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 end
 
                 mark_trinket_bot_executing()
+
+                if not test_mode then
+                    ensure_trinket_f1_stop_listener()
+                    pcall(function()
+                        bot_account_api.sync_session(trinket_bot.current_path_name, true)
+                    end)
+                    library:Notify("Trinket bot started. Press F1 to stop.")
+                end
 
                 if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
                     pcall(function()
@@ -18479,15 +18733,23 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             end
 
             local function should_auto_resume_trinket_bot()
-                restore_trinket_session_on_load()
+                if is_trinket_hop_resume_context() then
+                    restore_trinket_session_on_load()
+                end
                 restore_trinket_resume_state_from_backup()
 
-                local file_payload = load_trinket_session_from_file()
-                if file_payload then
-                    apply_trinket_resume_payload_to_mem(file_payload)
+                local file_payload
+                if is_trinket_hop_resume_context() then
+                    file_payload = load_trinket_session_from_file()
+                    if file_payload then
+                        apply_trinket_resume_payload_to_mem(file_payload)
+                    end
                 end
 
                 if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                    if not is_trinket_hop_resume_context() then
+                        return false, "stale_botstarted"
+                    end
                     return true, "botstarted"
                 end
 
@@ -18509,7 +18771,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     end
                 end
 
-                if file_payload and file_payload.resume_after_hop then
+                if file_payload and file_payload.resume_after_hop and is_trinket_hop_resume_context() then
                     mem:SetItem("botstarted", "true")
                     mem:SetItem("trinket_bot_resume_after_hop", "true")
                     return true, "session_file"
@@ -18524,8 +18786,24 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             end
 
             task.spawn(function()
+                local library_wait_deadline = os.clock() + 30
+                while (not library or not library.Notify) and os.clock() < library_wait_deadline do
+                    if shared and shared.is_unloading then
+                        return
+                    end
+                    task.wait(0.1)
+                end
+
+                if not library or not library.Notify then
+                    warn("[HYDROXIDE] Auto-resume skipped: UI library not ready")
+                    return
+                end
+
                 task.wait(0.25)
-                restore_trinket_session_on_load()
+
+                if is_trinket_hop_resume_context() then
+                    restore_trinket_session_on_load()
+                end
 
                 local restored_path = get_saved_trinket_path_name()
                 if restored_path ~= "" then
@@ -18563,7 +18841,8 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     return
                 end
 
-                library:Notify("Resuming trinket bot after serverhop...")
+                ensure_trinket_f1_stop_listener()
+                library:Notify("Resuming trinket bot after serverhop... Press F1 to stop.")
                 task.wait(3)
 
                 if is_trinket_bot_executing() then
@@ -19573,11 +19852,26 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 end
             })
 
-            local stop_button = group_trinket_config:AddButton("stop_bot", {
-                Text = "Stop Bot",
-                Tooltip = "Stop the currently running bot",
-                Func = function()
-                    if trinket_bot.path_running or is_trinket_bot_already_active() then
+            ensure_trinket_f1_stop_listener = function()
+                if trinket_bot.f1_stop_connection then
+                    return
+                end
+
+                trinket_bot.f1_stop_connection = utility:Connection(uis.InputBegan, function(input, game_processed)
+                    if game_processed then
+                        return
+                    end
+
+                    if input.KeyCode == Enum.KeyCode.F1 then
+                        stop_trinket_bot_manually("Bot stopped (F1)")
+                    end
+                end)
+            end
+
+            stop_trinket_bot_manually = function(notify_message)
+                notify_message = notify_message or "Bot manually stopped"
+
+                if trinket_bot.path_running or is_trinket_bot_already_active() then
                         trinket_bot.path_running = false
                         clear_trinket_bot_session_locks()
                         mem:RemoveItem("botstarted")
@@ -19697,7 +19991,11 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             update_visualizations()
                         end
 
-                        library:Notify("Bot manually stopped")
+                        pcall(function()
+                            bot_account_api.sync_session(trinket_bot.current_path_name, false)
+                        end)
+
+                        library:Notify(notify_message)
                     else
                         local was_botstarted = mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true"
                         trinket_bot.path_running = false
@@ -19709,12 +20007,25 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         mem:RemoveItem(TRINKET_SESSION_MEM_KEY)
                         clear_trinket_session_file()
 
+                        pcall(function()
+                            bot_account_api.sync_session(trinket_bot.current_path_name, false)
+                        end)
+
                         if was_botstarted then
                             library:Notify("Bot state reset (was in inconsistent state)")
                         else
                             library:Notify("Bot is not running")
                         end
                     end
+            end
+
+            ensure_trinket_f1_stop_listener()
+
+            local stop_button = group_trinket_config:AddButton("stop_bot", {
+                Text = "Stop Bot",
+                Tooltip = "Stop the currently running bot (F1)",
+                Func = function()
+                    stop_trinket_bot_manually("Bot manually stopped")
                 end
             })
 
