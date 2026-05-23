@@ -16098,6 +16098,7 @@ if is_hydroxide_supported_place() then
                 end
 
                 trinket_bot.path_running = true
+                trinket_bot.request_auto_drop_scan("path_running")
 
                 local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
                 local skip_distance = trinket_bot.skip_distance_check or false
@@ -16156,6 +16157,7 @@ if is_hydroxide_supported_place() then
 
                 if not test_mode then
                     mem:SetItem("botstarted", "true")
+                    trinket_bot.request_auto_drop_scan("path_start")
                     if not mem:HasItem("serverhop_count") then
                         mem:SetItem("serverhop_count", "0")
                     end
@@ -20941,6 +20943,10 @@ if is_hydroxide_supported_place() then
 
             do
             trinket_bot.auto_drop_bot_active = function()
+                if trinket_bot.path_running then
+                    return true
+                end
+
                 return mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true"
             end
 
@@ -20974,22 +20980,97 @@ if is_hydroxide_supported_place() then
                 return false
             end
 
-            trinket_bot.should_auto_drop_item_name = function(item_name)
+            trinket_bot.get_auto_drop_list_names = function()
+                local names = {}
                 if not (Options.AutoDropItems and Options.AutoDropItems.Value) then
-                    return false
+                    return names
                 end
 
+                for key, value in pairs(Options.AutoDropItems.Value) do
+                    if value == true and type(key) == "string" then
+                        names[key] = true
+                    elseif type(value) == "string" then
+                        names[value] = true
+                    end
+                end
+
+                return names
+            end
+
+            trinket_bot.should_auto_drop_item_name = function(item_name)
                 if trinket_bot.normalize_auto_drop_name(item_name) == "" then
                     return false
                 end
 
-                for dropdown_name, enabled in pairs(Options.AutoDropItems.Value) do
-                    if enabled == true and trinket_bot.auto_drop_names_match(item_name, dropdown_name) then
+                for dropdown_name, _ in pairs(trinket_bot.get_auto_drop_list_names()) do
+                    if trinket_bot.auto_drop_names_match(item_name, dropdown_name) then
                         return true
                     end
                 end
 
                 return false
+            end
+
+            trinket_bot.get_tool_auto_drop_name = function(tool)
+                if not tool then
+                    return nil
+                end
+
+                local tool_name = tool.Name
+                if trinket_bot.should_auto_drop_item_name(tool_name) then
+                    return tool_name
+                end
+
+                return nil
+            end
+
+            trinket_bot.scan_inventory_for_drop_items = function(scan_reason)
+                if not trinket_bot.auto_drop_bot_active() then
+                    trinket_bot_debug_log("AUTO_DROP_SCAN", string.format("skip=inactive reason=%s", tostring(scan_reason or "periodic")))
+                    return false
+                end
+
+                if currently_dropping then
+                    trinket_bot_debug_log("AUTO_DROP_SCAN", string.format("skip=busy reason=%s", tostring(scan_reason or "periodic")))
+                    return false
+                end
+
+                local drop_list = trinket_bot.get_auto_drop_list_names()
+                if not next(drop_list) then
+                    trinket_bot_debug_log("AUTO_DROP_SCAN", string.format("skip=empty_list reason=%s", tostring(scan_reason or "periodic")))
+                    return false
+                end
+
+                local containers = {plr.Character, plr.Backpack}
+                for _, container in ipairs(containers) do
+                    if container then
+                        for _, tool in ipairs(container:GetChildren()) do
+                            if tool:IsA("Tool") then
+                                local drop_name = trinket_bot.get_tool_auto_drop_name(tool)
+                                if drop_name
+                                    and not droppedTools[trinket_bot.normalize_auto_drop_name(drop_name)] then
+                                    trinket_bot_debug_log(
+                                        "AUTO_DROP_MATCH",
+                                        string.format("tool=%s reason=%s", drop_name, tostring(scan_reason or "periodic"))
+                                    )
+                                    task.spawn(trinket_bot.drop_item, tool)
+                                    return true
+                                end
+                            end
+                        end
+                    end
+                end
+
+                if scan_reason ~= "periodic" then
+                    trinket_bot_debug_log("AUTO_DROP_SCAN", string.format("no_match reason=%s", tostring(scan_reason or "periodic")))
+                end
+                return false
+            end
+
+            trinket_bot.request_auto_drop_scan = function(reason)
+                task.defer(function()
+                    trinket_bot.scan_inventory_for_drop_items(reason or "deferred")
+                end)
             end
 
             trinket_bot.find_inventory_tool_by_name = function(item_name)
@@ -21047,6 +21128,7 @@ if is_hydroxide_supported_place() then
 
                 local item_name = item.Name
                 if not trinket_bot.should_auto_drop_item_name(item_name) then
+                    trinket_bot_debug_log("AUTO_DROP_SKIP", string.format("not_listed tool=%s", tostring(item_name)))
                     return
                 end
 
@@ -21138,6 +21220,7 @@ if is_hydroxide_supported_place() then
                 if drop_verified then
                     library:Notify(string.format("Dropped %s", item_name))
                     trinket_bot.wait_for_drop_danger_clear(item_name)
+                    trinket_bot.request_auto_drop_scan("post_drop")
                 else
                     library:Notify(string.format("Stopped auto-drop for %s because bot stopped/unloaded", item_name))
                 end
@@ -21171,33 +21254,11 @@ if is_hydroxide_supported_place() then
                     return
                 end
 
-                trinket_bot.scan_inventory_for_drop_items = function()
-                    if not trinket_bot.auto_drop_bot_active() or currently_dropping then
-                        return false
-                    end
-
-                    local containers = {plr.Character, plr.Backpack}
-                    for _, container in ipairs(containers) do
-                        if container then
-                            for _, tool in ipairs(container:GetChildren()) do
-                                if tool:IsA("Tool")
-                                    and trinket_bot.should_auto_drop_item_name(tool.Name)
-                                    and not droppedTools[trinket_bot.normalize_auto_drop_name(tool.Name)] then
-                                    task.spawn(trinket_bot.drop_item, tool)
-                                    return true
-                                end
-                            end
-                        end
-                    end
-
-                    return false
-                end
-
                 local character = plr.Character
                 if character then
                     trinket_bot.auto_drop_character_connection = utility:Connection(character.ChildAdded, function(obj)
-                        if obj and obj:IsA("Tool") and trinket_bot.auto_drop_bot_active() and trinket_bot.should_auto_drop_item_name(obj.Name) then
-                            task.defer(trinket_bot.scan_inventory_for_drop_items)
+                        if obj and obj:IsA("Tool") and trinket_bot.auto_drop_bot_active() then
+                            trinket_bot.request_auto_drop_scan("character_added")
                         end
                     end)
                 end
@@ -21205,14 +21266,14 @@ if is_hydroxide_supported_place() then
                 auto_drop_backpack_connection = utility:Connection(backpack.ChildAdded, function(obj)
                     if not obj then return end
 
-                    local bot_started = mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true"
-                    if not bot_started then return end
+                    if not trinket_bot.auto_drop_bot_active() then return end
 
                     if not obj:IsA("Tool") then return end
 
                     task.wait(0.05)
 
                     if trinket_bot.should_auto_drop_item_name(obj.Name) then
+                        trinket_bot_debug_log("AUTO_DROP_MATCH", string.format("tool=%s reason=backpack_added", obj.Name))
                         task.spawn(trinket_bot.drop_item, obj)
                         return
                     end
@@ -21233,18 +21294,18 @@ if is_hydroxide_supported_place() then
                     end
 
                     task.wait(0.67)
-                    trinket_bot.scan_inventory_for_drop_items()
+                    trinket_bot.request_auto_drop_scan("backpack_added")
                 end)
 
-                task.defer(trinket_bot.scan_inventory_for_drop_items)
+                trinket_bot.request_auto_drop_scan("backpack_setup")
 
                 if not trinket_bot.auto_drop_scan_loop_started then
                     trinket_bot.auto_drop_scan_loop_started = true
                     task.spawn(function()
                         while shared and not shared.is_unloading do
                             if trinket_bot.auto_drop_bot_active() then
-                                trinket_bot.scan_inventory_for_drop_items()
-                                task.wait(currently_dropping and 0.1 or 0.35)
+                                trinket_bot.scan_inventory_for_drop_items("periodic")
+                                task.wait(currently_dropping and 0.25 or 3)
                             else
                                 task.wait(1)
                             end
