@@ -12916,6 +12916,8 @@ if is_hydroxide_supported_place() then
             cheat_client.trinket_bot = trinket_bot
 
             local DEEPFOREST_RESTART_GATE = "Deepforest 5"
+            local DEEPFOREST_PREP_MIN_DISTANCE = 600
+            local RESTART_AT_POINT_ONE_DISTANCE = 75
             local RESTART_POINT_ONE_MAX_DISTANCE = 750
             local uploaded_deepforest_restart_paths = {
                 ["SERVER_LOOT - Copy (2)"] = true
@@ -13699,6 +13701,8 @@ if is_hydroxide_supported_place() then
 
                 trinket_bot.cancel_active_tween()
 
+                local use_path_noclip = not allow_without_path_running
+
                 local character = plr.Character
                 if character then
                     local humanoid = FindFirstChildOfClass(character, "Humanoid")
@@ -13722,12 +13726,29 @@ if is_hydroxide_supported_place() then
                     end
 
                     local active_character = plr.Character
-                    local active_root = active_character and FindFirstChild(active_character, "HumanoidRootPart")
-                    if active_root then
-                        pcall(function()
-                            active_root.AssemblyLinearVelocity = Vector3.zero
-                            active_root.AssemblyAngularVelocity = Vector3.zero
-                        end)
+                    if not active_character then
+                        return
+                    end
+
+                    if use_path_noclip then
+                        for _, v in pairs(active_character:GetDescendants()) do
+                            if v:IsA("BasePart") then
+                                pcall(function()
+                                    v.Velocity = Vector3.zero
+                                    v.AssemblyLinearVelocity = Vector3.zero
+                                    v.AssemblyAngularVelocity = Vector3.zero
+                                    v.CanCollide = false
+                                end)
+                            end
+                        end
+                    else
+                        local active_root = FindFirstChild(active_character, "HumanoidRootPart")
+                        if active_root then
+                            pcall(function()
+                                active_root.AssemblyLinearVelocity = Vector3.zero
+                                active_root.AssemblyAngularVelocity = Vector3.zero
+                            end)
+                        end
                     end
                 end))
 
@@ -15760,9 +15781,13 @@ if is_hydroxide_supported_place() then
                 end
 
                 if should_use_deepforest_restart() then
-                    if point_one_distance <= 75 then
+                    if point_one_distance <= RESTART_AT_POINT_ONE_DISTANCE then
                         trinket_bot.skip_distance_check = true
                         return true, "already at point 1"
+                    end
+
+                    if point_one_distance < DEEPFOREST_PREP_MIN_DISTANCE then
+                        return true, "near point 1, skipping Deepforest prep"
                     end
 
                     library:Notify("Restart after hop: gating to Deepforest 5 for uploaded path")
@@ -15801,7 +15826,7 @@ if is_hydroxide_supported_place() then
 
                 local point_one_ready
                 point_one_ready, point_one_distance = set_restart_distance_mode()
-                if point_one_ready and point_one_distance <= 75 then
+                if point_one_ready and point_one_distance <= RESTART_AT_POINT_ONE_DISTANCE then
                     return true, "already near point 1"
                 end
 
@@ -16039,7 +16064,7 @@ if is_hydroxide_supported_place() then
 
                 if not test_mode and path_uses_deepforest_restart() then
                     local distance_before_gate = (root.Position - first_point).Magnitude
-                    if distance_before_gate > 75 or (distance_before_gate > 400 and not trinket_bot.skip_distance_check) then
+                    if distance_before_gate >= DEEPFOREST_PREP_MIN_DISTANCE then
                         library:Notify("Gating to Deepforest 5 before starting path...")
                         local prep_ok, prep_msg = prepare_restart_from_point_one()
                         if not prep_ok then
