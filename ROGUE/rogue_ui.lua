@@ -13795,6 +13795,104 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 return true
             end
 
+            local function get_nearby_player_for_start_checks()
+                if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
+                    return nil
+                end
+
+                local bot_pos = plr.Character.HumanoidRootPart.Position
+                local critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 0
+                local proximity_check_distance = Options.ProximityCheck and Options.ProximityCheck.Value or 0
+
+                if critical_distance <= 0 and proximity_check_distance <= 0 then
+                    return nil
+                end
+
+                local nearest_name = nil
+                local nearest_distance = math.huge
+                local nearest_kind = nil
+
+                for _, other_player in next, plrs:GetPlayers() do
+                    if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                        local distance = (other_player.Character.HumanoidRootPart.Position - bot_pos).Magnitude
+                        local kind = nil
+
+                        if critical_distance > 0 and distance <= critical_distance then
+                            kind = "critical"
+                        elseif proximity_check_distance > 0 and distance <= proximity_check_distance then
+                            kind = "proximity"
+                        end
+
+                        if kind and distance < nearest_distance then
+                            nearest_name = other_player.Name
+                            nearest_distance = distance
+                            nearest_kind = kind
+                        end
+                    end
+                end
+
+                if nearest_name then
+                    return nearest_name, nearest_distance, nearest_kind
+                end
+
+                return nil
+            end
+
+            local function stage_trinket_bot_session_for_hop()
+                mem:SetItem("botstarted", "true")
+                mem:SetItem("trinket_bot_resume_after_hop", "true")
+                mem:SetItem("trinket_bot_restart_after_hop", "true")
+
+                if trinket_bot.current_path_name and trinket_bot.current_path_name ~= "" then
+                    mem:SetItem("trinket_bot_path", trinket_bot.current_path_name)
+                end
+
+                if not mem:HasItem("serverhop_count") then
+                    mem:SetItem("serverhop_count", "0")
+                end
+            end
+
+            local function serverhop_if_players_too_close_for_start(test_mode, context_label)
+                if test_mode then
+                    return false
+                end
+
+                local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                if stay_in_server then
+                    return false
+                end
+
+                local blocker_name, blocker_distance, blocker_kind = get_nearby_player_for_start_checks()
+                if not blocker_name then
+                    return false
+                end
+
+                local critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 0
+                local proximity_check_distance = Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                local configured_limit = blocker_kind == "critical" and critical_distance or proximity_check_distance
+
+                trinket_bot.path_running = false
+                stage_trinket_bot_session_for_hop()
+
+                local reason = string.format(
+                    "%s: Player %s within %s distance (%.0f studs, limit %d) - serverhopping",
+                    context_label or "Start path blocked",
+                    blocker_name,
+                    blocker_kind,
+                    blocker_distance,
+                    math.floor(configured_limit)
+                )
+
+                library:Notify(string.format(
+                    "Player %s too close (%.0f studs) - serverhopping, will gate after hop",
+                    blocker_name,
+                    blocker_distance
+                ))
+
+                TrinketBotServerhop(reason)
+                return true
+            end
+
             local function get_nearest_gate_location_to_position(target_position)
                 if not target_position or typeof(target_position) ~= "Vector3" then
                     return nil, nil, nil, nil, math.huge
@@ -14144,6 +14242,10 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     return
                 end
 
+                if serverhop_if_players_too_close_for_start(test_mode, "Start path blocked") then
+                    return
+                end
+
                 if not test_mode and path_uses_deepforest_restart() and not trinket_bot.skip_distance_check then
                     local distance_before_gate = (root.Position - first_point).Magnitude
                     if distance_before_gate > 75 then
@@ -14151,6 +14253,15 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         local prep_ok, prep_msg = prepare_restart_from_point_one()
                         if not prep_ok then
                             trinket_bot.path_running = false
+                            if serverhop_if_players_too_close_for_start(test_mode, "Deepforest prep blocked") then
+                                return
+                            end
+                            if not test_mode and prep_msg and (prep_msg:find("within critical") or prep_msg:find("within proximity")) then
+                                stage_trinket_bot_session_for_hop()
+                                library:Notify("Players nearby during gate setup - serverhopping")
+                                TrinketBotServerhop("Deepforest prep blocked: " .. tostring(prep_msg))
+                                return
+                            end
                             library:Notify("Deepforest setup failed: " .. tostring(prep_msg))
                             return
                         end
@@ -14202,27 +14313,6 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             ))
                         end
                         return
-                    end
-                end
-
-                local stay_in_server_manual = Toggles.StayInServer and Toggles.StayInServer.Value or false
-                if not stay_in_server_manual then
-                    local proximity_check_distance = Options.ProximityCheck and Options.ProximityCheck.Value or 0
-                    if proximity_check_distance > 0 then
-                        local bot_pos = root.Position
-                        for _, other_player in next, plrs:GetPlayers() do
-                            if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
-                                local distance = (other_player.Character.HumanoidRootPart.Position - bot_pos).Magnitude
-                                if distance <= proximity_check_distance then
-                                    trinket_bot.path_running = false
-                                    library:Notify(string.format("Player %s is within %d studs! Cannot start path.", other_player.Name, math.floor(proximity_check_distance)))
-                                    if not test_mode and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
-                                        TrinketBotServerhop(string.format("Player %s within %d studs at spawn! Cannot start path - Serverhopping", other_player.Name, math.floor(proximity_check_distance)))
-                                    end
-                                    return
-                                end
-                            end
-                        end
                     end
                 end
 
