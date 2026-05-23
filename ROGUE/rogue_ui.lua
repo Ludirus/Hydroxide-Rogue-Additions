@@ -3090,7 +3090,7 @@ if is_hydroxide_supported_place() then
         end
 
         do
-            local ROBLOX_GAMES_API = "https://games.roblox.com/v1/games/%s/servers/0"
+            local ROBLOX_GAMES_API = "https://games.roblox.com/v1/games/%s/servers/Public"
             local httpService = Services.HttpService
             local SERVER_HISTORY_KEY = "RecentServers_" .. game.PlaceId
             local MAX_HISTORY_SIZE = 15
@@ -3157,6 +3157,73 @@ if is_hydroxide_supported_place() then
                     return true
                 end
                 return is_server_recent(jobId, history)
+            end
+
+            local function is_restricted_server_info(serverFolder)
+                for _, child in ipairs(serverFolder:GetChildren()) do
+                    local marker = string.lower(child.Name or "")
+                    if marker:find("private", 1, true)
+                        or marker:find("reserved", 1, true)
+                        or marker:find("restricted", 1, true) then
+                        if child:IsA("BoolValue") and child.Value == true then
+                            return true
+                        elseif child:IsA("StringValue") and tostring(child.Value) ~= "" then
+                            return true
+                        elseif child:IsA("IntValue") and child.Value ~= 0 then
+                            return true
+                        end
+                    end
+
+                    if child:IsA("StringValue") then
+                        local value = string.lower(child.Value or "")
+                        if value:find("private", 1, true)
+                            or value:find("reserved", 1, true)
+                            or value:find("restricted", 1, true) then
+                            return true
+                        end
+                    end
+                end
+
+                return false
+            end
+
+            local function get_public_server_player_count(serverFolder)
+                local playersValue = FindFirstChild(serverFolder, "Players")
+                if not (playersValue and playersValue:IsA("StringValue")) then
+                    return nil
+                end
+
+                local success, playerData = pcall(function()
+                    return httpService:JSONDecode(playersValue.Value)
+                end)
+
+                if success and playerData and type(playerData) == "table" then
+                    return #playerData
+                end
+
+                return nil
+            end
+
+            local function is_public_server_folder_joinable(serverFolder, min_players, history)
+                if not serverFolder or not serverFolder:IsA("Folder") then
+                    return false
+                end
+
+                local jobId = serverFolder.Name
+                if jobId == game.JobId or is_server_blocked_for_hop(jobId, history or {}) then
+                    return false
+                end
+
+                if is_restricted_server_info(serverFolder) then
+                    return false
+                end
+
+                local playerCount = get_public_server_player_count(serverFolder)
+                if not playerCount then
+                    return false
+                end
+
+                return playerCount < 23 and playerCount >= (min_players or 0)
             end
 
             function utility:get_largest_server()
@@ -3254,25 +3321,15 @@ if is_hydroxide_supported_place() then
                 for _, serverFolder in ipairs(serverInfo:GetChildren()) do
                     local jobId = serverFolder.Name
                     local lifespanValue = FindFirstChild(serverFolder, "Lifespan")
-                    local playersValue = FindFirstChild(serverFolder, "Players")
 
-                    if lifespanValue and lifespanValue:IsA("IntValue") and jobId ~= currentJobId and not is_server_blocked_for_hop(jobId, history) then
-                        local playerCount = 0
-                        if playersValue and playersValue:IsA("StringValue") then
-                            local success, playerData = pcall(function()
-                                return httpService:JSONDecode(playersValue.Value)
-                            end)
-                            if success and playerData and type(playerData) == "table" then
-                                playerCount = #playerData
-                            end
-                        end
-
-                        if playerCount < 23 then
-                            local lifespan = lifespanValue.Value
-                            if lifespan > maxLifespan then
-                                maxLifespan = lifespan
-                                oldestServer = jobId
-                            end
+                    if lifespanValue
+                        and lifespanValue:IsA("IntValue")
+                        and jobId ~= currentJobId
+                        and is_public_server_folder_joinable(serverFolder, 0, history) then
+                        local lifespan = lifespanValue.Value
+                        if lifespan > maxLifespan then
+                            maxLifespan = lifespan
+                            oldestServer = jobId
                         end
                     end
                 end
@@ -3297,25 +3354,15 @@ if is_hydroxide_supported_place() then
                 for _, serverFolder in ipairs(serverInfo:GetChildren()) do
                     local jobId = serverFolder.Name
                     local lifespanValue = FindFirstChild(serverFolder, "Lifespan")
-                    local playersValue = FindFirstChild(serverFolder, "Players")
 
-                    if lifespanValue and lifespanValue:IsA("IntValue") and jobId ~= currentJobId and not is_server_blocked_for_hop(jobId, history) then
-                        local playerCount = 0
-                        if playersValue and playersValue:IsA("StringValue") then
-                            local success, playerData = pcall(function()
-                                return httpService:JSONDecode(playersValue.Value)
-                            end)
-                            if success and playerData and type(playerData) == "table" then
-                                playerCount = #playerData
-                            end
-                        end
-
-                        if playerCount < 23 then
-                            local lifespan = lifespanValue.Value
-                            if lifespan < minLifespan then
-                                minLifespan = lifespan
-                                newestServer = jobId
-                            end
+                    if lifespanValue
+                        and lifespanValue:IsA("IntValue")
+                        and jobId ~= currentJobId
+                        and is_public_server_folder_joinable(serverFolder, 0, history) then
+                        local lifespan = lifespanValue.Value
+                        if lifespan < minLifespan then
+                            minLifespan = lifespan
+                            newestServer = jobId
                         end
                     end
                 end
@@ -3348,7 +3395,12 @@ if is_hydroxide_supported_place() then
             end
 
             local function attemptTeleport(jobId, maxRetries)
-                maxRetries = maxRetries or 3
+                if not join_server then
+                    warn("[TELEPORT] JoinPublicServer remote unavailable")
+                    return false
+                end
+
+                maxRetries = math.min(maxRetries or 1, 2)
                 local start_job_id = game.JobId
 
                 for attempt = 1, maxRetries do
@@ -3357,7 +3409,7 @@ if is_hydroxide_supported_place() then
 
                     join_server:FireServer(jobId)
 
-                    local deadline = tick() + 35
+                    local deadline = tick() + 12
                     while tick() < deadline do
                         if game.JobId ~= start_job_id then
                             print(string.format("[TELEPORT] Job changed %s -> %s", start_job_id, game.JobId))
@@ -3389,7 +3441,7 @@ if is_hydroxide_supported_place() then
                         teleport_fail_reason ~= "" and teleport_fail_reason or "timeout",
                         game.JobId
                     ))
-                    task.wait(0.35 + (attempt * 0.25))
+                    task.wait(0.2 + (attempt * 0.15))
                 end
 
                 return false
@@ -3435,8 +3487,8 @@ if is_hydroxide_supported_place() then
 
             local function joinServerWithMinPlayers(min_players)
                 local placeId = game.PlaceId
-                local ROBLOX_GAMES_API = "https://games.roblox.com/v1/games/%s/servers/0"
-                local url = string.format(ROBLOX_GAMES_API .. "?sortOrder=2&excludeFullGames=false&limit=100", placeId)
+                local ROBLOX_GAMES_API = "https://games.roblox.com/v1/games/%s/servers/Public"
+                local url = string.format(ROBLOX_GAMES_API .. "?sortOrder=2&excludeFullGames=true&limit=100", placeId)
 
                 local success, response = pcall(function()
                     local req = http_request or request or syn.request
@@ -3477,7 +3529,7 @@ if is_hydroxide_supported_place() then
                 for _, server in ipairs(data.data) do
                     local jobId = server.id
                     local playerCount = server.playing or 0
-                    local maxPlayers = server.maxPlayers or 0
+                    local maxPlayers = server.maxPlayers or 23
 
                     local is_recent = bot_account_api.is_server_looted_recently(jobId)
                     if not is_recent then
@@ -3489,7 +3541,7 @@ if is_hydroxide_supported_place() then
                         end
                     end
 
-                    if jobId ~= game.JobId and not is_recent and playerCount >= min_players and playerCount < maxPlayers then
+                    if jobId and jobId ~= game.JobId and not is_recent and playerCount >= min_players and playerCount < maxPlayers then
                         table.insert(valid_servers, jobId)
                     end
                 end
@@ -3500,7 +3552,7 @@ if is_hydroxide_supported_place() then
                         local randomJobId = valid_servers[math.random(1, #valid_servers)]
                         print(string.format("[API JOIN] Attempting server %d/%d: %s", attempt, max_server_attempts, randomJobId))
 
-                        if attemptTeleport(randomJobId, 3) then
+                        if attemptTeleport(randomJobId, 1) then
                             return true
                         end
 
@@ -3557,33 +3609,8 @@ if is_hydroxide_supported_place() then
 
                         local available_servers = {}
                         for _, server in ipairs(servers) do
-                            local jobId = server.Name
-                            local is_recent = false
-
-                            if bot_account_api.is_server_looted_recently(jobId) then
-                                is_recent = true
-                            else
-                                for _, recentJobId in ipairs(history) do
-                                    if recentJobId == jobId then
-                                        is_recent = true
-                                        break
-                                    end
-                                end
-                            end
-
-                            if jobId ~= game.JobId and not is_recent then
-                                local playersValue = FindFirstChild(server, "Players")
-                                if playersValue and playersValue:IsA("StringValue") then
-                                    local success, playerData = pcall(function()
-                                        return httpService:JSONDecode(playersValue.Value)
-                                    end)
-                                    if success and playerData and type(playerData) == "table" then
-                                        local playerCount = #playerData
-                                        if playerCount < 23 and playerCount >= min_player_count then
-                                            table.insert(available_servers, server)
-                                        end
-                                    end
-                                end
+                            if is_public_server_folder_joinable(server, min_player_count, history) then
+                                table.insert(available_servers, server)
                             end
                         end
 
@@ -3601,7 +3628,7 @@ if is_hydroxide_supported_place() then
 
                                 print(string.format("[SERVERHOP] Attempt %d/%d: Trying server %s", attempt, max_attempts, jobId))
 
-                                if attemptTeleport(jobId, 3) then
+                                if attemptTeleport(jobId, 1) then
                                     return true
                                 end
 
@@ -3625,20 +3652,8 @@ if is_hydroxide_supported_place() then
 
                         local fallback_servers = {}
                         for _, server in ipairs(servers) do
-                            local jobId = server.Name
-                            if jobId ~= game.JobId then
-                                local playersValue = FindFirstChild(server, "Players")
-                                if playersValue and playersValue:IsA("StringValue") then
-                                    local success, playerData = pcall(function()
-                                        return httpService:JSONDecode(playersValue.Value)
-                                    end)
-                                    if success and playerData and type(playerData) == "table" then
-                                        local playerCount = #playerData
-                                        if playerCount < 23 then
-                                            table.insert(fallback_servers, server)
-                                        end
-                                    end
-                                end
+                            if is_public_server_folder_joinable(server, min_player_count, {}) then
+                                table.insert(fallback_servers, server)
                             end
                         end
 
@@ -3650,7 +3665,7 @@ if is_hydroxide_supported_place() then
 
                                 print(string.format("[SERVERHOP FALLBACK] Attempt %d/%d: Trying server %s", attempt, max_fallback_attempts, jobId))
 
-                                if attemptTeleport(jobId, 3) then
+                                if attemptTeleport(jobId, 1) then
                                     return true
                                 end
 
@@ -3667,28 +3682,33 @@ if is_hydroxide_supported_place() then
                             warn("[SERVERHOP FALLBACK] No non-full servers available at all")
                         end
 
-                        utility:plain_webhook("@here SERVERHOP FAILED: All servers full or unavailable after 24 attempts. Kicking bot. if this happens dm zyu")
+                        local api_fallback_success = joinServerWithMinPlayers(min_player_count) == true
+                        if api_fallback_success then
+                            return true
+                        end
+
+                        utility:plain_webhook("@here SERVERHOP FAILED: No joinable public servers after filtered ServerInfo/API attempts. Kicking bot.")
                         task.wait(0.5)
                         plr:Kick("Serverhop failed, dm zyu if this occurs [1]")
                         return false
                     else
-                        warn("[!] No servers found in ServerInfo, using fallback")
+                        warn("[!] No servers found in ServerInfo, trying public API fallback")
                         if blockTarget then
                             blockPlayer(blockTarget)
                         end
-                        tps:Teleport(3016661674)
-                        task.wait(0.1)
-                        utility:Unload(true)
+                        if joinServerWithMinPlayers(min_player_count) then
+                            return true
+                        end
                         return false
                     end
                 else
-                    warn("[!] ServerInfo not found, using fallback teleport")
+                    warn("[!] ServerInfo not found, trying public API fallback")
                     if blockTarget then
                         blockPlayer(blockTarget)
                     end
-                    tps:Teleport(3016661674)
-                    task.wait(0.1)
-                    utility:Unload(true)
+                    if joinServerWithMinPlayers(min_player_count) then
+                        return true
+                    end
                     return false
                 end
 
@@ -3712,7 +3732,7 @@ if is_hydroxide_supported_place() then
                 if oldest_server_id then
                     utility:add_server_to_history(oldest_server_id)
                     print(string.format("[JOIN OLDEST] Joining oldest server: %s", oldest_server_id))
-                    if attemptTeleport(oldest_server_id, 3) then
+                    if attemptTeleport(oldest_server_id, 1) then
                         return true
                     else
                         warn("[JOIN OLDEST] Failed to join oldest server, using random")
@@ -13166,7 +13186,41 @@ if is_hydroxide_supported_place() then
             local COLLECTED_IDS_MAX_SIZE = 500
             local pending_pickup_ids = trinket_bot.pending_pickup_ids
             local active_tween_data = {tween = nil, connection = nil}
+            local currently_dropping = false
+            local droppedTools = {}
             local try_pop_pd = function() end
+
+            trinket_bot.cancel_active_tween = function()
+                if active_tween_data.tween then
+                    pcall(function()
+                        active_tween_data.tween:Cancel()
+                    end)
+                    active_tween_data.tween = nil
+                end
+
+                if active_tween_data.connection then
+                    pcall(function()
+                        active_tween_data.connection:Disconnect()
+                    end)
+                    active_tween_data.connection = nil
+                end
+            end
+
+            trinket_bot.wait_for_drop = function(context)
+                if not currently_dropping then
+                    return true
+                end
+
+                if context then
+                    trinket_bot_debug_log("AUTO_DROP_WAIT", tostring(context))
+                end
+
+                while currently_dropping and trinket_bot.path_running and not shared.is_unloading do
+                    task.wait(0.1)
+                end
+
+                return not currently_dropping
+            end
 
             local function mark_trinket_collected(trinket_id_value)
                 local count = 0
@@ -13634,11 +13688,16 @@ if is_hydroxide_supported_place() then
                     end
                 end)
 
-                while not completed and not shared.is_unloading and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                while not completed
+                    and not shared.is_unloading
+                    and trinket_bot.path_running
+                    and not currently_dropping
+                    and not emergency_gate_requested
+                    and not trinket_bot.moderator_detected do
                     task.wait()
                 end
 
-                if shared.is_unloading or not trinket_bot.path_running or trinket_bot.moderator_detected then
+                if shared.is_unloading or not trinket_bot.path_running or currently_dropping or trinket_bot.moderator_detected then
                     tween:Cancel()
                 end
 
@@ -13935,6 +13994,25 @@ if is_hydroxide_supported_place() then
                 return nil
             end
 
+            trinket_bot.wait_for_forcefield_clear = function(character, max_wait, require_grounded)
+                max_wait = max_wait or 12
+                local deadline = tick() + max_wait
+
+                while tick() < deadline and character and character.Parent and not shared.is_unloading do
+                    if not FindFirstChildOfClass(character, "ForceField") then
+                        if not require_grounded or wait_for_character_grounded(character, 2) then
+                            return true
+                        end
+                    end
+                    task.wait(0.15)
+                end
+
+                return character
+                    and character.Parent ~= nil
+                    and not FindFirstChildOfClass(character, "ForceField")
+                    and (not require_grounded or wait_for_character_grounded(character, 2))
+            end
+
             local function clear_spawn_forcefield_for_restart(prefer_direction)
                 local character = plr.Character
                 if not character or not FindFirstChild(character, "HumanoidRootPart") then
@@ -13950,7 +14028,7 @@ if is_hydroxide_supported_place() then
                 end
 
                 if not FindFirstChildOfClass(character, "ForceField") then
-                    return wait_for_character_grounded(character, 3)
+                    return trinket_bot.wait_for_forcefield_clear(character, 3, true)
                 end
 
                 local hrp = character.HumanoidRootPart
@@ -13968,7 +14046,7 @@ if is_hydroxide_supported_place() then
                 end
 
                 if not safe_position then
-                    return finish(false)
+                    return finish(trinket_bot.wait_for_forcefield_clear(character, 10, true))
                 end
 
                 local platform = Instance.new("Part")
@@ -13990,7 +14068,7 @@ if is_hydroxide_supported_place() then
 
                 if not is_stand_position_clear(safe_position, character, { platform }) then
                     platform:Destroy()
-                    return finish(false)
+                    return finish(trinket_bot.wait_for_forcefield_clear(character, 10, true))
                 end
 
                 if not trinket_bot.path_running then
@@ -13999,21 +14077,13 @@ if is_hydroxide_supported_place() then
                 SmoothTeleport(safe_position)
                 task.wait(1.25)
 
-                local forcefield_wait_start = tick()
-                while tick() - forcefield_wait_start < 6 do
-                    if not FindFirstChildOfClass(character, "ForceField") and wait_for_character_grounded(character, 1.5) then
-                        break
-                    end
-                    task.wait(0.1)
-                end
+                trinket_bot.wait_for_forcefield_clear(character, 12, true)
 
                 if platform then
                     platform:Destroy()
                 end
 
-                return finish(character
-                    and not FindFirstChildOfClass(character, "ForceField")
-                    and wait_for_character_grounded(character, 2))
+                return finish(trinket_bot.wait_for_forcefield_clear(character, 4, true))
             end
 
             local function Gate(where, expected_destination)
@@ -14050,14 +14120,7 @@ if is_hydroxide_supported_place() then
                     end
                 end
 
-                if active_tween_data.tween then
-                    active_tween_data.tween:Cancel()
-                    active_tween_data.tween = nil
-                end
-                if active_tween_data.connection then
-                    active_tween_data.connection:Disconnect()
-                    active_tween_data.connection = nil
-                end
+                trinket_bot.cancel_active_tween()
 
                 if plr.Character then
                     local humanoid = FindFirstChildOfClass(plr.Character, "Humanoid")
@@ -15076,9 +15139,6 @@ if is_hydroxide_supported_place() then
                     TrinketBotServerhop(string.format("Moderator %s detected (encounter %d/3)", mod_name, encounter_count), true)
                 end
             end
-
-            local currently_dropping = false
-            local droppedTools = {}
 
             local function should_restart_path_after_hop(settings)
                 if settings and settings.auto_restart_after_hop ~= nil then
@@ -16541,6 +16601,13 @@ if is_hydroxide_supported_place() then
                     if trinket_bot.moderator_detected then
                         library:Notify("Moderator detected - exiting main loop")
                         break
+                    end
+
+                    if currently_dropping then
+                        trinket_bot.wait_for_drop("path loop paused for selected drop item")
+                        if not trinket_bot.path_running then
+                            break
+                        end
                     end
 
                     local point = trinket_bot.path_points[i]
@@ -19236,6 +19303,14 @@ if is_hydroxide_supported_place() then
 
                         if should_prepare_restart then
                             local restart_success, restart_message = prepare_restart_from_point_one()
+                            if not restart_success
+                                and restart_message
+                                and (tostring(restart_message):find("ForceField", 1, true) or tostring(restart_message):find("grounded", 1, true)) then
+                                trinket_bot_debug_log("AUTO_RESUME_RESTART_RETRY", tostring(restart_message))
+                                task.wait(2)
+                                restart_success, restart_message = prepare_restart_from_point_one()
+                            end
+
                             if restart_success then
                                 mem:RemoveItem("trinket_bot_restart_after_hop")
                                 mem:RemoveItem("trinket_bot_restart_reason")
@@ -20320,6 +20395,7 @@ if is_hydroxide_supported_place() then
                 Tooltip = "Wait time before respawning and restarting path (in minutes)"
             })
 
+            do
             if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 then
                 local lives_table = {
                     ["Azael"] = 2,
@@ -20450,179 +20526,192 @@ if is_hydroxide_supported_place() then
                     end
                 end)
             end
+            end
 
-            local function drop_item(item)
-                if not (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true") then
+            do
+            trinket_bot.auto_drop_bot_active = function()
+                return mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true"
+            end
+
+            trinket_bot.normalize_auto_drop_name = function(item_name)
+                return tostring(item_name or ""):lower():gsub("[^%w]", "")
+            end
+
+            trinket_bot.should_auto_drop_item_name = function(item_name)
+                if not (Options.AutoDropItems and Options.AutoDropItems.Value) then
+                    return false
+                end
+
+                local normalized_item_name = trinket_bot.normalize_auto_drop_name(item_name)
+                if normalized_item_name == "" then
+                    return false
+                end
+
+                for dropdown_name, enabled in pairs(Options.AutoDropItems.Value) do
+                    if enabled and normalized_item_name == trinket_bot.normalize_auto_drop_name(dropdown_name) then
+                        return true
+                    end
+                end
+
+                return false
+            end
+
+            trinket_bot.find_inventory_tool_by_name = function(item_name)
+                local normalized_item_name = trinket_bot.normalize_auto_drop_name(item_name)
+                local character = plr.Character
+
+                if character then
+                    for _, child in ipairs(character:GetChildren()) do
+                        if child:IsA("Tool") and trinket_bot.normalize_auto_drop_name(child.Name) == normalized_item_name then
+                            return child
+                        end
+                    end
+                end
+
+                if plr.Backpack then
+                    for _, child in ipairs(plr.Backpack:GetChildren()) do
+                        if child:IsA("Tool") and trinket_bot.normalize_auto_drop_name(child.Name) == normalized_item_name then
+                            return child
+                        end
+                    end
+                end
+
+                return nil
+            end
+
+            trinket_bot.wait_for_drop_danger_clear = function(item_name)
+                local character = plr.Character
+                if not character or not cs:HasTag(character, "Danger") then
                     return
                 end
 
-                if not plr.Character or not plr.Character:FindFirstChild("Humanoid") then
-                    return
-                end
+                library:Notify(string.format("%s dropped - waiting for Danger to clear", item_name))
+                trinket_bot_debug_log("AUTO_DROP_DANGER_WAIT", item_name)
 
-                while currently_dropping do
+                while trinket_bot.auto_drop_bot_active()
+                    and character
+                    and character.Parent
+                    and cs:HasTag(character, "Danger")
+                    and not shared.is_unloading do
                     task.wait(0.1)
                 end
-                currently_dropping = true
 
-                local function finish_drop()
-                    currently_dropping = false
+                if character and character.Parent and not cs:HasTag(character, "Danger") then
+                    library:Notify("Danger cleared after auto-drop")
                 end
+            end
 
-                if not item or not item:IsA("Tool") then
-                    finish_drop()
+            trinket_bot.drop_item = function(item)
+                if not trinket_bot.auto_drop_bot_active() or not item or not item:IsA("Tool") then
                     return
                 end
 
                 local item_name = item.Name
-                if not (Options.AutoDropItems and Options.AutoDropItems.Value) then
-                    finish_drop()
+                if not trinket_bot.should_auto_drop_item_name(item_name) then
                     return
                 end
 
-                local selected_items = Options.AutoDropItems.Value
-                local should_drop = false
-
-                for dropdown_name, enabled in pairs(selected_items) do
-                    if enabled and item_name:gsub(" ", "") == dropdown_name:gsub(" ", "") then
-                        should_drop = true
-                        break
-                    end
+                while currently_dropping and trinket_bot.auto_drop_bot_active() and not shared.is_unloading do
+                    task.wait(0.1)
                 end
 
-                if not should_drop then
-                    finish_drop()
+                if not trinket_bot.auto_drop_bot_active() or shared.is_unloading then
                     return
                 end
 
-                if droppedTools[item] or droppedTools[item_name] then
-                    finish_drop()
-                    return
-                end
-
+                currently_dropping = true
                 droppedTools[item] = true
                 droppedTools[item_name] = true
-
-                local function item_in_inventory()
-                    return item and item.Parent and (item.Parent == plr.Backpack or item.Parent == plr.Character)
-                end
-
-                local character = plr.Character
-                local humanoid = character and character:FindFirstChild("Humanoid")
-                if not character or not humanoid then
-                    droppedTools[item] = nil
-                    droppedTools[item_name] = nil
-                    finish_drop()
-                    return
-                end
-
-                local is_scroll = item_name:lower():find("scroll of") ~= nil
-                local is_ice_essence = item_name == "Ice Essence"
-                local should_try_use = is_scroll or is_ice_essence
-
-                if should_try_use then
-                    pcall(function()
-                        humanoid:EquipTool(item)
-                    end)
-                    task.wait(0.25)
-
-                    if item.Parent == character then
-                        library:Notify(string.format("Attempting to use %s before dropping...", item_name))
-
-                        task.spawn(function()
-                            if vim then
-                                vim:SendMouseButtonEvent(0, 0, 0, true, game, 1)
-                                task.wait(math.random(1, 15) / 1000)
-                                vim:SendMouseButtonEvent(0, 0, 0, false, game, 1)
-                            end
-                        end)
-
-                        if utility and utility.LeftClick then
-                            pcall(function()
-                                utility:LeftClick()
-                            end)
-                        end
-
-                        task.wait(0.6)
-
-                        if not item_in_inventory() then
-                            library:Notify(string.format("Used %s successfully!", item_name))
-                            droppedTools[item] = nil
-                            droppedTools[item_name] = nil
-                            finish_drop()
-                            return
-                        end
-
-                        library:Notify(string.format("Could not use %s, dropping instead...", item_name))
-                    end
-                end
+                droppedTools[trinket_bot.normalize_auto_drop_name(item_name)] = true
+                trinket_bot.cancel_active_tween()
+                trinket_bot_debug_log("AUTO_DROP_START", item_name)
+                library:Notify(string.format("Auto-dropping %s", item_name))
 
                 local drop_verified = false
-                local max_drop_attempts = 6
+                local attempts = 0
+                local max_drop_attempts = 40
 
-                for attempt = 1, max_drop_attempts do
-                    if not item_in_inventory() then
+                while trinket_bot.auto_drop_bot_active() and attempts < max_drop_attempts and not shared.is_unloading do
+                    local current_item = trinket_bot.find_inventory_tool_by_name(item_name)
+                    if not current_item then
                         drop_verified = true
                         break
                     end
 
-                    character = plr.Character
-                    humanoid = character and character:FindFirstChild("Humanoid")
+                    local character = plr.Character
+                    local humanoid = character and FindFirstChildOfClass(character, "Humanoid")
                     if not character or not humanoid then
-                        break
+                        task.wait(0.25)
+                        continue
                     end
 
-                    if item.Parent ~= character then
+                    attempts = attempts + 1
+                    if current_item.Parent ~= character then
                         pcall(function()
-                            humanoid:EquipTool(item)
+                            humanoid:EquipTool(current_item)
                         end)
                     end
 
-                    local equip_deadline = tick() + 3
-                    while item.Parent ~= character and item_in_inventory() and tick() < equip_deadline do
-                        task.wait(0.1)
+                    local equip_deadline = tick() + 1.5
+                    while current_item.Parent ~= character
+                        and trinket_bot.find_inventory_tool_by_name(item_name)
+                        and tick() < equip_deadline
+                        and trinket_bot.auto_drop_bot_active()
+                        and not shared.is_unloading do
+                        task.wait(0.05)
                     end
 
-                    if item.Parent == character and vim then
+                    if current_item.Parent == character and vim then
                         vim:SendKeyEvent(true, Enum.KeyCode.Backspace, false, game)
                         task.wait(0.05)
                         vim:SendKeyEvent(false, Enum.KeyCode.Backspace, false, game)
                     end
 
-                    local verify_deadline = tick() + 1.25
-                    while item_in_inventory() and tick() < verify_deadline do
-                        task.wait(0.1)
+                    local verify_deadline = tick() + 0.75
+                    while trinket_bot.find_inventory_tool_by_name(item_name)
+                        and tick() < verify_deadline
+                        and trinket_bot.auto_drop_bot_active()
+                        and not shared.is_unloading do
+                        task.wait(0.05)
                     end
 
-                    if not item_in_inventory() then
+                    if not trinket_bot.find_inventory_tool_by_name(item_name) then
                         drop_verified = true
                         break
                     end
 
-                    library:Notify(string.format("Drop retry %d/%d for %s", attempt, max_drop_attempts, item_name))
+                    if attempts % 5 == 0 then
+                        library:Notify(string.format("Still dropping %s (%d attempts)", item_name, attempts))
+                    end
                 end
 
                 if drop_verified then
                     library:Notify(string.format("Dropped %s", item_name))
+                    trinket_bot.wait_for_drop_danger_clear(item_name)
                 else
                     library:Notify(string.format("Failed to verify drop for %s", item_name))
                     if utility and utility.plain_webhook then
-                        utility:plain_webhook(string.format("@here Failed to verify auto-drop for %s after retries", item_name))
+                        utility:plain_webhook(string.format("@here Failed to verify auto-drop for %s after %d attempts", item_name, attempts))
                     end
                 end
 
                 droppedTools[item] = nil
                 task.delay(drop_verified and 2 or 0.5, function()
                     droppedTools[item_name] = nil
+                    droppedTools[trinket_bot.normalize_auto_drop_name(item_name)] = nil
                 end)
 
-                finish_drop()
+                currently_dropping = false
             end
 
-            local function setup_backpack_monitoring()
+            trinket_bot.setup_backpack_monitoring = function()
                 if auto_drop_backpack_connection then
                     auto_drop_backpack_connection:Disconnect()
                     auto_drop_backpack_connection = nil
+                end
+                if trinket_bot.auto_drop_character_connection then
+                    trinket_bot.auto_drop_character_connection:Disconnect()
+                    trinket_bot.auto_drop_character_connection = nil
                 end
 
                 local backpack = plr:WaitForChild("Backpack", 55)
@@ -20635,6 +20724,37 @@ if is_hydroxide_supported_place() then
                     return
                 end
 
+                trinket_bot.scan_inventory_for_drop_items = function()
+                    if not trinket_bot.auto_drop_bot_active() or currently_dropping then
+                        return false
+                    end
+
+                    local containers = {plr.Character, plr.Backpack}
+                    for _, container in ipairs(containers) do
+                        if container then
+                            for _, tool in ipairs(container:GetChildren()) do
+                                if tool:IsA("Tool")
+                                    and trinket_bot.should_auto_drop_item_name(tool.Name)
+                                    and not droppedTools[trinket_bot.normalize_auto_drop_name(tool.Name)] then
+                                    task.spawn(trinket_bot.drop_item, tool)
+                                    return true
+                                end
+                            end
+                        end
+                    end
+
+                    return false
+                end
+
+                local character = plr.Character
+                if character then
+                    trinket_bot.auto_drop_character_connection = utility:Connection(character.ChildAdded, function(obj)
+                        if obj and obj:IsA("Tool") and trinket_bot.auto_drop_bot_active() and trinket_bot.should_auto_drop_item_name(obj.Name) then
+                            task.defer(trinket_bot.scan_inventory_for_drop_items)
+                        end
+                    end)
+                end
+
                 auto_drop_backpack_connection = utility:Connection(backpack.ChildAdded, function(obj)
                     if not obj then return end
 
@@ -20644,6 +20764,11 @@ if is_hydroxide_supported_place() then
                     if not obj:IsA("Tool") then return end
 
                     task.wait(0.05)
+
+                    if trinket_bot.should_auto_drop_item_name(obj.Name) then
+                        task.spawn(trinket_bot.drop_item, obj)
+                        return
+                    end
 
                     if not kick_debounce and Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value and Options.KickTrinketList and Options.KickTrinketList.Value then
                         local selected_trinkets = Options.KickTrinketList.Value
@@ -20661,23 +20786,32 @@ if is_hydroxide_supported_place() then
                     end
 
                     task.wait(0.67)
+                    trinket_bot.scan_inventory_for_drop_items()
+                end)
 
-                    for _, item in ipairs(backpack:GetChildren()) do
-                        if item then
-                            local success, is_tool = pcall(function() return item:IsA("Tool") end)
-                            if success and is_tool and not droppedTools[item.Name] then
-                                task.spawn(drop_item, item)
+                task.defer(trinket_bot.scan_inventory_for_drop_items)
+
+                if not trinket_bot.auto_drop_scan_loop_started then
+                    trinket_bot.auto_drop_scan_loop_started = true
+                    task.spawn(function()
+                        while shared and not shared.is_unloading do
+                            if trinket_bot.auto_drop_bot_active() then
+                                trinket_bot.scan_inventory_for_drop_items()
+                                task.wait(currently_dropping and 0.1 or 0.35)
+                            else
+                                task.wait(1)
                             end
                         end
-                    end
-                end)
+                    end)
+                end
             end
 
-            task.spawn(setup_backpack_monitoring)
+            task.spawn(trinket_bot.setup_backpack_monitoring)
             auto_drop_char_connection = utility:Connection(plr.CharacterAdded, function()
                 task.wait(2.5)
-                setup_backpack_monitoring()
+                trinket_bot.setup_backpack_monitoring()
             end)
+            end
         end
 
         do
