@@ -12118,6 +12118,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             cheat_client.trinket_bot = trinket_bot
 
             local DEEPFOREST_RESTART_GATE = "Deepforest 5"
+            local RESTART_POINT_ONE_MAX_DISTANCE = 750
             local uploaded_deepforest_restart_paths = {
                 ["SERVER_LOOT - Copy (2)"] = true
             }
@@ -13818,18 +13819,37 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
                 local skip_distance = trinket_bot.skip_distance_check or false
 
+                local max_start_distance = 400
                 if skip_distance then
-                    library:Notify("Skipping distance check (mid-path resume after emergency gate)")
+                    max_start_distance = RESTART_POINT_ONE_MAX_DISTANCE
+                    library:Notify(string.format(
+                        "Using restart distance check (max %.0f studs from point 1)",
+                        max_start_distance
+                    ))
                     trinket_bot.skip_distance_check = false
-                elseif not stay_in_server then
+                end
+
+                if not stay_in_server then
                     local distance_to_first = (root.Position - first_point).Magnitude
-                    if distance_to_first > 400 then
+                    if distance_to_first > max_start_distance then
                         trinket_bot.path_running = false
-                        library:Notify(string.format("Too far from first point! Distance: %.1f studs (max: 400)", distance_to_first))
+                        library:Notify(string.format(
+                            "Too far from first point! Distance: %.1f studs (max: %.0f)",
+                            distance_to_first,
+                            max_start_distance
+                        ))
                         if not test_mode and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
-                            utility:plain_webhook(string.format("**BOT KICKED**: Too far from first point (%.1f studs, max: 400) @here", distance_to_first))
+                            utility:plain_webhook(string.format(
+                                "**BOT KICKED**: Too far from first point (%.1f studs, max: %.0f) @here",
+                                distance_to_first,
+                                max_start_distance
+                            ))
                             task.wait(1)
-                            plr:Kick(string.format("Too far from first point: %.1f studs (max: 400)", distance_to_first))
+                            plr:Kick(string.format(
+                                "Too far from first point: %.1f studs (max: %.0f)",
+                                distance_to_first,
+                                max_start_distance
+                            ))
                         end
                         return
                     end
@@ -17235,12 +17255,8 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
             local function set_restart_distance_mode()
                 local point_one_distance = distance_to_point_one()
-                if point_one_distance <= 400 then
-                    trinket_bot.skip_distance_check = false
-                    return true, point_one_distance
-                end
 
-                if point_one_distance <= 1500 then
+                if point_one_distance <= RESTART_POINT_ONE_MAX_DISTANCE then
                     trinket_bot.skip_distance_check = true
                     return true, point_one_distance
                 end
@@ -17291,11 +17307,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 end
 
                 local root = character.HumanoidRootPart
-                local point_one_ready, point_one_distance = set_restart_distance_mode()
-                if point_one_ready and point_one_distance <= 400 then
-                    trinket_bot.path_running = false
-                    return true, "already near point 1"
-                end
+                local point_one_distance = distance_to_point_one()
 
                 local preflight_ok, preflight_reason = restart_preflight_check()
                 if not preflight_ok then
@@ -17303,6 +17315,12 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 end
 
                 if should_use_deepforest_restart() then
+                    if point_one_distance <= 75 then
+                        trinket_bot.skip_distance_check = true
+                        trinket_bot.path_running = false
+                        return true, "already at point 1"
+                    end
+
                     library:Notify("Restart after hop: gating to Deepforest 5 for uploaded path")
 
                     if not clear_spawn_forcefield_for_restart() then
@@ -17321,10 +17339,22 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                     local restart_ready, post_gate_distance = set_restart_distance_mode()
                     if not restart_ready then
-                        return false, string.format("Deepforest 5 landed %.0f studs from point 1", post_gate_distance)
+                        return false, string.format(
+                            "Deepforest 5 landed %.0f studs from point 1 (max %.0f)",
+                            post_gate_distance,
+                            RESTART_POINT_ONE_MAX_DISTANCE
+                        )
                     end
 
+                    trinket_bot.skip_distance_check = true
                     return true, "gated to Deepforest 5"
+                end
+
+                local point_one_ready
+                point_one_ready, point_one_distance = set_restart_distance_mode()
+                if point_one_ready and point_one_distance <= 75 then
+                    trinket_bot.path_running = false
+                    return true, "already near point 1"
                 end
 
                 local nearest_gate_location, nearest_gate_index, nearest_destination_index, nearest_destination_position, nearest_destination_distance = get_nearest_gate_location_to_position(first_point)
@@ -17359,14 +17389,18 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 end
 
                 local distance_to_first = (root.Position - first_point).Magnitude
-                if distance_to_first <= 1500 then
+                if distance_to_first <= RESTART_POINT_ONE_MAX_DISTANCE then
                     library:Notify("Restart after hop: no inferred gate locations found, moving directly to point 1")
                     trinket_bot.path_running = false
                     trinket_bot.skip_distance_check = true
                     return true, "no gate points; direct restart"
                 end
 
-                return false, string.format("no inferred gate locations and point 1 is %.0f studs away", distance_to_first)
+                return false, string.format(
+                    "no inferred gate locations and point 1 is %.0f studs away (max %.0f)",
+                    distance_to_first,
+                    RESTART_POINT_ONE_MAX_DISTANCE
+                )
             end
 
             click_play_from_start_menu = function(timeout)
@@ -17591,7 +17625,10 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         end
 
                         local restart_after_hop = mem:HasItem("trinket_bot_restart_after_hop") and mem:GetItem("trinket_bot_restart_after_hop") == "true"
-                        if restart_after_hop and should_restart_path_after_hop(loaded_trinket_settings) then
+                        local should_prepare_restart = should_use_deepforest_restart(loaded_trinket_settings)
+                            or (restart_after_hop and should_restart_path_after_hop(loaded_trinket_settings))
+
+                        if should_prepare_restart then
                             local restart_success, restart_message = prepare_restart_from_point_one()
                             if restart_success then
                                 mem:RemoveItem("trinket_bot_restart_after_hop")
@@ -18578,7 +18615,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             group_trinket_looping:AddToggle("DeepforestRestartForUploadedPath", {
                 Text = "Use Deepforest 5 Restart",
                 Default = cheat_client.config.deepforest_restart_for_uploaded_path,
-                Tooltip = "For SERVER_LOOT - Copy (2), gate to Deepforest 5 before restarting point 1 after a serverhop"
+                Tooltip = "For SERVER_LOOT - Copy (2), gate to Deepforest 5 after a serverhop, then start the path if within 750 studs of point 1"
             })
 
             group_trinket_looping:AddToggle("DeathLivesCheck", {
