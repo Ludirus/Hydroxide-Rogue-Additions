@@ -37,6 +37,19 @@ local function debug_warn(...)
     end
 end
 
+local executor_cloneref = cloneref
+local function cloneref(value)
+    if type(executor_cloneref) == "function" then
+        local success, result = pcall(executor_cloneref, value)
+        if success and result ~= nil then
+            return result
+        end
+        debug_warn("[HYDROXIDE] cloneref failed; using raw instance", result)
+    end
+
+    return value
+end
+
 pcall(function()
     if getconnections then
         for _,v in pairs(getconnections(game:GetService('ScriptContext').Error)) do

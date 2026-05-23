@@ -111,6 +111,12 @@ local function debug_print(...)
     end
 end
 
+local function debug_warn(...)
+    if is_hydroxide_debug_enabled() then
+        warn(...)
+    end
+end
+
 local function set_hydroxide_load_stage(stage, detail)
     if not getgenv then
         return
@@ -189,8 +195,12 @@ if not loaded then
         getgenv().HYDROXIDE_LAST_ERROR = tostring(compile_error)
     end
     set_hydroxide_load_stage("dist_compile_error", compile_error)
+    debug_warn("[HYDROXIDE] encrypted artifact compile failed:", compile_error)
+    debug_print("[HYDROXIDE] encrypted artifact compile failed:", compile_error)
     error("[HYDROXIDE] encrypted artifact compile failed: " .. tostring(compile_error))
 end
+
+debug_print("[HYDROXIDE] Encrypted artifact compiled")
 
 local function trace_error(err)
     if debug and debug.traceback then
@@ -200,18 +210,22 @@ local function trace_error(err)
 end
 
 set_hydroxide_load_stage("dist_source_running", "{entrypoint}")
+debug_print("[HYDROXIDE] Encrypted artifact running source")
 local run_ok, result = xpcall(loaded, trace_error)
 if not run_ok then
     if getgenv then
         getgenv().HYDROXIDE_LAST_ERROR = tostring(result)
     end
     set_hydroxide_load_stage("dist_runtime_error", result)
+    debug_warn("[HYDROXIDE] encrypted artifact runtime failed:", result)
+    debug_print("[HYDROXIDE] encrypted artifact runtime failed:", result)
     error(result)
 end
 
 if not (getgenv and getgenv().HYDROXIDE_LAST_ERROR) then
     set_hydroxide_load_stage("dist_done", "{entrypoint}")
 end
+debug_print("[HYDROXIDE] Encrypted artifact finished")
 return result
 """
     return script, seed, carry, len(plaintext)

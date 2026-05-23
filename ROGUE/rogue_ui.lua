@@ -57,12 +57,25 @@ set_hydroxide_load_stage("rogue_source_start")
 if getgenv then
     getgenv().HYDROXIDE_LAST_ERROR = nil
 end
+debug_print("[HYDROXIDE] Rogue source starting")
 
-local cloneref = cloneref or function(v) return v end
+local executor_cloneref = cloneref
+local function cloneref(value)
+    if type(executor_cloneref) == "function" then
+        local success, result = pcall(executor_cloneref, value)
+        if success and result ~= nil then
+            return result
+        end
+        debug_warn("[HYDROXIDE] cloneref failed; using raw instance", result)
+    end
+
+    return value
+end
+
 local Services = setmetatable({}, {
     __index = function(self, name)
         local success, result = pcall(game.GetService, game, name)
-        if success then
+        if success and result ~= nil then
             local service = cloneref(result)
             rawset(self, name, service)
             return service
