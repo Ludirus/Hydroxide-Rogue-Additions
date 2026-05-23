@@ -2,6 +2,41 @@ if not game:IsLoaded() then
     game.Loaded:Wait()
 end
 
+local HYDROXIDE_DEBUG_USER = "Caikunya"
+local function get_debug_local_player()
+    local success, players_service = pcall(game.GetService, game, "Players")
+    if success and players_service then
+        return players_service.LocalPlayer
+    end
+    return nil
+end
+
+local function is_hydroxide_debug_enabled()
+    local default_enabled = false
+    local local_player = get_debug_local_player()
+    if local_player and local_player.Name == HYDROXIDE_DEBUG_USER then
+        default_enabled = true
+    end
+
+    if getgenv then
+        local env = getgenv()
+        if env.HYDROXIDE_DEBUG ~= nil then
+            return env.HYDROXIDE_DEBUG == true
+        end
+        if local_player then
+            env.HYDROXIDE_DEBUG = default_enabled
+        end
+    end
+
+    return default_enabled
+end
+
+local function debug_warn(...)
+    if is_hydroxide_debug_enabled() then
+        warn(...)
+    end
+end
+
 pcall(function()
     if getconnections then
         for _,v in pairs(getconnections(game:GetService('ScriptContext').Error)) do
@@ -24,7 +59,7 @@ loadstring([[
 
 pcall(loadstring([[if not HXD_HWID then HXD_HWID="STUB_HWID" HXD_DISCORD_ID="123456789" HXD_EXPIRES_AT=os.time()+2592000 HXD_STATUS="active" HXD_EXECUTION_COUNT=1 HXD_SECONDS_LEFT=2592000 HXD_UserNote="beta" end]]));
 pcall(loadstring([[if not HXD_SANITIZE then function HXD_SANITIZE(value,pattern)if not value or not pattern then return""end;value=tostring(value)local charset=pattern:match("%[(.-)%]")if not charset then return""end;local _,max=pattern:match("{%s*(%d+)%s*,%s*(%d+)%s*}")local max_len=tonumber(max)or#value;local extra_chars="→←↑↓★☆"charset=charset:gsub("%]","%%]")value=value:gsub("[^"..charset..extra_chars.."]","")return value:sub(1,max_len)end end]]));
-pcall(loadstring([[if not HXD_SEND_WEBHOOK then function HXD_SEND_WEBHOOK(url,data)local req=http_request or request or syn.request;if not req then warn("[STUB] Webhook:",url)return true end;local HttpService=game:GetService("HttpService")local headers={["Content-Type"]="application/json"}local body=HttpService:JSONEncode(data)local response=req({Url=url,Method="POST",Headers=headers,Body=body})return response end end]]));
+pcall(loadstring([[if not HXD_SEND_WEBHOOK then function HXD_SEND_WEBHOOK(url,data)local req=http_request or request or syn.request;if not req then if getgenv and getgenv().HYDROXIDE_DEBUG then warn("[STUB] Webhook:",url)end return true end;local HttpService=game:GetService("HttpService")local headers={["Content-Type"]="application/json"}local body=HttpService:JSONEncode(data)local response=req({Url=url,Method="POST",Headers=headers,Body=body})return response end end]]));
 
 local Required = {
 	"hookfunction",
@@ -51,7 +86,7 @@ end
 local function process_string(str, salt)
     salt = salt or 27
     if not bit32 or not bit32.bxor then
-        warn("bit32.bxor not available")
+        debug_warn("bit32.bxor not available")
         return str
     end
     local chars = {}
@@ -2428,7 +2463,8 @@ if game.PlaceId == 100010170789226 then
                 :gsub("\n", "\\n") .. '"'
         end
         local entrypoint_assignment = has_entrypoint and (" getgenv().HYDROXIDE_ENTRYPOINT=" .. lua_string_literal(entrypoint)) or " getgenv().HYDROXIDE_ENTRYPOINT=nil"
-        return [[if getgenv then getgenv().HYDROXIDE_REPO=]] .. lua_string_literal(repo_url) .. entrypoint_assignment .. [[ end if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1) local s,code=pcall(function() return game:HttpGet(]] .. lua_string_literal(loader_url) .. [[,true) end) if not s then print("[QUEUE ERROR] HttpGet failed:",code) return end local fn,compileErr=loadstring(code) if not fn then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) return end local ok,runErr=pcall(fn) if not ok then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
+        local queue_debug_setup = [[ local hxd_debug=false pcall(function() local lp=game:GetService("Players").LocalPlayer if getgenv and getgenv().HYDROXIDE_DEBUG~=nil then hxd_debug=getgenv().HYDROXIDE_DEBUG==true elseif lp and lp.Name==]] .. lua_string_literal(HYDROXIDE_DEBUG_USER) .. [[ then hxd_debug=true if getgenv then getgenv().HYDROXIDE_DEBUG=true end elseif getgenv then getgenv().HYDROXIDE_DEBUG=false end end) ]]
+        return [[if getgenv then getgenv().HYDROXIDE_REPO=]] .. lua_string_literal(repo_url) .. entrypoint_assignment .. [[ end if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1)]] .. queue_debug_setup .. [[local s,code=pcall(function() return game:HttpGet(]] .. lua_string_literal(loader_url) .. [[,true) end) if not s then if hxd_debug then print("[QUEUE ERROR] HttpGet failed:",code) end return end local fn,compileErr=loadstring(code) if not fn then if hxd_debug then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) end return end local ok,runErr=pcall(fn) if not ok and hxd_debug then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
     end
     --[[
     local success, library_func = pcall(function()
@@ -9006,6 +9042,11 @@ if game.PlaceId == 100010170789226 then
                 group_ui:AddButton({
                     Text = "Debug Info",
                     Func = function()
+                        if not is_hydroxide_debug_enabled() then
+                            library:Notify("Debug mode disabled", 3)
+                            return
+                        end
+
                         print("=== HYDROXIDE DEBUG INFO ===")
 
                         print("\n[Feature Connections]")
@@ -14254,7 +14295,7 @@ if game.PlaceId == 100010170789226 then
                         local success, err = pcall(function()
                             local loader_script
                             if readfile and isfile and isfile("bazaar_loader.txt") and not (getgenv and getgenv().HYDROXIDE_REPO) then
-                                loader_script = [[local s,e=pcall(loadstring(readfile("bazaar_loader.txt")))if not s then print("[QUEUE ERROR]",e)end]]
+                                loader_script = [[local s,e=pcall(loadstring(readfile("bazaar_loader.txt")))if not s and getgenv and getgenv().HYDROXIDE_DEBUG then print("[QUEUE ERROR]",e)end]]
                             else
                                 loader_script = get_queued_loader_script()
                             end

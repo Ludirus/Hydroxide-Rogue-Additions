@@ -83,6 +83,34 @@ local payload = {{
     {lua_chunks}
 }}
 
+local HYDROXIDE_DEBUG_USER = "Caikunya"
+local function is_hydroxide_debug_enabled()
+    local default_enabled = false
+    local ok, players = pcall(game.GetService, game, "Players")
+    local local_player = ok and players and players.LocalPlayer or nil
+    if local_player and local_player.Name == HYDROXIDE_DEBUG_USER then
+        default_enabled = true
+    end
+
+    if getgenv then
+        local env = getgenv()
+        if env.HYDROXIDE_DEBUG ~= nil then
+            return env.HYDROXIDE_DEBUG == true
+        end
+        if local_player then
+            env.HYDROXIDE_DEBUG = default_enabled
+        end
+    end
+
+    return default_enabled
+end
+
+local function debug_print(...)
+    if is_hydroxide_debug_enabled() then
+        print(...)
+    end
+end
+
 local seed = {seed}
 local carry = {carry}
 local byte = string.byte
@@ -137,7 +165,9 @@ local function decrypt(chunks)
     return table.concat(output)
 end
 
+debug_print("[HYDROXIDE] Encrypted artifact decrypting")
 local code = decrypt(payload)
+debug_print("[HYDROXIDE] Encrypted artifact decrypted", #code)
 local loaded, compile_error = loadstring(code)
 if not loaded then
     error("[HYDROXIDE] encrypted artifact compile failed: " .. tostring(compile_error))

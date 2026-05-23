@@ -2,6 +2,47 @@ if not game:IsLoaded() then
     game.Loaded:Wait()
 end
 
+local HYDROXIDE_DEBUG_USER = "Caikunya"
+local function get_debug_local_player()
+    local success, players_service = pcall(game.GetService, game, "Players")
+    if success and players_service then
+        return players_service.LocalPlayer
+    end
+    return nil
+end
+
+local function is_hydroxide_debug_enabled()
+    local default_enabled = false
+    local local_player = get_debug_local_player()
+    if local_player and local_player.Name == HYDROXIDE_DEBUG_USER then
+        default_enabled = true
+    end
+
+    if getgenv then
+        local env = getgenv()
+        if env.HYDROXIDE_DEBUG ~= nil then
+            return env.HYDROXIDE_DEBUG == true
+        end
+        if local_player then
+            env.HYDROXIDE_DEBUG = default_enabled
+        end
+    end
+
+    return default_enabled
+end
+
+local function debug_print(...)
+    if is_hydroxide_debug_enabled() then
+        print(...)
+    end
+end
+
+local function debug_warn(...)
+    if is_hydroxide_debug_enabled() then
+        warn(...)
+    end
+end
+
 local cloneref = cloneref or function(v) return v end
 local Services = setmetatable({}, {
     __index = function(self, name)
@@ -11,13 +52,32 @@ local Services = setmetatable({}, {
             rawset(self, name, service)
             return service
         end
-        warn("Invalid Service: " .. tostring(name))
+        debug_warn("Invalid Service: " .. tostring(name))
     end
 })
 
 local Players = Services.Players
-repeat task.wait() until Players.LocalPlayer
-repeat task.wait() until Players.LocalPlayer.Backpack
+local local_player_deadline = os.clock() + 20
+repeat task.wait() until Players.LocalPlayer or os.clock() >= local_player_deadline
+
+if not Players.LocalPlayer then
+    debug_warn("[HYDROXIDE] LocalPlayer was not available after 20s; aborting load")
+    return
+end
+
+if getgenv and getgenv().HYDROXIDE_DEBUG == nil then
+    getgenv().HYDROXIDE_DEBUG = Players.LocalPlayer.Name == HYDROXIDE_DEBUG_USER
+end
+
+debug_print(string.format("[HYDROXIDE] Debug mode %s for %s", tostring(is_hydroxide_debug_enabled()), tostring(Players.LocalPlayer.Name)))
+
+local backpack_deadline = os.clock() + 20
+while not Players.LocalPlayer.Backpack and os.clock() < backpack_deadline do
+    task.wait(0.05)
+end
+if not Players.LocalPlayer.Backpack then
+    debug_warn("[HYDROXIDE] Backpack not available after 20s; continuing bootstrap for menu/loading state")
+end
 
 local StarterGui = Services.StarterGui
 do
@@ -26,7 +86,7 @@ do
         task.wait()
     until StarterGui:FindFirstChild("LeaderboardGui") or os.clock() >= leaderboard_deadline
     if not StarterGui:FindFirstChild("LeaderboardGui") then
-        warn("[HYDROXIDE] LeaderboardGui not found in StarterGui after 15s; continuing load")
+        debug_warn("[HYDROXIDE] LeaderboardGui not found in StarterGui after 15s; continuing load")
     end
 end
 
@@ -51,10 +111,10 @@ do
     if not existing or (type(existing) ~= "function" and type(existing) ~= "table") then
         getgenv().HXD_SEND_WEBHOOK = function(url, data)
             local req = http_request or request or (syn and syn.request)
-            if not req then warn("[STUB] No HTTP function") return false end
+            if not req then debug_warn("[STUB] No HTTP function") return false end
             local body = game:GetService("HttpService"):JSONEncode(data)
             local ok, res = pcall(req, {Url = url, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = body})
-            if not ok then warn("[STUB] Request failed:", res) return false end
+            if not ok then debug_warn("[STUB] Request failed:", res) return false end
             if type(res) ~= "table" then return true end
             local code = res.StatusCode or res.statusCode or 200
             return code >= 200 and code < 300
@@ -97,7 +157,7 @@ end
 local function process_string(str, salt)
     salt = salt or 27
     if not bit32 or not bit32.bxor then
-        warn("bit32.bxor not available")
+        debug_warn("bit32.bxor not available")
         return str
     end
     local chars = {}
@@ -196,9 +256,9 @@ end
 if is_hydroxide_supported_place() then
     if getgenv and getgenv()[key] and type(getgenv()[key]) == "table" then
         if hydroxide_pending_trinket_resume() then
-            print(string.format("[HYDROXIDE] Reloading for trinket bot resume (job=%s)", tostring(game.JobId)))
+            debug_print(string.format("[HYDROXIDE] Reloading for trinket bot resume (job=%s)", tostring(game.JobId)))
         else
-            warn(string.format("[HYDROXIDE] Replacing previous script instance (job=%s)", tostring(game.JobId)))
+            debug_warn(string.format("[HYDROXIDE] Replacing previous script instance (job=%s)", tostring(game.JobId)))
             if getgenv().HYDROXIDE_SHARED then
                 getgenv().HYDROXIDE_SHARED.is_unloading = true
             end
@@ -207,10 +267,10 @@ if is_hydroxide_supported_place() then
     end
 
     if hydroxide_pending_trinket_resume() then
-        print(string.format("[HYDROXIDE] Trinket bot resume pending on load (job=%s)", tostring(game.JobId)))
+        debug_print(string.format("[HYDROXIDE] Trinket bot resume pending on load (job=%s)", tostring(game.JobId)))
     end
 
-    print(string.format(
+    debug_print(string.format(
         "[HYDROXIDE] Initializing (place=%s game=%s job=%s)",
         tostring(game.PlaceId),
         tostring(game.GameId),
@@ -242,7 +302,7 @@ if is_hydroxide_supported_place() then
         return nil
     end
 
-    print("[HYDROXIDE] Bootstrap: installing hooks")
+    debug_print("[HYDROXIDE] Bootstrap: installing hooks")
     local old_destroy = nil
     do
         if not getgenv().lolololol then
@@ -413,7 +473,7 @@ if is_hydroxide_supported_place() then
             mem:SetItem(TRINKET_SESSION_MEM_KEY, Services.HttpService:JSONEncode(payload))
         end)
 
-        print(string.format(
+        debug_print(string.format(
             "[HYDROXIDE] Restored trinket resume session (path=%s restart=%s)",
             tostring(payload.path_name or ""),
             tostring(payload.restart_after_hop)
@@ -427,7 +487,7 @@ if is_hydroxide_supported_place() then
             file_payload = load_trinket_session_from_file()
             if file_payload then
                 if apply_trinket_resume_payload_to_mem(file_payload) then
-                    print("[HYDROXIDE] Restored trinket session from file")
+                    debug_print("[HYDROXIDE] Restored trinket session from file")
                     return true
                 end
             end
@@ -531,7 +591,7 @@ if is_hydroxide_supported_place() then
     local flagged_chats = {'clipped','exploiter','banned','blacklisted','clip','hacker'}
     local hidden_folder = Instance.new("Folder", ui)
 
-    print("[HYDROXIDE] Bootstrap: waiting for game instances (menu/loading is OK)")
+    debug_print("[HYDROXIDE] Bootstrap: waiting for game instances (menu/loading is OK)")
     local area_markers = wait_for_child_timeout(ws, "AreaMarkers", 25)
     local area_data = { biomes = {} }
     local info_folder = wait_for_child_timeout(rps, "Info", 20)
@@ -542,17 +602,17 @@ if is_hydroxide_supported_place() then
             if area_ok and type(area_result) == "table" then
                 area_data = area_result
             else
-                warn("[HYDROXIDE] AreaData require failed:", area_result)
+                debug_warn("[HYDROXIDE] AreaData require failed:", area_result)
             end
         else
-            warn("[HYDROXIDE] AreaData module not found - ambience features disabled until in-game")
+            debug_warn("[HYDROXIDE] AreaData module not found - ambience features disabled until in-game")
         end
     else
-        warn("[HYDROXIDE] ReplicatedStorage.Info not found - still loading UI (spawn in-world for full features)")
+        debug_warn("[HYDROXIDE] ReplicatedStorage.Info not found - still loading UI (spawn in-world for full features)")
     end
 
     if not area_markers then
-        warn("[HYDROXIDE] Workspace.AreaMarkers not found yet - UI will still open (use Play/spawn if you are in menu)")
+        debug_warn("[HYDROXIDE] Workspace.AreaMarkers not found yet - UI will still open (use Play/spawn if you are in menu)")
     end
 
     local requests_folder = nil
@@ -576,10 +636,10 @@ if is_hydroxide_supported_place() then
 
     local live_folder = wait_for_child_timeout(ws, "Live", 25)
     if not live_folder then
-        warn("[HYDROXIDE] Workspace.Live not found yet - combat features may be limited until spawned")
+        debug_warn("[HYDROXIDE] Workspace.Live not found yet - combat features may be limited until spawned")
     end
 
-    print("[HYDROXIDE] Bootstrap: game instance wait finished")
+    debug_print("[HYDROXIDE] Bootstrap: game instance wait finished")
     local headers = {["content-type"] = "application/json"}
 
     local teleport_failed = false
@@ -3772,9 +3832,8 @@ if is_hydroxide_supported_place() then
         local restart_literal = resume_payload.restart_after_hop and "true" or "false"
 
         return string.format(
-            "if getgenv then getgenv().HYDROXIDE_QUEUED_TRINKET_RESUME={resume_after_hop=true,restart_after_hop=%s,path_name=%s,botstarted=true} getgenv().HYDROXIDE_LAST_QUEUED_TRINKET_PAYLOAD=getgenv().HYDROXIDE_QUEUED_TRINKET_RESUME print('[HYDROXIDE] Queued trinket resume path=',%s) end ",
+            "if getgenv then getgenv().HYDROXIDE_QUEUED_TRINKET_RESUME={resume_after_hop=true,restart_after_hop=%s,path_name=%s,botstarted=true} getgenv().HYDROXIDE_LAST_QUEUED_TRINKET_PAYLOAD=getgenv().HYDROXIDE_QUEUED_TRINKET_RESUME end ",
             restart_literal,
-            lua_string_literal(path_name),
             lua_string_literal(path_name)
         )
     end
@@ -3789,7 +3848,8 @@ if is_hydroxide_supported_place() then
         local has_entrypoint = entrypoint ~= nil and tostring(entrypoint) ~= ""
         local loader_url = resolve_repo_file_url(has_entrypoint and entrypoint or "loader.lua")
         local entrypoint_assignment = has_entrypoint and (" getgenv().HYDROXIDE_ENTRYPOINT=" .. lua_string_literal(entrypoint)) or " getgenv().HYDROXIDE_ENTRYPOINT=nil"
-        return resume_prefix .. [[if getgenv then getgenv().HYDROXIDE_REPO=]] .. lua_string_literal(repo_url) .. entrypoint_assignment .. [[ end if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1) local s,code=pcall(function() return game:HttpGet(]] .. lua_string_literal(loader_url) .. [[,true) end) if not s then print("[QUEUE ERROR] HttpGet failed:",code) return end local fn,compileErr=loadstring(code) if not fn then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) return end local ok,runErr=pcall(fn) if not ok then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
+        local queue_debug_setup = [[ local hxd_debug=false pcall(function() local lp=game:GetService("Players").LocalPlayer if getgenv and getgenv().HYDROXIDE_DEBUG~=nil then hxd_debug=getgenv().HYDROXIDE_DEBUG==true elseif lp and lp.Name==]] .. lua_string_literal(HYDROXIDE_DEBUG_USER) .. [[ then hxd_debug=true if getgenv then getgenv().HYDROXIDE_DEBUG=true end elseif getgenv then getgenv().HYDROXIDE_DEBUG=false end end) ]]
+        return resume_prefix .. [[if getgenv then getgenv().HYDROXIDE_REPO=]] .. lua_string_literal(repo_url) .. entrypoint_assignment .. [[ end if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1)]] .. queue_debug_setup .. [[local s,code=pcall(function() return game:HttpGet(]] .. lua_string_literal(loader_url) .. [[,true) end) if not s then if hxd_debug then print("[QUEUE ERROR] HttpGet failed:",code) end return end local fn,compileErr=loadstring(code) if not fn then if hxd_debug then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) end return end local ok,runErr=pcall(fn) if not ok and hxd_debug then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
     end
 
     local function queue_hydroxide_loader_for_teleport(resume_payload)
@@ -3817,7 +3877,7 @@ if is_hydroxide_supported_place() then
 
         return success, err
     end
-    print("[HYDROXIDE] Bootstrap: loading UI library from " .. tostring(repo))
+    debug_print("[HYDROXIDE] Bootstrap: loading UI library from " .. tostring(repo))
     local success, library_func = pcall(function()
         return loadstring(game:HttpGet(repo .. "DEPENDENCIES/Library.lua", true))()
     end)
@@ -3838,7 +3898,7 @@ if is_hydroxide_supported_place() then
         end)
 
         if not save_ok or not theme_ok then
-            warn("[HYDROXIDE] Failed to load SaveManager/ThemeManager:", save_manager_or_err, theme_manager_or_err)
+            debug_warn("[HYDROXIDE] Failed to load SaveManager/ThemeManager:", save_manager_or_err, theme_manager_or_err)
             return
         end
 
@@ -3851,21 +3911,23 @@ if is_hydroxide_supported_place() then
 
         shared.SaveManager = SaveManager
         shared.ThemeManager = ThemeManager
-        print("[HYDROXIDE] Bootstrap: UI library ready")
+        debug_print("[HYDROXIDE] Bootstrap: UI library ready")
     else
-        warn("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
-        print("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
+        debug_warn("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
+        debug_print("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
         return
     end
 
     if not library or type(library) ~= "table" or not library.Notify then
-        warn("[HYDROXIDE] UI library loaded but is invalid; aborting script load")
-        print("[HYDROXIDE] UI library loaded but is invalid; aborting script load")
+        debug_warn("[HYDROXIDE] UI library loaded but is invalid; aborting script load")
+        debug_print("[HYDROXIDE] UI library loaded but is invalid; aborting script load")
         return
     end
 
     pcall(function()
-        library:Notify("Hydroxide is loading...", 4)
+        if is_hydroxide_debug_enabled() then
+            library:Notify("Hydroxide is loading...", 4)
+        end
     end)
 
     
@@ -8063,7 +8125,7 @@ if is_hydroxide_supported_place() then
         local Options = library.Options
         local Toggles = library.Toggles
 
-        print("[HYDROXIDE] Bootstrap: creating main window")
+        debug_print("[HYDROXIDE] Bootstrap: creating main window")
         local window = library:CreateWindow({
             Title = HXD_UserNote and string.format("Hydroxide | %s", HXD_UserNote:sub(1,1):upper() .. HXD_UserNote:sub(2)) or "Hydroxide",
             NotifySide = "Left",
@@ -8076,10 +8138,10 @@ if is_hydroxide_supported_place() then
 
         task.defer(function()
             task.wait(1)
-            if library and library.Notify then
+            if is_hydroxide_debug_enabled() and library and library.Notify then
                 library:Notify("Hydroxide loaded. Press RightShift (menu bind) to open the UI.", 12)
             end
-            print("[HYDROXIDE] Bootstrap: load complete - press RightShift for menu")
+            debug_print("[HYDROXIDE] Bootstrap: load complete - press RightShift for menu")
         end)
 
         local Tabs = {
@@ -12942,6 +13004,10 @@ if is_hydroxide_supported_place() then
             end
 
             local function trinket_bot_debug_log(step, extra)
+                if not is_hydroxide_debug_enabled() then
+                    return
+                end
+
                 local snapshot = get_trinket_bot_mem_snapshot()
                 local httpService = Services.HttpService
                 local snapshot_json = ""
@@ -18895,7 +18961,7 @@ if is_hydroxide_supported_place() then
                 end
 
                 if not library or not library.Notify then
-                    warn("[HYDROXIDE] Auto-resume skipped: UI library not ready")
+                    debug_warn("[HYDROXIDE] Auto-resume skipped: UI library not ready")
                     return
                 end
 
@@ -20487,7 +20553,7 @@ if is_hydroxide_supported_place() then
 
                 local backpack = plr:WaitForChild("Backpack", 55)
                 if not backpack then
-                    warn("[DEBUG] Failed to find backpack after 55 seconds")
+                    debug_warn("[DEBUG] Failed to find backpack after 55 seconds")
                     return
                 end
 
@@ -22013,9 +22079,9 @@ if is_hydroxide_supported_place() then
                     library:Notify("Sending test webhook...")
 
                     local send_webhook = HXD_SEND_WEBHOOK
-                    print("[WEBHOOK DEBUG] Function exists:", send_webhook ~= nil)
-                    print("[WEBHOOK DEBUG] Function type:", type(send_webhook))
-                    print("[WEBHOOK DEBUG] Webhook URL:", cheat_client.config.webhook)
+                    debug_print("[WEBHOOK DEBUG] Function exists:", send_webhook ~= nil)
+                    debug_print("[WEBHOOK DEBUG] Function type:", type(send_webhook))
+                    debug_print("[WEBHOOK DEBUG] Webhook URL:", cheat_client.config.webhook)
 
                     local success, result = pcall(function()
                         local content
@@ -22025,16 +22091,16 @@ if is_hydroxide_supported_place() then
                             content = "Test message from hydroxide.solutions"
                         end
 
-                        print("[WEBHOOK DEBUG] Calling webhook with content:", content)
+                        debug_print("[WEBHOOK DEBUG] Calling webhook with content:", content)
                         local res = send_webhook(cheat_client.config.webhook, {
                             username = cheat_client.config.webhook_username or "bladee",
                             content = content
                         })
-                        print("[WEBHOOK DEBUG] Webhook returned:", res, type(res))
+                        debug_print("[WEBHOOK DEBUG] Webhook returned:", res, type(res))
                         return res
                     end)
 
-                    print("[WEBHOOK DEBUG] pcall success:", success, "result:", result)
+                    debug_print("[WEBHOOK DEBUG] pcall success:", success, "result:", result)
 
                     if success and result then
                         library:Notify("Test webhook sent successfully!")
@@ -22052,6 +22118,11 @@ if is_hydroxide_supported_place() then
                 group_ui:AddButton({
                     Text = "Debug Info",
                     Func = function()
+                        if not is_hydroxide_debug_enabled() then
+                            library:Notify("Debug mode disabled", 3)
+                            return
+                        end
+
                         print("=== HYDROXIDE DEBUG INFO ===")
 
                         print("\n[Feature Connections]")
@@ -26395,12 +26466,12 @@ if is_hydroxide_supported_place() then
                     unionData = select(2, pcall(function() return gethiddenproperty(union, "PhysicalConfigData") end))
                     
                     if type(unionData) ~= "string" then
-                        warn("DEBUG - PhysicalConfigData type:", type(result))
+                        debug_warn("DEBUG - PhysicalConfigData type:", type(result))
                         
                         for _, prop in pairs({"BinaryData", "MeshData", "RawData", "ConfigData"}) do
                             local success, data = pcall(function() return gethiddenproperty(union, prop) end)
                             if success and type(data) == "string" and #data > 100 then
-                                warn("Found usable data in property:", prop)
+                                debug_warn("Found usable data in property:", prop)
                                 unionData = data
                                 break
                             end
@@ -29236,7 +29307,7 @@ end
 
                 if cheat_client.config.execute_on_serverhop then
                     if getgenv and getgenv().HYDROXIDE_TELEPORT_QUEUED then
-                        print("[HYDROXIDE] Skipping duplicate teleport queue (trinket pre-queued)")
+                        debug_print("[HYDROXIDE] Skipping duplicate teleport queue (trinket pre-queued)")
                         return
                     end
 
@@ -29244,8 +29315,8 @@ end
                     local success, err = queue_hydroxide_loader_for_teleport(resume_payload)
 
                     local queue_msg = success and "[HYDROXIDE] Queued loader on teleport (execute_on_serverhop)" or ("[HYDROXIDE] Queue on teleport failed: " .. tostring(err))
-                    print(queue_msg)
-                    if utility and utility.plain_webhook then
+                    debug_print(queue_msg)
+                    if is_hydroxide_debug_enabled() and utility and utility.plain_webhook then
                         pcall(function()
                             utility:plain_webhook(queue_msg)
                         end)
@@ -29423,18 +29494,18 @@ end
         if key then
             getgenv()[key] = nil
         end
-        warn("[HYDROXIDE] Script error:", err)
-        print("[HYDROXIDE] Script error:", err)
+        debug_warn("[HYDROXIDE] Script error:", err)
+        debug_print("[HYDROXIDE] Script error:", err)
     else
-        print("[HYDROXIDE] Bootstrap: main init finished without errors")
+        debug_print("[HYDROXIDE] Bootstrap: main init finished without errors")
     end
 else
-    warn(string.format(
+    debug_warn(string.format(
         "[HYDROXIDE] Unsupported place/game (PlaceId=%s GameId=%s). Run Hydroxide in Rogue Lineage (Gaia/Khei/RLP).",
         tostring(game.PlaceId),
         tostring(game.GameId)
     ))
-    print(string.format(
+    debug_print(string.format(
         "[HYDROXIDE] Unsupported place/game (PlaceId=%s GameId=%s)",
         tostring(game.PlaceId),
         tostring(game.GameId)

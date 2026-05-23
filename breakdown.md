@@ -15,6 +15,7 @@ A VPS would only be optional for adjacent infrastructure, such as hosting a priv
   - Loads the Rogue or Rogue Battlegrounds script from GitHub with `game:HttpGet` and `loadstring`.
   - Honors `getgenv().HYDROXIDE_REPO` as the raw GitHub base URL, so forked GitHub deployments can keep dependency and teleport reloads on the same repo.
   - Honors `getgenv().HYDROXIDE_ENTRYPOINT` when set, so encrypted dist artifacts can queue and reload the same encrypted file after a serverhop.
+  - Debug prints are gated behind `HYDROXIDE_DEBUG`, which defaults on only for username `Caikunya`.
 
 - `ROGUE/rogue_ui.lua`
   - Main Rogue Lineage script.
@@ -68,6 +69,7 @@ A VPS would only be optional for adjacent infrastructure, such as hosting a priv
   - Executor API checks.
   - Anti-cheat related hooks.
   - Duplicate-load prevention.
+  - Startup diagnostics are debug-gated, and early menu/loading waits are bounded so missing `Backpack` does not silently stall the load forever.
 
 - UI and config
   - Tabs include Combat, Visuals, World, Exploits, Movement, Automation, Misc, Botting, Macros, Interface, and Config.
@@ -103,6 +105,7 @@ A VPS would only be optional for adjacent infrastructure, such as hosting a priv
   - User-configurable Discord webhook paths.
   - Analytics endpoint calls.
   - Stella data collection when configured.
+  - Trinket-bot diagnostic webhook messages are debug-only and therefore disabled by default except for username `Caikunya` or an explicit `getgenv().HYDROXIDE_DEBUG = true`.
 
 ## Main Battlegrounds Systems
 
@@ -146,7 +149,7 @@ A VPS would only be optional for adjacent infrastructure, such as hosting a priv
 
 ## Important Caveats
 
-- This repository has no `.git` metadata in the local checkout.
+- The current local checkout is a Git repository.
 - There are no conventional tests, package manifests, or build scripts.
 - The code is highly monolithic and duplicated between the Rogue and Battlegrounds scripts.
 - Many branches use `pcall`, so failures can be silent unless the relevant debug/log path is enabled.
