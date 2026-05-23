@@ -18358,6 +18358,7 @@ if is_hydroxide_supported_place() then
                 end
             end
 
+            do
             local group_trinket_bot = Tabs.Botting:AddLeftGroupbox("Trinket Bot")
 
             group_trinket_bot:AddInput("PointWaitTime", {
@@ -18733,10 +18734,12 @@ if is_hydroxide_supported_place() then
                 Max = 300,
                 Rounding = 0
             })
+            end
 
+            do
             local group_trinket_config = Tabs.Botting:AddRightGroupbox("Trinket Bot Config")
             local current_path_label
-            local function update_path_label(path_name)
+            trinket_bot.update_path_label = function(path_name)
                 trinket_bot.current_path_name = path_name or ""
                 if current_path_label and current_path_label.Text then
                     if path_name and path_name ~= "" then
@@ -18747,7 +18750,7 @@ if is_hydroxide_supported_place() then
                 end
             end
 
-            local function get_saved_paths()
+            trinket_bot.get_saved_paths = function()
                 local function add_uploaded_root_path(path_names)
                     for uploaded_path_name in pairs(uploaded_deepforest_restart_paths) do
                         local has_uploaded_path = false
@@ -18790,7 +18793,7 @@ if is_hydroxide_supported_place() then
                 return add_uploaded_root_path(path_names)
             end
 
-            local function apply_settings(settings)
+            trinket_bot.apply_settings = function(settings)
                 if not settings then return end
                 if Toggles.SkipIllusionist then Toggles.SkipIllusionist:SetValue(settings.skip_illusionist or false) end
                 if Toggles.PickupScrolls then Toggles.PickupScrolls:SetValue(settings.pickup_scrolls or false) end
@@ -18861,7 +18864,7 @@ if is_hydroxide_supported_place() then
                 end
             end
 
-            local function load_path_by_name(path_name)
+            trinket_bot.load_path_by_name = function(path_name)
                 if not path_name or path_name == "" then
                     library:Notify("Please select a path!")
                     return false
@@ -18915,10 +18918,10 @@ if is_hydroxide_supported_place() then
                         })
                     end
 
-                    apply_settings(save_data.settings)
+                    trinket_bot.apply_settings(save_data.settings)
 
                     library:Notify(string.format("Loaded path '%s' with %d points", path_name, #trinket_bot.path_points))
-                    update_path_label(path_name)
+                    trinket_bot.update_path_label(path_name)
 
                     if Options.PathName then
                         Options.PathName:SetValue(path_name)
@@ -18936,15 +18939,15 @@ if is_hydroxide_supported_place() then
                 end
             end
 
-            local function has_character_root()
+            trinket_bot.has_character_root = function()
                 return plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") ~= nil
             end
 
-            local function ensure_trinket_bot_character_spawned(play_timeout, spawn_timeout)
+            trinket_bot.ensure_character_spawned = function(play_timeout, spawn_timeout)
                 play_timeout = play_timeout or 30
                 spawn_timeout = spawn_timeout or 60
 
-                if has_character_root() then
+                if trinket_bot.has_character_root() then
                     return true
                 end
 
@@ -18968,7 +18971,7 @@ if is_hydroxide_supported_place() then
                 return wait_for_character_root(spawn_timeout)
             end
 
-            local function should_auto_resume_trinket_bot()
+            trinket_bot.should_auto_resume = function()
                 if is_trinket_hop_resume_context() then
                     restore_trinket_session_on_load()
                 end
@@ -19059,7 +19062,7 @@ if is_hydroxide_supported_place() then
                     mem:RemoveItem("trinket_bot_resume_in_progress")
                 end
 
-                local should_resume, resume_reason = should_auto_resume_trinket_bot()
+                local should_resume, resume_reason = trinket_bot.should_auto_resume()
                 if not should_resume then
                     trinket_bot_debug_log("AUTO_RESUME_SKIP", "reason=" .. tostring(resume_reason))
                     return
@@ -19121,7 +19124,7 @@ if is_hydroxide_supported_place() then
                         end
                     end
 
-                    if not ensure_trinket_bot_character_spawned(45, 60) then
+                    if not trinket_bot.ensure_character_spawned(45, 60) then
                         utility:plain_webhook("@everyone CRITICAL: Character did not spawn during auto-start - serverhopping")
                         library:Notify("Character did not spawn after Play - serverhopping")
                         TrinketBotServerhop("Character did not spawn after auto-start Play")
@@ -19186,7 +19189,7 @@ if is_hydroxide_supported_place() then
                             mem:SetItem("trinket_bot_path", saved_path)
                         end)
 
-                        local load_success = load_path_by_name(saved_path)
+                        local load_success = trinket_bot.load_path_by_name(saved_path)
                         task.wait(1)
 
                         if not load_success or #trinket_bot.path_points == 0 then
@@ -19213,7 +19216,7 @@ if is_hydroxide_supported_place() then
 
                             if success then
                                 loaded_trinket_settings = settings
-                                apply_settings(settings)
+                                trinket_bot.apply_settings(settings)
                             end
                         end
 
@@ -19892,7 +19895,7 @@ if is_hydroxide_supported_place() then
                 Text = "New Path",
                 Func = function()
                     trinket_bot.path_points = {}
-                    update_path_label(nil)
+                    trinket_bot.update_path_label(nil)
                     update_visualizations()
 
                     if Options.PathName then
@@ -19909,20 +19912,20 @@ if is_hydroxide_supported_place() then
 
             group_trinket_config:AddDivider()
 
-            local saved_paths = get_saved_paths()
+            local saved_paths = trinket_bot.get_saved_paths()
             group_trinket_config:AddDropdown("SavedPaths", {
                 Text = "Saved Paths",
                 Values = saved_paths,
                 Multi = false,
                 Callback = function(value)
-                    load_path_by_name(value)
+                    trinket_bot.load_path_by_name(value)
                 end
             })
 
             group_trinket_config:AddButton({
                 Text = "Refresh Paths",
                 Func = function()
-                    local paths = get_saved_paths()
+                    local paths = trinket_bot.get_saved_paths()
                     if Options.SavedPaths then
                         Options.SavedPaths:SetValues(paths)
                         library:Notify(string.format("Found %d saved paths", #paths))
@@ -20015,9 +20018,9 @@ if is_hydroxide_supported_place() then
                             library:Notify(string.format("Saved path '%s' with %d points", path_name, #trinket_bot.path_points))
                         end
 
-                        update_path_label(path_name)
+                        trinket_bot.update_path_label(path_name)
                         if Options.SavedPaths then
-                            local paths = get_saved_paths()
+                            local paths = trinket_bot.get_saved_paths()
                             Options.SavedPaths:SetValues(paths)
                             Options.SavedPaths:SetValue(path_name)
                         end
@@ -20054,9 +20057,9 @@ if is_hydroxide_supported_place() then
 
                     if success then
                         library:Notify(string.format("Deleted path '%s'", path_name))
-                        update_path_label(nil)
+                        trinket_bot.update_path_label(nil)
 
-                        local paths = get_saved_paths()
+                        local paths = trinket_bot.get_saved_paths()
                         if Options.SavedPaths then
                             Options.SavedPaths:SetValues(paths)
                             Options.SavedPaths:SetValue(nil)
@@ -20273,6 +20276,7 @@ if is_hydroxide_supported_place() then
                     stop_button:SetVisible(is_running)
                 end
             end)
+            end
 
             local group_trinket_looping = Tabs.Botting:AddRightGroupbox("Looping Settings")
 
