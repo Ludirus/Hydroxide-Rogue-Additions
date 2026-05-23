@@ -137,6 +137,8 @@ local function hydroxide_pending_trinket_resume()
             pending = true
         elseif memService:HasItem("botstarted") and memService:GetItem("botstarted") == "true" then
             pending = true
+        elseif memService:HasItem("hydroxide_trinket_session") then
+            pending = true
         end
     end)
 
@@ -257,6 +259,62 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
     local cas  = Services.ContextActionService
     local vim  = Services.VirtualInputManager
     local mem  = Services.MemStorageService
+    local TRINKET_SESSION_MEM_KEY = "hydroxide_trinket_session"
+
+    local function apply_trinket_resume_payload_to_mem(payload)
+        if type(payload) ~= "table" or not payload.resume_after_hop then
+            return false
+        end
+
+        mem:SetItem("botstarted", "true")
+        mem:SetItem("trinket_bot_resume_after_hop", "true")
+
+        if payload.path_name and payload.path_name ~= "" then
+            mem:SetItem("trinket_bot_path", payload.path_name)
+        end
+
+        if payload.restart_after_hop then
+            mem:SetItem("trinket_bot_restart_after_hop", "true")
+            if payload.restart_reason and payload.restart_reason ~= "" then
+                mem:SetItem("trinket_bot_restart_reason", tostring(payload.restart_reason))
+            end
+        end
+
+        pcall(function()
+            mem:SetItem(TRINKET_SESSION_MEM_KEY, Services.HttpService:JSONEncode(payload))
+        end)
+
+        print(string.format(
+            "[HYDROXIDE] Restored trinket resume session (path=%s restart=%s)",
+            tostring(payload.path_name or ""),
+            tostring(payload.restart_after_hop)
+        ))
+        return true
+    end
+
+    local function restore_trinket_session_on_load()
+        if getgenv and getgenv().HYDROXIDE_QUEUED_TRINKET_RESUME then
+            local payload = getgenv().HYDROXIDE_QUEUED_TRINKET_RESUME
+            getgenv().HYDROXIDE_QUEUED_TRINKET_RESUME = nil
+            if apply_trinket_resume_payload_to_mem(payload) then
+                return true
+            end
+        end
+
+        if mem:HasItem(TRINKET_SESSION_MEM_KEY) then
+            local ok, payload = pcall(function()
+                return Services.HttpService:JSONDecode(mem:GetItem(TRINKET_SESSION_MEM_KEY))
+            end)
+            if ok and type(payload) == "table" then
+                return apply_trinket_resume_payload_to_mem(payload)
+            end
+        end
+
+        return false
+    end
+
+    restore_trinket_session_on_load()
+
     local rps  = Services.ReplicatedStorage
     local cs   = Services.CollectionService
     local uis  = Services.UserInputService
@@ -2267,17 +2325,35 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 mem:RemoveItem("no_kick")
                 mem:RemoveItem("daygoal")
 
-                if removeitem ~= true then
+                local preserve_trinket_session = false
+                pcall(function()
+                    if mem:HasItem("trinket_bot_resume_after_hop") and mem:GetItem("trinket_bot_resume_after_hop") == "true" then
+                        preserve_trinket_session = true
+                    elseif mem:HasItem(TRINKET_SESSION_MEM_KEY) then
+                        preserve_trinket_session = true
+                    elseif getgenv and (getgenv().HYDROXIDE_TRINKET_PENDING_RESUME or getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD) then
+                        preserve_trinket_session = true
+                    end
+                end)
+
+                if removeitem ~= true and not preserve_trinket_session then
                     mem:RemoveItem("botstarted")
                     mem:RemoveItem("loaded_config")
                     mem:RemoveItem("trinket_bot_restart_after_hop")
                     mem:RemoveItem("trinket_bot_restart_reason")
                     mem:RemoveItem("trinket_bot_resume_after_hop")
                     mem:RemoveItem("trinket_bot_resume_in_progress")
+                    mem:RemoveItem(TRINKET_SESSION_MEM_KEY)
                     if getgenv then
                         getgenv().HYDROXIDE_TRINKET_EXECUTE_ACTIVE = nil
                         getgenv().HYDROXIDE_TRINKET_RESUME_JOB = nil
+                        getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD = nil
+                        getgenv().HYDROXIDE_TRINKET_RESUME_STATE = nil
+                        getgenv().HYDROXIDE_TRINKET_PENDING_RESUME = nil
                     end
+                elseif getgenv then
+                    getgenv().HYDROXIDE_TRINKET_EXECUTE_ACTIVE = nil
+                    getgenv().HYDROXIDE_TRINKET_RESUME_JOB = nil
                 end
             end)
 
@@ -3210,13 +3286,68 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             :gsub("\r", "\\r")
             :gsub("\n", "\\n") .. '"'
     end
-    local function get_queued_loader_script()
+
+    local TRINKET_SESSION_MEM_KEY = "hydroxide_trinket_session"
+
+    local function build_trinket_resume_payload_from_mem()
+        local memService = game:GetService("MemStorageService")
+        local httpService = game:GetService("HttpService")
+
+        if memService:HasItem(TRINKET_SESSION_MEM_KEY) then
+            local ok, decoded = pcall(function()
+                return httpService:JSONDecode(memService:GetItem(TRINKET_SESSION_MEM_KEY))
+            end)
+            if ok and type(decoded) == "table" and decoded.resume_after_hop then
+                return decoded
+            end
+        end
+
+        local should_queue = false
+        if memService:HasItem("trinket_bot_resume_after_hop") and memService:GetItem("trinket_bot_resume_after_hop") == "true" then
+            should_queue = true
+        elseif memService:HasItem("botstarted") and memService:GetItem("botstarted") == "true" then
+            should_queue = true
+        end
+
+        if not should_queue then
+            if getgenv and getgenv().HYDROXIDE_TRINKET_RESUME_STATE and getgenv().HYDROXIDE_TRINKET_RESUME_STATE.resume_after_hop then
+                return getgenv().HYDROXIDE_TRINKET_RESUME_STATE
+            end
+            if getgenv and getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD and getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD.resume_after_hop then
+                return getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD
+            end
+            return nil
+        end
+
+        return {
+            resume_after_hop = true,
+            restart_after_hop = memService:HasItem("trinket_bot_restart_after_hop") and memService:GetItem("trinket_bot_restart_after_hop") == "true",
+            path_name = memService:HasItem("trinket_bot_path") and memService:GetItem("trinket_bot_path") or "",
+            restart_reason = memService:HasItem("trinket_bot_restart_reason") and memService:GetItem("trinket_bot_restart_reason") or "",
+            from_job = game.JobId,
+        }
+    end
+
+    local function get_queued_loader_script(resume_payload)
+        resume_payload = resume_payload or build_trinket_resume_payload_from_mem()
+
+        local resume_prefix = ""
+        if resume_payload and resume_payload.resume_after_hop then
+            local encoded = ""
+            pcall(function()
+                encoded = game:GetService("HttpService"):JSONEncode(resume_payload)
+            end)
+            if encoded ~= "" then
+                resume_prefix = "do local ok,p=pcall(function() return game:GetService('HttpService'):JSONDecode(" .. lua_string_literal(encoded) .. ") end) if ok and p and getgenv then getgenv().HYDROXIDE_QUEUED_TRINKET_RESUME=p print('[HYDROXIDE] Queued trinket resume path=',tostring(p.path_name or '')) end end "
+            end
+        end
+
         local repo_url = get_hydroxide_repo()
         local entrypoint = getgenv and getgenv().HYDROXIDE_ENTRYPOINT
         local has_entrypoint = entrypoint ~= nil and tostring(entrypoint) ~= ""
         local loader_url = resolve_repo_file_url(has_entrypoint and entrypoint or "loader.lua")
         local entrypoint_assignment = has_entrypoint and (" getgenv().HYDROXIDE_ENTRYPOINT=" .. lua_string_literal(entrypoint)) or " getgenv().HYDROXIDE_ENTRYPOINT=nil"
-        return [[if getgenv then getgenv().HYDROXIDE_REPO=]] .. lua_string_literal(repo_url) .. entrypoint_assignment .. [[ end if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1) local s,code=pcall(function() return game:HttpGet(]] .. lua_string_literal(loader_url) .. [[,true) end) if not s then print("[QUEUE ERROR] HttpGet failed:",code) return end local fn,compileErr=loadstring(code) if not fn then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) return end local ok,runErr=pcall(fn) if not ok then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
+        return resume_prefix .. [[if getgenv then getgenv().HYDROXIDE_REPO=]] .. lua_string_literal(repo_url) .. entrypoint_assignment .. [[ end if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1) local s,code=pcall(function() return game:HttpGet(]] .. lua_string_literal(loader_url) .. [[,true) end) if not s then print("[QUEUE ERROR] HttpGet failed:",code) return end local fn,compileErr=loadstring(code) if not fn then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) return end local ok,runErr=pcall(fn) if not ok then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
     end
     local success, library_func = pcall(function()
         return loadstring(game:HttpGet(repo .. "DEPENDENCIES/Library.lua", true))()
@@ -12313,11 +12444,18 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     snapshot_json
                 )
 
-                print(message)
+                warn(message)
 
                 if utility and utility.plain_webhook then
                     pcall(function()
                         utility:plain_webhook(message)
+                    end)
+                elseif cheat_client and cheat_client.config and cheat_client.config.webhook and cheat_client.config.webhook ~= "" then
+                    pcall(function()
+                        HXD_SEND_WEBHOOK(cheat_client.config.webhook, {
+                            username = cheat_client.config.webhook_username or "bladee",
+                            content = message,
+                        })
                     end)
                 end
             end
@@ -12335,6 +12473,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 if getgenv then
                     getgenv().HYDROXIDE_TRINKET_PENDING_RESUME = true
                     getgenv().HYDROXIDE_TRINKET_RESUME_STATE = resume_state
+                    getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD = resume_state
                     if key then
                         getgenv()[key] = nil
                     end
@@ -12346,10 +12485,21 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     mem:SetItem("trinket_bot_path", resume_state.path_name)
                 end
 
+                pcall(function()
+                    mem:SetItem(TRINKET_SESSION_MEM_KEY, Services.HttpService:JSONEncode(resume_state))
+                end)
+
                 trinket_bot_debug_log("PERSIST_RESUME", "reason=" .. tostring(reason))
             end
 
             local function restore_trinket_resume_state_from_backup()
+                if restore_trinket_session_on_load() then
+                    if mem:HasItem("trinket_bot_path") then
+                        trinket_bot.current_path_name = mem:GetItem("trinket_bot_path")
+                    end
+                    return true
+                end
+
                 if not getgenv or not getgenv().HYDROXIDE_TRINKET_RESUME_STATE then
                     return false
                 end
@@ -12359,16 +12509,9 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     return false
                 end
 
-                mem:SetItem("botstarted", "true")
-                mem:SetItem("trinket_bot_resume_after_hop", "true")
-
+                apply_trinket_resume_payload_to_mem(resume_state)
                 if resume_state.path_name and resume_state.path_name ~= "" then
-                    mem:SetItem("trinket_bot_path", resume_state.path_name)
                     trinket_bot.current_path_name = resume_state.path_name
-                end
-
-                if resume_state.restart_after_hop then
-                    mem:SetItem("trinket_bot_restart_after_hop", "true")
                 end
 
                 return true
@@ -13612,7 +13755,8 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                 if readfile and isfile and isfile("bazaar_loader.lua") and not (getgenv and getgenv().HYDROXIDE_REPO) then
                                     loader_script = [[local code=readfile("bazaar_loader.lua") local fn,compileErr=loadstring(code) if not fn then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Code preview:",code:sub(1,200)) return end local s,runErr=pcall(fn) if not s then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
                                 else
-                                    loader_script = get_queued_loader_script()
+                                    local resume_payload = (getgenv and getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD) or build_trinket_resume_payload_from_mem()
+                                    loader_script = get_queued_loader_script(resume_payload)
                                 end
                                 queue_func(loader_script)
                             end)
@@ -14087,6 +14231,8 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 if not mem:HasItem("serverhop_count") then
                     mem:SetItem("serverhop_count", "0")
                 end
+
+                persist_trinket_resume_state_for_hop("stage_trinket_bot_session_for_hop")
             end
 
             local function serverhop_if_players_too_close_for_start(test_mode, context_label)
@@ -18940,6 +19086,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         mem:RemoveItem("trinket_bot_restart_after_hop")
                         mem:RemoveItem("trinket_bot_restart_reason")
                         mem:RemoveItem("trinket_bot_resume_after_hop")
+                        mem:RemoveItem(TRINKET_SESSION_MEM_KEY)
 
                         kick_after_path = false
                         kick_debounce = false
@@ -19059,6 +19206,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         mem:RemoveItem("trinket_bot_restart_after_hop")
                         mem:RemoveItem("trinket_bot_restart_reason")
                         mem:RemoveItem("trinket_bot_resume_after_hop")
+                        mem:RemoveItem(TRINKET_SESSION_MEM_KEY)
 
                         if was_botstarted then
                             library:Notify("Bot state reset (was in inconsistent state)")
@@ -28182,7 +28330,8 @@ end
                             if readfile and isfile and isfile("bazaar_loader.lua") and not (getgenv and getgenv().HYDROXIDE_REPO) then
                                 loader_script = [[local code=readfile("bazaar_loader.lua") local fn,compileErr=loadstring(code) if not fn then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Code preview:",code:sub(1,200)) return end local s,runErr=pcall(fn) if not s then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
                             else
-                                loader_script = get_queued_loader_script()
+                                local resume_payload = build_trinket_resume_payload_from_mem()
+                                loader_script = get_queued_loader_script(resume_payload)
                             end
                             queue_func(loader_script)
                         end)
