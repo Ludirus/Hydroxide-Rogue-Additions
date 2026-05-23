@@ -13725,6 +13725,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             local droppedTools = {}
             local click_play_from_start_menu
             local wait_for_character_root
+            local prepare_restart_from_point_one
 
             local function ExecutePath(test_mode)
                 if not cheat_client or not cheat_client.config then
@@ -13814,6 +13815,28 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     trinket_bot.path_running = false
                     library:Notify("Invalid path data! Please reload or recreate the path.")
                     return
+                end
+
+                if not test_mode and prepare_restart_from_point_one and should_use_deepforest_restart() and not trinket_bot.skip_distance_check then
+                    local distance_before_gate = (root.Position - first_point).Magnitude
+                    if distance_before_gate > 75 then
+                        library:Notify("Gating to Deepforest 5 before starting path...")
+                        local prep_ok, prep_msg = prepare_restart_from_point_one()
+                        if not prep_ok then
+                            trinket_bot.path_running = false
+                            library:Notify("Deepforest setup failed: " .. tostring(prep_msg))
+                            return
+                        end
+
+                        trinket_bot.path_running = true
+                        if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                            root = plr.Character.HumanoidRootPart
+                        else
+                            trinket_bot.path_running = false
+                            library:Notify("Character lost after Deepforest gate")
+                            return
+                        end
+                    end
                 end
 
                 local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
@@ -17295,7 +17318,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 return character and not FindFirstChildOfClass(character, "ForceField")
             end
 
-            local function prepare_restart_from_point_one()
+            prepare_restart_from_point_one = function()
                 local character = plr.Character
                 if not character or not FindFirstChild(character, "HumanoidRootPart") then
                     return false, "character not ready"
@@ -21527,29 +21550,59 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             makefolder("HYDROXIDE")
         end
 
-        if not isfile(model_path) then
+        local function download_intent_model()
             local success, result = pcall(function()
                 return game:HttpGet("https://hydroxide.solutions/watched.rbxm")
             end)
 
-            if success and result then
+            if success and result and #result > 0 then
                 writefile(model_path, result)
-            else
-                warn("failed to download intent model")
+                return true
             end
+
+            return false
         end
 
-        if isfile(model_path) then
+        local function load_intent_model_from_disk()
+            if not isfile(model_path) then
+                return nil
+            end
+
             local asset = getcustomasset(model_path)
             local success, model = pcall(function()
                 return game:GetObjects(asset)[1]
             end)
 
             if success and model then
-                legit_intent_gui = model
-            else
-                warn("failed to load intent model:", model)
+                return model
             end
+
+            pcall(function()
+                delfile(model_path)
+            end)
+
+            return nil
+        end
+
+        if not isfile(model_path) and not download_intent_model() then
+            if Toggles and Toggles.LegitIntent and Toggles.LegitIntent.Value then
+                warn("failed to download intent model")
+            end
+        end
+
+        legit_intent_gui = load_intent_model_from_disk()
+        if not legit_intent_gui and isfile(model_path) then
+            pcall(function()
+                delfile(model_path)
+            end)
+        end
+
+        if not legit_intent_gui and download_intent_model() then
+            legit_intent_gui = load_intent_model_from_disk()
+        end
+
+        if not legit_intent_gui and Toggles and Toggles.LegitIntent and Toggles.LegitIntent.Value then
+            warn("failed to load intent model (corrupt or unavailable watched.rbxm)")
         end
 
         local function create_watched_gui(character)
