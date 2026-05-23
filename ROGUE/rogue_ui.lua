@@ -30,13 +30,7 @@ do
     end
 end
 
-pcall(function()
-    if getconnections then
-        for _,v in pairs(getconnections(Services.ScriptContext.Error)) do
-            v:Disable();
-        end
-    end
-end)
+-- Keep ScriptContext errors enabled so load failures are visible in the console.
 
 loadstring([[
     function LPH_NO_VIRTUALIZE(f) return f end;
@@ -143,10 +137,6 @@ local function hydroxide_pending_trinket_resume()
             pending = true
         elseif memService:HasItem("trinket_bot_restart_after_hop") and memService:GetItem("trinket_bot_restart_after_hop") == "true" then
             pending = true
-        elseif memService:HasItem("botstarted") and memService:GetItem("botstarted") == "true" then
-            pending = true
-        elseif memService:HasItem("hydroxide_trinket_session") then
-            pending = true
         end
     end)
 
@@ -183,7 +173,27 @@ local function is_trinket_hop_resume_context()
     return mem_resume
 end
 
-if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 109732117428502 or game.PlaceId == 14341521240 then
+local HYDROXIDE_ROGUE_GAME_ID = 1087859240
+local HYDROXIDE_SUPPORTED_PLACE_IDS = {
+    [3541987450] = true,
+    [5208655184] = true,
+    [109732117428502] = true,
+    [14341521240] = true,
+}
+
+local function is_hydroxide_supported_place()
+    if HYDROXIDE_SUPPORTED_PLACE_IDS[game.PlaceId] then
+        return true
+    end
+
+    if game.GameId == HYDROXIDE_ROGUE_GAME_ID then
+        return true
+    end
+
+    return false
+end
+
+if is_hydroxide_supported_place() then
     if getgenv and getgenv()[key] and type(getgenv()[key]) == "table" then
         if hydroxide_pending_trinket_resume() then
             print(string.format("[HYDROXIDE] Reloading for trinket bot resume (job=%s)", tostring(game.JobId)))
@@ -200,10 +210,39 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
         print(string.format("[HYDROXIDE] Trinket bot resume pending on load (job=%s)", tostring(game.JobId)))
     end
 
-    print(string.format("[HYDROXIDE] Initializing (place=%s job=%s)", tostring(game.PlaceId), tostring(game.JobId)))
+    print(string.format(
+        "[HYDROXIDE] Initializing (place=%s game=%s job=%s)",
+        tostring(game.PlaceId),
+        tostring(game.GameId),
+        tostring(game.JobId)
+    ))
     getgenv()[key] = setmetatable({}, { __tostring = function() return "nil" end })
 
     local success, err = xpcall(function()
+    local function wait_for_child_timeout(parent, child_name, timeout_seconds)
+        timeout_seconds = timeout_seconds or 30
+        if not parent then
+            return nil
+        end
+
+        local child = parent:FindFirstChild(child_name)
+        if child then
+            return child
+        end
+
+        local deadline = os.clock() + timeout_seconds
+        while os.clock() < deadline do
+            task.wait(0.05)
+            child = parent:FindFirstChild(child_name)
+            if child then
+                return child
+            end
+        end
+
+        return nil
+    end
+
+    print("[HYDROXIDE] Bootstrap: installing hooks")
     local old_destroy = nil
     do
         if not getgenv().lolololol then
@@ -491,24 +530,56 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
     local flagged_chats = {'clipped','exploiter','banned','blacklisted','clip','hacker'}
     local hidden_folder = Instance.new("Folder", ui)
-    local area_markers = ws:WaitForChild("AreaMarkers")
-    local area_data = require(rps:WaitForChild("Info"):WaitForChild("AreaData"))
+
+    print("[HYDROXIDE] Bootstrap: waiting for game instances (menu/loading is OK)")
+    local area_markers = wait_for_child_timeout(ws, "AreaMarkers", 25)
+    local area_data = { biomes = {} }
+    local info_folder = wait_for_child_timeout(rps, "Info", 20)
+    if info_folder then
+        local area_data_module = wait_for_child_timeout(info_folder, "AreaData", 15)
+        if area_data_module then
+            local area_ok, area_result = pcall(require, area_data_module)
+            if area_ok and type(area_result) == "table" then
+                area_data = area_result
+            else
+                warn("[HYDROXIDE] AreaData require failed:", area_result)
+            end
+        else
+            warn("[HYDROXIDE] AreaData module not found - ambience features disabled until in-game")
+        end
+    else
+        warn("[HYDROXIDE] ReplicatedStorage.Info not found - still loading UI (spawn in-world for full features)")
+    end
+
+    if not area_markers then
+        warn("[HYDROXIDE] Workspace.AreaMarkers not found yet - UI will still open (use Play/spawn if you are in menu)")
+    end
+
+    local requests_folder = nil
+    if game.PlaceId ~= 14341521240 then
+        requests_folder = wait_for_child_timeout(rps, "Requests", 20)
+    end
 
     local get_mouse_remote
     if game.PlaceId == 14341521240 then
         get_mouse_remote = nil
-    else
-        get_mouse_remote = rps:WaitForChild("Requests"):WaitForChild("GetMouse")
+    elseif requests_folder then
+        get_mouse_remote = wait_for_child_timeout(requests_folder, "GetMouse", 15)
     end
 
     local join_server
     if game.PlaceId == 14341521240 then
         join_server = nil
-    else
-        join_server = rps:WaitForChild("Requests"):WaitForChild("JoinPublicServer")
+    elseif requests_folder then
+        join_server = wait_for_child_timeout(requests_folder, "JoinPublicServer", 15)
     end
 
-    local live_folder = ws:WaitForChild("Live")
+    local live_folder = wait_for_child_timeout(ws, "Live", 25)
+    if not live_folder then
+        warn("[HYDROXIDE] Workspace.Live not found yet - combat features may be limited until spawned")
+    end
+
+    print("[HYDROXIDE] Bootstrap: game instance wait finished")
     local headers = {["content-type"] = "application/json"}
 
     local teleport_failed = false
@@ -3746,6 +3817,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
         return success, err
     end
+    print("[HYDROXIDE] Bootstrap: loading UI library from " .. tostring(repo))
     local success, library_func = pcall(function()
         return loadstring(game:HttpGet(repo .. "DEPENDENCIES/Library.lua", true))()
     end)
@@ -3758,8 +3830,20 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
         getgenv().Options = library.Options or {}
         getgenv().Labels = library.Labels or {}
 
-        local SaveManager = loadstring(game:HttpGet(repo .. "DEPENDENCIES/SaveManager.lua"))()
-        local ThemeManager = loadstring(game:HttpGet(repo .. "DEPENDENCIES/ThemeManager.lua"))()
+        local save_ok, save_manager_or_err = pcall(function()
+            return loadstring(game:HttpGet(repo .. "DEPENDENCIES/SaveManager.lua", true))()
+        end)
+        local theme_ok, theme_manager_or_err = pcall(function()
+            return loadstring(game:HttpGet(repo .. "DEPENDENCIES/ThemeManager.lua", true))()
+        end)
+
+        if not save_ok or not theme_ok then
+            warn("[HYDROXIDE] Failed to load SaveManager/ThemeManager:", save_manager_or_err, theme_manager_or_err)
+            return
+        end
+
+        local SaveManager = save_manager_or_err
+        local ThemeManager = theme_manager_or_err
 
         SaveManager:SetLibrary(library)
         ThemeManager:SetLibrary(library)
@@ -3767,15 +3851,22 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
         shared.SaveManager = SaveManager
         shared.ThemeManager = ThemeManager
+        print("[HYDROXIDE] Bootstrap: UI library ready")
     else
         warn("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
+        print("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
         return
     end
 
     if not library or type(library) ~= "table" or not library.Notify then
         warn("[HYDROXIDE] UI library loaded but is invalid; aborting script load")
+        print("[HYDROXIDE] UI library loaded but is invalid; aborting script load")
         return
     end
+
+    pcall(function()
+        library:Notify("Hydroxide is loading...", 4)
+    end)
 
     
     do
@@ -6334,7 +6425,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
         do
             local function set_ambience(area)
-                local biome = area_data.biomes[area]
+                local biome = area_data and area_data.biomes and area_data.biomes[area]
                 if biome then
                     local area_color
                     if biome == "desert" or biome == "oasis" then
@@ -7972,6 +8063,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
         local Options = library.Options
         local Toggles = library.Toggles
 
+        print("[HYDROXIDE] Bootstrap: creating main window")
         local window = library:CreateWindow({
             Title = HXD_UserNote and string.format("Hydroxide | %s", HXD_UserNote:sub(1,1):upper() .. HXD_UserNote:sub(2)) or "Hydroxide",
             NotifySide = "Left",
@@ -7981,6 +8073,14 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             Resizable = true,
             DisableSearch = false
         })
+
+        task.defer(function()
+            task.wait(1)
+            if library and library.Notify then
+                library:Notify("Hydroxide loaded. Press RightShift (menu bind) to open the UI.", 12)
+            end
+            print("[HYDROXIDE] Bootstrap: load complete - press RightShift for menu")
+        end)
 
         local Tabs = {
             Combat = window:AddTab("Combat", "sword"),
@@ -29323,6 +29423,20 @@ end
         if key then
             getgenv()[key] = nil
         end
-        warn("[hydroxide.sol] Script error:", err)
+        warn("[HYDROXIDE] Script error:", err)
+        print("[HYDROXIDE] Script error:", err)
+    else
+        print("[HYDROXIDE] Bootstrap: main init finished without errors")
     end
+else
+    warn(string.format(
+        "[HYDROXIDE] Unsupported place/game (PlaceId=%s GameId=%s). Run Hydroxide in Rogue Lineage (Gaia/Khei/RLP).",
+        tostring(game.PlaceId),
+        tostring(game.GameId)
+    ))
+    print(string.format(
+        "[HYDROXIDE] Unsupported place/game (PlaceId=%s GameId=%s)",
+        tostring(game.PlaceId),
+        tostring(game.GameId)
+    ))
 end
