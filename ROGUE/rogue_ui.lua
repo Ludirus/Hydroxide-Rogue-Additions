@@ -2238,6 +2238,11 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     mem:RemoveItem("trinket_bot_restart_after_hop")
                     mem:RemoveItem("trinket_bot_restart_reason")
                     mem:RemoveItem("trinket_bot_resume_after_hop")
+                    mem:RemoveItem("trinket_bot_resume_in_progress")
+                    if getgenv then
+                        getgenv().HYDROXIDE_TRINKET_EXECUTE_ACTIVE = nil
+                        getgenv().HYDROXIDE_TRINKET_RESUME_JOB = nil
+                    end
                 end
             end)
 
@@ -12162,6 +12167,65 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 return uploaded_deepforest_restart_path_keys[normalize_trinket_path_name(path_name)] == true
             end
 
+            local function clear_trinket_bot_session_locks()
+                if getgenv then
+                    if getgenv().HYDROXIDE_TRINKET_EXECUTE_ACTIVE == game.JobId then
+                        getgenv().HYDROXIDE_TRINKET_EXECUTE_ACTIVE = nil
+                    end
+                    if getgenv().HYDROXIDE_TRINKET_RESUME_JOB == game.JobId then
+                        getgenv().HYDROXIDE_TRINKET_RESUME_JOB = nil
+                    end
+                end
+
+                mem:RemoveItem("trinket_bot_resume_in_progress")
+            end
+
+            local function is_trinket_bot_already_active()
+                if trinket_bot.path_running then
+                    return true
+                end
+
+                if getgenv and getgenv().HYDROXIDE_TRINKET_EXECUTE_ACTIVE == game.JobId then
+                    return true
+                end
+
+                if getgenv and getgenv().HYDROXIDE_TRINKET_RESUME_JOB == game.JobId then
+                    return true
+                end
+
+                if mem:HasItem("trinket_bot_resume_in_progress") and mem:GetItem("trinket_bot_resume_in_progress") == game.JobId then
+                    return true
+                end
+
+                return false
+            end
+
+            local function mark_trinket_bot_executing()
+                trinket_bot.path_running = true
+
+                if getgenv then
+                    getgenv().HYDROXIDE_TRINKET_EXECUTE_ACTIVE = game.JobId
+                    if getgenv().HYDROXIDE_TRINKET_RESUME_JOB == game.JobId then
+                        getgenv().HYDROXIDE_TRINKET_RESUME_JOB = nil
+                    end
+                end
+
+                mem:RemoveItem("trinket_bot_resume_in_progress")
+            end
+
+            local function try_claim_trinket_bot_resume()
+                if is_trinket_bot_already_active() then
+                    return false
+                end
+
+                if getgenv then
+                    getgenv().HYDROXIDE_TRINKET_RESUME_JOB = game.JobId
+                end
+
+                mem:SetItem("trinket_bot_resume_in_progress", game.JobId)
+                return true
+            end
+
             local visited_positions = {}
             local collected_trinket_ids = {}
             local COLLECTED_IDS_MAX_SIZE = 500
@@ -14213,12 +14277,12 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     return
                 end
 
-                if trinket_bot.path_running then
-                    library:Notify("Path already running!")
+                if is_trinket_bot_already_active() then
+                    library:Notify("Trinket bot already running!")
                     return
                 end
 
-                trinket_bot.path_running = true
+                mark_trinket_bot_executing()
 
                 if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
                     pcall(function()
@@ -17637,8 +17701,17 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     return
                 end
 
+                if not try_claim_trinket_bot_resume() then
+                    return
+                end
+
                 library:Notify("Resuming trinket bot after serverhop...")
                 task.wait(3)
+
+                if is_trinket_bot_already_active() then
+                    clear_trinket_bot_session_locks()
+                    return
+                end
 
                     trinket_bot.path_running = false
 
@@ -17793,6 +17866,10 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                 end
 
                                 mem:RemoveItem("trinket_bot_resume_after_hop")
+                                if is_trinket_bot_already_active() then
+                                    clear_trinket_bot_session_locks()
+                                    return
+                                end
                                 ExecutePath(false)
                                 return
                             else
@@ -18378,6 +18455,10 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             end
 
                             mem:RemoveItem("trinket_bot_resume_after_hop")
+                            if is_trinket_bot_already_active() then
+                                clear_trinket_bot_session_locks()
+                                return
+                            end
                             ExecutePath(false)
                         else
                             if auto_start_death_connection then
@@ -18609,8 +18690,9 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 Text = "Stop Bot",
                 Tooltip = "Stop the currently running bot",
                 Func = function()
-                    if trinket_bot.path_running then
+                    if trinket_bot.path_running or is_trinket_bot_already_active() then
                         trinket_bot.path_running = false
+                        clear_trinket_bot_session_locks()
                         mem:RemoveItem("botstarted")
                         mem:RemoveItem("serverhop_count")
                         mem:RemoveItem("trinket_bot_restart_after_hop")
