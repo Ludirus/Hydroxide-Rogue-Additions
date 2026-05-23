@@ -3369,7 +3369,6 @@ if is_hydroxide_supported_place() then
 
                 return newestServer
             end
-        end
 
         function utility:Serverhop()
             local httpService = Services.HttpService
@@ -3761,6 +3760,7 @@ if is_hydroxide_supported_place() then
             end
 
             return false
+        end
         end
 
         function utility:IsHoveringFrame(frame)
@@ -13604,15 +13604,16 @@ if is_hydroxide_supported_place() then
                 return summary
             end
 
-            local function SmoothTeleport(target, is_trinket_teleport)
+            local function SmoothTeleport(target, is_trinket_teleport, allow_without_path_running)
                 is_trinket_teleport = is_trinket_teleport or false
+                allow_without_path_running = allow_without_path_running == true
 
                 if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
-                    return
+                    return false
                 end
 
                 if shared.is_unloading then
-                    return
+                    return false
                 end
 
                 local root = plr.Character.HumanoidRootPart
@@ -13626,7 +13627,7 @@ if is_hydroxide_supported_place() then
                     targetPosition = target.Position
                 else
                     warn("Invalid target for SmoothTeleport:", target)
-                    return
+                    return false
                 end
 
                 local current_position = root.Position
@@ -13634,7 +13635,7 @@ if is_hydroxide_supported_place() then
                 if distance > 1500 then
                     library:Notify(string.format("!! Attempted teleport of %.0f studs! Stopping path... (if this is a bug DM work at a pizza place bot)", distance))
                     trinket_bot.path_running = false
-                    return
+                    return false
                 end
 
                 local character = plr.Character
@@ -13688,16 +13689,20 @@ if is_hydroxide_supported_place() then
                     end
                 end)
 
+                local path_active = function()
+                    return allow_without_path_running or trinket_bot.path_running
+                end
+
                 while not completed
                     and not shared.is_unloading
-                    and trinket_bot.path_running
+                    and path_active()
                     and not currently_dropping
                     and not emergency_gate_requested
                     and not trinket_bot.moderator_detected do
                     task.wait()
                 end
 
-                if shared.is_unloading or not trinket_bot.path_running or currently_dropping or trinket_bot.moderator_detected then
+                if shared.is_unloading or not path_active() or currently_dropping or trinket_bot.moderator_detected then
                     tween:Cancel()
                 end
 
@@ -13731,6 +13736,8 @@ if is_hydroxide_supported_place() then
 
                 active_tween_data.tween = nil
                 active_tween_data.connection = nil
+
+                return completed and (targetPosition - root.Position).Magnitude <= 6
             end
 
             local function getPing()
@@ -13939,13 +13946,25 @@ if is_hydroxide_supported_place() then
                     open_direction * 2,
                     open_direction * 3.5,
                     open_direction * 5,
+                    open_direction * 7,
+                    open_direction * 9,
+                    open_direction * 11,
                     -open_direction * 2,
+                    -open_direction * 4,
                     perpendicular * 2,
                     -perpendicular * 2,
-                    perpendicular * 3.5,
-                    -perpendicular * 3.5,
+                    perpendicular * 4,
+                    -perpendicular * 4,
+                    perpendicular * 6,
+                    -perpendicular * 6,
                     open_direction * 2 + perpendicular * 2,
                     open_direction * 2 - perpendicular * 2,
+                    open_direction * 4 + perpendicular * 2,
+                    open_direction * 4 - perpendicular * 2,
+                    open_direction * 6 + perpendicular * 3,
+                    open_direction * 6 - perpendicular * 3,
+                    Vector3.new(0, 4, 0),
+                    open_direction * 3 + Vector3.new(0, 3, 0),
                 }
 
                 local ray_params = make_character_raycast_params(character)
@@ -13994,6 +14013,38 @@ if is_hydroxide_supported_place() then
                 return nil
             end
 
+            local function get_prefer_direction_to_position(from_position, target_position)
+                if typeof(from_position) ~= "Vector3" or typeof(target_position) ~= "Vector3" then
+                    return nil
+                end
+
+                local flat = Vector3.new(
+                    target_position.X - from_position.X,
+                    0,
+                    target_position.Z - from_position.Z
+                )
+
+                if flat.Magnitude <= 0.05 then
+                    return nil
+                end
+
+                return flat.Unit
+            end
+
+            local function snap_character_to_position(character, position)
+                if not character or not FindFirstChild(character, "HumanoidRootPart") then
+                    return false
+                end
+
+                local hrp = character.HumanoidRootPart
+                pcall(function()
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    hrp.AssemblyAngularVelocity = Vector3.zero
+                end)
+                hrp.CFrame = CFrame.new(position)
+                return true
+            end
+
             trinket_bot.wait_for_forcefield_clear = function(character, max_wait, require_grounded)
                 max_wait = max_wait or 12
                 local deadline = tick() + max_wait
@@ -14013,6 +14064,53 @@ if is_hydroxide_supported_place() then
                     and (not require_grounded or wait_for_character_grounded(character, 2))
             end
 
+            local function build_forcefield_escape_positions(character, prefer_direction)
+                local positions = {}
+                local seen = {}
+
+                local function add_position(position)
+                    if typeof(position) ~= "Vector3" then
+                        return
+                    end
+
+                    local key = string.format("%.1f,%.1f,%.1f", position.X, position.Y, position.Z)
+                    if seen[key] then
+                        return
+                    end
+                    seen[key] = true
+                    table.insert(positions, position)
+                end
+
+                add_position(find_safe_forcefield_exit_position(character, prefer_direction))
+
+                if character and FindFirstChild(character, "HumanoidRootPart") then
+                    local hrp = character.HumanoidRootPart
+                    local open_direction = prefer_direction
+                    if typeof(open_direction) ~= "Vector3" then
+                        open_direction = select(1, find_most_open_horizontal_direction(character))
+                    else
+                        open_direction = Vector3.new(open_direction.X, 0, open_direction.Z)
+                        if open_direction.Magnitude > 0.05 then
+                            open_direction = open_direction.Unit
+                        else
+                            open_direction = select(1, find_most_open_horizontal_direction(character))
+                        end
+                    end
+
+                    local perpendicular = Vector3.new(-open_direction.Z, 0, open_direction.X)
+                    local distance_steps = { 4, 6, 8, 10, 12, 14 }
+                    for _, distance in ipairs(distance_steps) do
+                        add_position(find_safe_forcefield_exit_position(character, open_direction * distance))
+                        add_position(hrp.Position + open_direction * distance + Vector3.new(0, 4, 0))
+                        add_position(hrp.Position + open_direction * distance + perpendicular * 2 + Vector3.new(0, 4, 0))
+                        add_position(hrp.Position + open_direction * distance - perpendicular * 2 + Vector3.new(0, 4, 0))
+                        add_position(hrp.Position + Vector3.new(0, 6, 0) + open_direction * (distance * 0.75))
+                    end
+                end
+
+                return positions
+            end
+
             local function clear_spawn_forcefield_for_restart(prefer_direction)
                 local character = plr.Character
                 if not character or not FindFirstChild(character, "HumanoidRootPart") then
@@ -14028,62 +14126,82 @@ if is_hydroxide_supported_place() then
                 end
 
                 if not FindFirstChildOfClass(character, "ForceField") then
-                    return trinket_bot.wait_for_forcefield_clear(character, 3, true)
-                end
-
-                local hrp = character.HumanoidRootPart
-                local safe_position = find_safe_forcefield_exit_position(character, prefer_direction)
-
-                if not safe_position then
-                    local ray_params = make_character_raycast_params(character)
-                    local ground_result = ws:Raycast(hrp.Position + Vector3.new(0, 10, 0), Vector3.new(0, -40, 0), ray_params)
-                    if ground_result then
-                        local snapped_position = ground_result.Position + Vector3.new(0, 4.25, 0)
-                        if is_stand_position_clear(snapped_position, character) then
-                            safe_position = snapped_position
-                        end
-                    end
-                end
-
-                if not safe_position then
-                    return finish(trinket_bot.wait_for_forcefield_clear(character, 10, true))
-                end
-
-                local platform = Instance.new("Part")
-                platform.Size = Vector3.new(8, 1, 8)
-                platform.Anchored = true
-                platform.CanCollide = true
-                platform.Transparency = 1
-                platform.Parent = workspace
-
-                local platform_ray_params = make_character_raycast_params(character, { platform })
-                local ground_result = ws:Raycast(safe_position + Vector3.new(0, 8, 0), Vector3.new(0, -40, 0), platform_ray_params)
-
-                if ground_result then
-                    platform.Position = ground_result.Position + Vector3.new(0, -0.5, 0)
-                    safe_position = platform.Position + Vector3.new(0, 4.25, 0)
-                else
-                    platform.Position = safe_position + Vector3.new(0, -4.5, 0)
-                end
-
-                if not is_stand_position_clear(safe_position, character, { platform }) then
-                    platform:Destroy()
-                    return finish(trinket_bot.wait_for_forcefield_clear(character, 10, true))
+                    return finish(trinket_bot.wait_for_forcefield_clear(character, 3, true))
                 end
 
                 if not trinket_bot.path_running then
                     trinket_bot.path_running = true
                 end
-                SmoothTeleport(safe_position)
-                task.wait(1.25)
 
-                trinket_bot.wait_for_forcefield_clear(character, 12, true)
+                local escape_positions = build_forcefield_escape_positions(character, prefer_direction)
+                for attempt_index, safe_position in ipairs(escape_positions) do
+                    if not character or not character.Parent or not FindFirstChildOfClass(character, "ForceField") then
+                        return finish(trinket_bot.wait_for_forcefield_clear(character, 3, true))
+                    end
 
-                if platform then
+                    if typeof(safe_position) ~= "Vector3" then
+                        continue
+                    end
+
+                    local platform = Instance.new("Part")
+                    platform.Size = Vector3.new(10, 1, 10)
+                    platform.Anchored = true
+                    platform.CanCollide = true
+                    platform.Transparency = 1
+                    platform.Parent = workspace
+
+                    local platform_ray_params = make_character_raycast_params(character, { platform })
+                    local ground_result = ws:Raycast(safe_position + Vector3.new(0, 8, 0), Vector3.new(0, -40, 0), platform_ray_params)
+                    if ground_result then
+                        platform.Position = ground_result.Position + Vector3.new(0, -0.5, 0)
+                        safe_position = platform.Position + Vector3.new(0, 4.25, 0)
+                    else
+                        platform.Position = safe_position + Vector3.new(0, -4.5, 0)
+                    end
+
+                    if not is_stand_position_clear(safe_position, character, { platform }) then
+                        platform:Destroy()
+                        continue
+                    end
+
+                    SmoothTeleport(safe_position, false, true)
+                    task.wait(0.35)
+                    snap_character_to_position(character, safe_position)
+                    task.wait(0.65)
+
+                    if not FindFirstChildOfClass(character, "ForceField") then
+                        platform:Destroy()
+                        return finish(trinket_bot.wait_for_forcefield_clear(character, 4, true))
+                    end
+
                     platform:Destroy()
+                    task.wait(0.15)
                 end
 
-                return finish(trinket_bot.wait_for_forcefield_clear(character, 4, true))
+                local hrp = character.HumanoidRootPart
+                local open_direction = prefer_direction
+                if typeof(open_direction) ~= "Vector3" then
+                    open_direction = select(1, find_most_open_horizontal_direction(character))
+                else
+                    open_direction = Vector3.new(open_direction.X, 0, open_direction.Z)
+                    if open_direction.Magnitude > 0.05 then
+                        open_direction = open_direction.Unit
+                    else
+                        open_direction = select(1, find_most_open_horizontal_direction(character))
+                    end
+                end
+
+                for step = 1, 6 do
+                    if not FindFirstChildOfClass(character, "ForceField") then
+                        return finish(trinket_bot.wait_for_forcefield_clear(character, 4, true))
+                    end
+
+                    local nudge_position = hrp.Position + open_direction * (2 + step) + Vector3.new(0, 3, 0)
+                    snap_character_to_position(character, nudge_position)
+                    task.wait(0.35)
+                end
+
+                return finish(trinket_bot.wait_for_forcefield_clear(character, 15, true))
             end
 
             local function Gate(where, expected_destination)
@@ -14309,7 +14427,8 @@ if is_hydroxide_supported_place() then
 
                 if not wait_for_character_grounded(character, 4) then
                     trinket_bot.path_running = true
-                    clear_spawn_forcefield_for_restart(nil)
+                    local gate_direction = expected_destination and get_prefer_direction_to_position(character.HumanoidRootPart.Position, expected_destination)
+                    clear_spawn_forcefield_for_restart(gate_direction)
                     wait_for_character_grounded(character, 3)
                 end
 
@@ -15422,7 +15541,8 @@ if is_hydroxide_supported_place() then
 
                     library:Notify("Restart after hop: gating to Deepforest 5 for uploaded path")
 
-                    if not clear_spawn_forcefield_for_restart(nil) then
+                    local restart_direction = get_prefer_direction_to_position(root.Position, first_point)
+                    if not clear_spawn_forcefield_for_restart(restart_direction) then
                         trinket_bot.path_running = false
                         return false, "could not clear ForceField before Deepforest restart"
                     end
@@ -15471,7 +15591,8 @@ if is_hydroxide_supported_place() then
                         nearest_destination_distance
                     ))
 
-                    if not clear_spawn_forcefield_for_restart(nil) then
+                    local restart_direction = get_prefer_direction_to_position(root.Position, first_point)
+                    if not clear_spawn_forcefield_for_restart(restart_direction) then
                         trinket_bot.path_running = false
                         return false, "could not clear ForceField before restart gate"
                     end
@@ -16587,8 +16708,10 @@ if is_hydroxide_supported_place() then
                 if plr.Character and FindFirstChildOfClass(plr.Character, "ForceField") then
                     library:Notify("Removing ForceField before starting path...")
                     local character = plr.Character
+                    local first_point = trinket_bot.path_points[1] and trinket_bot.path_points[1].position
+                    local restart_direction = first_point and get_prefer_direction_to_position(character.HumanoidRootPart.Position, first_point)
                     trinket_bot.path_running = true
-                    if not clear_spawn_forcefield_for_restart(nil) then
+                    if not clear_spawn_forcefield_for_restart(restart_direction) then
                         library:Notify("ForceField removal failed - continuing carefully")
                     else
                         library:Notify("ForceField removed - starting path")
@@ -20629,9 +20752,9 @@ if is_hydroxide_supported_place() then
 
                 local drop_verified = false
                 local attempts = 0
-                local max_drop_attempts = 40
+                local sent_failure_alert = false
 
-                while trinket_bot.auto_drop_bot_active() and attempts < max_drop_attempts and not shared.is_unloading do
+                while trinket_bot.auto_drop_bot_active() and not shared.is_unloading do
                     local current_item = trinket_bot.find_inventory_tool_by_name(item_name)
                     if not current_item then
                         drop_verified = true
@@ -20683,16 +20806,24 @@ if is_hydroxide_supported_place() then
                     if attempts % 5 == 0 then
                         library:Notify(string.format("Still dropping %s (%d attempts)", item_name, attempts))
                     end
+
+                    if attempts >= 40 and not sent_failure_alert then
+                        sent_failure_alert = true
+                        if utility and utility.plain_webhook then
+                            utility:plain_webhook(string.format("@here Auto-drop still retrying %s after %d attempts; bot remains paused until it leaves inventory", item_name, attempts))
+                        end
+                    end
+
+                    if attempts >= 40 then
+                        task.wait(0.5)
+                    end
                 end
 
                 if drop_verified then
                     library:Notify(string.format("Dropped %s", item_name))
                     trinket_bot.wait_for_drop_danger_clear(item_name)
                 else
-                    library:Notify(string.format("Failed to verify drop for %s", item_name))
-                    if utility and utility.plain_webhook then
-                        utility:plain_webhook(string.format("@here Failed to verify auto-drop for %s after %d attempts", item_name, attempts))
-                    end
+                    library:Notify(string.format("Stopped auto-drop for %s because bot stopped/unloaded", item_name))
                 end
 
                 droppedTools[item] = nil
