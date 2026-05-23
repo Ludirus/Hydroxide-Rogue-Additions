@@ -12180,7 +12180,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 mem:RemoveItem("trinket_bot_resume_in_progress")
             end
 
-            local function is_trinket_bot_already_active()
+            local function is_trinket_bot_executing()
                 if trinket_bot.path_running then
                     return true
                 end
@@ -12189,6 +12189,10 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     return true
                 end
 
+                return false
+            end
+
+            local function is_trinket_bot_resume_claimed_by_other()
                 if getgenv and getgenv().HYDROXIDE_TRINKET_RESUME_JOB == game.JobId then
                     return true
                 end
@@ -12198,6 +12202,10 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 end
 
                 return false
+            end
+
+            local function is_trinket_bot_already_active()
+                return is_trinket_bot_executing() or is_trinket_bot_resume_claimed_by_other()
             end
 
             local function mark_trinket_bot_executing()
@@ -12214,7 +12222,11 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             end
 
             local function try_claim_trinket_bot_resume()
-                if is_trinket_bot_already_active() then
+                if is_trinket_bot_executing() then
+                    return false
+                end
+
+                if is_trinket_bot_resume_claimed_by_other() then
                     return false
                 end
 
@@ -14277,7 +14289,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     return
                 end
 
-                if is_trinket_bot_already_active() then
+                if is_trinket_bot_executing() then
                     library:Notify("Trinket bot already running!")
                     return
                 end
@@ -17697,18 +17709,28 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             end
 
             task.spawn(function()
+                if getgenv and getgenv().HYDROXIDE_TRINKET_RESUME_JOB and getgenv().HYDROXIDE_TRINKET_RESUME_JOB ~= game.JobId then
+                    getgenv().HYDROXIDE_TRINKET_RESUME_JOB = nil
+                end
+                if mem:HasItem("trinket_bot_resume_in_progress") and mem:GetItem("trinket_bot_resume_in_progress") ~= game.JobId then
+                    mem:RemoveItem("trinket_bot_resume_in_progress")
+                end
+
                 if not should_auto_resume_trinket_bot() then
                     return
                 end
 
                 if not try_claim_trinket_bot_resume() then
+                    if is_trinket_bot_resume_claimed_by_other() then
+                        library:Notify("Trinket bot resume already in progress")
+                    end
                     return
                 end
 
                 library:Notify("Resuming trinket bot after serverhop...")
                 task.wait(3)
 
-                if is_trinket_bot_already_active() then
+                if is_trinket_bot_executing() then
                     clear_trinket_bot_session_locks()
                     return
                 end
@@ -17866,7 +17888,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                 end
 
                                 mem:RemoveItem("trinket_bot_resume_after_hop")
-                                if is_trinket_bot_already_active() then
+                                if is_trinket_bot_executing() then
                                     clear_trinket_bot_session_locks()
                                     return
                                 end
@@ -18455,7 +18477,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             end
 
                             mem:RemoveItem("trinket_bot_resume_after_hop")
-                            if is_trinket_bot_already_active() then
+                            if is_trinket_bot_executing() then
                                 clear_trinket_bot_session_locks()
                                 return
                             end
