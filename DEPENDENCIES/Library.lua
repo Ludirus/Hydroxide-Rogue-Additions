@@ -1614,6 +1614,15 @@ function Library:MakeLine(Frame: GuiObject, Info)
 end
 
 function Library:MakeOutline(Frame: GuiObject, Corner: number?, ZIndex: number?)
+    local Shadow = New("Frame", {
+        BackgroundColor3 = "Dark",
+        BackgroundTransparency = 0.38,
+        Position = UDim2.fromOffset(1, 2),
+        Size = UDim2.new(1, 6, 1, 6),
+        ZIndex = ZIndex and math.max(ZIndex - 1, 0) or nil,
+        Parent = Frame,
+    })
+
     local Holder = New("Frame", {
         BackgroundColor3 = "Dark",
         Position = UDim2.fromOffset(-2, -2),
@@ -1653,6 +1662,10 @@ function Library:MakeOutline(Frame: GuiObject, Corner: number?, ZIndex: number?)
     })
 
     if Corner and Corner > 0 then
+        New("UICorner", {
+            CornerRadius = UDim.new(0, Corner + 2),
+            Parent = Shadow,
+        })
         New("UICorner", {
             CornerRadius = UDim.new(0, Corner + 1),
             Parent = Holder,
@@ -6399,6 +6412,14 @@ function Library:CreateWindow(WindowInfo)
         Library:MakePanelGradient(Tabs, "BackgroundColor", 90)
 
         New("UIListLayout", {
+            Padding = UDim.new(0, 4),
+            Parent = Tabs,
+        })
+        New("UIPadding", {
+            PaddingBottom = UDim.new(0, 6),
+            PaddingLeft = UDim.new(0, 6),
+            PaddingRight = UDim.new(0, 6),
+            PaddingTop = UDim.new(0, 6),
             Parent = Tabs,
         })
 
@@ -6446,6 +6467,8 @@ function Library:CreateWindow(WindowInfo)
         local TabButton: TextButton
         local TabLabel
         local TabIcon
+        local TabButtonStroke
+        local TabRail
 
         local TabContainer
         local TabLeft
@@ -6461,15 +6484,38 @@ function Library:CreateWindow(WindowInfo)
         do
             TabButton = New("TextButton", {
                 BackgroundColor3 = "MainColor",
-                BackgroundTransparency = 1,
-                Size = UDim2.new(1, 0, 0, 40),
+                BackgroundTransparency = 0.82,
+                Size = UDim2.new(1, 0, 0, 38),
                 Text = "",
                 Parent = Tabs,
             })
+            New("UICorner", {
+                CornerRadius = UDim.new(0, WindowInfo.CornerRadius + 1),
+                Parent = TabButton,
+            })
+            Library:MakePanelGradient(TabButton, "MainColor", 90)
+            TabButtonStroke = New("UIStroke", {
+                Color = "OutlineColor",
+                Transparency = 0.75,
+                Parent = TabButton,
+            })
+            Library:RegisterRainbowStroke(TabButtonStroke, "OutlineColor", 0.55)
+            TabRail = New("Frame", {
+                BackgroundColor3 = "AccentColor",
+                BackgroundTransparency = 1,
+                Position = UDim2.fromOffset(5, 7),
+                Size = UDim2.new(0, 3, 1, -14),
+                Parent = TabButton,
+            })
+            New("UICorner", {
+                CornerRadius = UDim.new(1, 0),
+                Parent = TabRail,
+            })
+            Library:MakeAccentGradient(TabRail, 90)
 
             New("UIPadding", {
                 PaddingBottom = UDim.new(0, 11),
-                PaddingLeft = UDim.new(0, 12),
+                PaddingLeft = UDim.new(0, 15),
                 PaddingRight = UDim.new(0, 12),
                 PaddingTop = UDim.new(0, 11),
                 Parent = TabButton,
@@ -7029,6 +7075,12 @@ function Library:CreateWindow(WindowInfo)
             TweenService:Create(TabLabel, Library.TweenInfo, {
                 TextTransparency = Hovering and 0.25 or 0.5,
             }):Play()
+            TweenService:Create(TabButton, Library.TweenInfo, {
+                BackgroundTransparency = Hovering and 0.58 or 0.82,
+            }):Play()
+            TweenService:Create(TabButtonStroke, Library.TweenInfo, {
+                Transparency = Hovering and 0.45 or 0.75,
+            }):Play()
             if TabIcon then
                 TweenService:Create(TabIcon, Library.TweenInfo, {
                     ImageTransparency = Hovering and 0.25 or 0.5,
@@ -7042,6 +7094,12 @@ function Library:CreateWindow(WindowInfo)
             end
 
             TweenService:Create(TabButton, Library.TweenInfo, {
+                BackgroundTransparency = 0.08,
+            }):Play()
+            TweenService:Create(TabButtonStroke, Library.TweenInfo, {
+                Transparency = 0.12,
+            }):Play()
+            TweenService:Create(TabRail, Library.TweenInfo, {
                 BackgroundTransparency = 0,
             }):Play()
             TweenService:Create(TabLabel, Library.TweenInfo, {
@@ -7072,6 +7130,12 @@ function Library:CreateWindow(WindowInfo)
 
         function Tab:Hide()
             TweenService:Create(TabButton, Library.TweenInfo, {
+                BackgroundTransparency = 0.82,
+            }):Play()
+            TweenService:Create(TabButtonStroke, Library.TweenInfo, {
+                Transparency = 0.75,
+            }):Play()
+            TweenService:Create(TabRail, Library.TweenInfo, {
                 BackgroundTransparency = 1,
             }):Play()
             TweenService:Create(TabLabel, Library.TweenInfo, {
@@ -7112,20 +7176,45 @@ function Library:CreateWindow(WindowInfo)
         local TabButton: TextButton
         local TabLabel
         local TabIcon
+        local TabButtonStroke
+        local TabRail
 
         local TabContainer
 
         do
             TabButton = New("TextButton", {
                 BackgroundColor3 = "MainColor",
-                BackgroundTransparency = 1,
-                Size = UDim2.new(1, 0, 0, 40),
+                BackgroundTransparency = 0.82,
+                Size = UDim2.new(1, 0, 0, 38),
                 Text = "",
                 Parent = Tabs,
             })
+            New("UICorner", {
+                CornerRadius = UDim.new(0, WindowInfo.CornerRadius + 1),
+                Parent = TabButton,
+            })
+            Library:MakePanelGradient(TabButton, "MainColor", 90)
+            TabButtonStroke = New("UIStroke", {
+                Color = "OutlineColor",
+                Transparency = 0.75,
+                Parent = TabButton,
+            })
+            Library:RegisterRainbowStroke(TabButtonStroke, "OutlineColor", 0.65)
+            TabRail = New("Frame", {
+                BackgroundColor3 = "AccentColor",
+                BackgroundTransparency = 1,
+                Position = UDim2.fromOffset(5, 7),
+                Size = UDim2.new(0, 3, 1, -14),
+                Parent = TabButton,
+            })
+            New("UICorner", {
+                CornerRadius = UDim.new(1, 0),
+                Parent = TabRail,
+            })
+            Library:MakeAccentGradient(TabRail, 90)
             New("UIPadding", {
                 PaddingBottom = UDim.new(0, 11),
-                PaddingLeft = UDim.new(0, 12),
+                PaddingLeft = UDim.new(0, 15),
                 PaddingRight = UDim.new(0, 12),
                 PaddingTop = UDim.new(0, 11),
                 Parent = TabButton,
@@ -7250,6 +7339,12 @@ function Library:CreateWindow(WindowInfo)
             TweenService:Create(TabLabel, Library.TweenInfo, {
                 TextTransparency = Hovering and 0.25 or 0.5,
             }):Play()
+            TweenService:Create(TabButton, Library.TweenInfo, {
+                BackgroundTransparency = Hovering and 0.58 or 0.82,
+            }):Play()
+            TweenService:Create(TabButtonStroke, Library.TweenInfo, {
+                Transparency = Hovering and 0.45 or 0.75,
+            }):Play()
             if TabIcon then
                 TweenService:Create(TabIcon, Library.TweenInfo, {
                     ImageTransparency = Hovering and 0.25 or 0.5,
@@ -7263,6 +7358,12 @@ function Library:CreateWindow(WindowInfo)
             end
 
             TweenService:Create(TabButton, Library.TweenInfo, {
+                BackgroundTransparency = 0.08,
+            }):Play()
+            TweenService:Create(TabButtonStroke, Library.TweenInfo, {
+                Transparency = 0.12,
+            }):Play()
+            TweenService:Create(TabRail, Library.TweenInfo, {
                 BackgroundTransparency = 0,
             }):Play()
             TweenService:Create(TabLabel, Library.TweenInfo, {
@@ -7280,6 +7381,12 @@ function Library:CreateWindow(WindowInfo)
 
         function Tab:Hide()
             TweenService:Create(TabButton, Library.TweenInfo, {
+                BackgroundTransparency = 0.82,
+            }):Play()
+            TweenService:Create(TabButtonStroke, Library.TweenInfo, {
+                Transparency = 0.75,
+            }):Play()
+            TweenService:Create(TabRail, Library.TweenInfo, {
                 BackgroundTransparency = 1,
             }):Play()
             TweenService:Create(TabLabel, Library.TweenInfo, {

@@ -510,9 +510,11 @@ do
             self.Library:SetFont(Enum.Font[Value])
             self.Library:UpdateColorsUsingRegistry()
         end)
-        self.Library.Options.RainbowBorders:OnChanged(function(Value)
-            self.Library:SetRainbowBorders(Value)
-        end)
+        if self.Library.Toggles and self.Library.Toggles.RainbowBorders then
+            self.Library.Toggles.RainbowBorders:OnChanged(function(Value)
+                self.Library:SetRainbowBorders(Value)
+            end)
+        end
     end
 
     function ThemeManager:CreateGroupBox(tab)

@@ -16542,7 +16542,9 @@ if is_hydroxide_supported_place() then
                             local polled_lives = Get("Lives")
                             if polled_lives then
                                 latest_lives = polled_lives
-                                if previous_lives and polled_lives < previous_lives then
+                                local numeric_polled_lives = tonumber(polled_lives)
+                                local numeric_previous_lives = tonumber(previous_lives)
+                                if numeric_polled_lives and numeric_previous_lives and numeric_polled_lives < numeric_previous_lives then
                                     life_dropped = true
                                     break
                                 end
@@ -16552,7 +16554,9 @@ if is_hydroxide_supported_place() then
                             local current_humanoid = current_character and FindFirstChildOfClass(current_character, "Humanoid")
                             if current_character and FindFirstChild(current_character, "HumanoidRootPart") and current_humanoid and current_humanoid.Health > 0 then
                                 confirmed_respawn = true
-                                if previous_lives and latest_lives and latest_lives >= previous_lives then
+                                local numeric_latest_lives = tonumber(latest_lives)
+                                local numeric_previous_lives = tonumber(previous_lives)
+                                if numeric_latest_lives and numeric_previous_lives and numeric_latest_lives >= numeric_previous_lives then
                                     break
                                 end
                             else
@@ -16622,10 +16626,12 @@ if is_hydroxide_supported_place() then
                             and numeric_after_pd_lives >= numeric_previous_lives
 
                         if confirmed_respawn and (lives_preserved or (not numeric_previous_lives and numeric_after_pd_lives and numeric_after_pd_lives > 0)) then
+                            library:Notify("Lives check passed - continuing trinket bot")
+                            clear_trinket_bot_session_locks()
+                            trinket_bot.path_running = false
                             trinket_bot.death_resume_pending = false
                             mem:SetItem("botstarted", "true")
-                            library:Notify("Lives check passed - continuing trinket bot")
-                            task.wait(1)
+                            task.wait(0.5)
                             ExecutePath(false)
                             return
                         end
@@ -18888,6 +18894,7 @@ if is_hydroxide_supported_place() then
                 restore_bot_state()
 
                 if trinket_bot.death_resume_pending then
+                    release_trinket_execute_lock()
                     library:Notify("Death lives check pending - suppressing completion serverhop")
                     return
                 end
