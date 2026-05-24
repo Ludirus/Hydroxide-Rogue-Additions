@@ -13097,6 +13097,15 @@ if is_hydroxide_supported_place() then
             end
 
             local function trinket_bot_debug_log(step, extra)
+                local step_name = tostring(step)
+                local is_error_step = step_name:find("_ERROR", 1, true) ~= nil
+                    or step_name:find("_FAIL", 1, true) ~= nil
+                    or step_name:find("_ABORT", 1, true) ~= nil
+
+                if not is_error_step then
+                    return
+                end
+
                 if not is_hydroxide_debug_enabled() then
                     return
                 end
@@ -13225,6 +13234,9 @@ if is_hydroxide_supported_place() then
             local droppedTools = {}
             local auto_drop_busy_since = nil
             local AUTO_DROP_BUSY_TIMEOUT = 9
+            local forcefield_exit_in_progress = false
+            local auto_drop_grace_until = 0
+            local active_forcefield_jump_stop = nil
             local try_pop_pd = function() end
 
             trinket_bot.cancel_active_tween = function()
@@ -14067,6 +14079,115 @@ if is_hydroxide_supported_place() then
                 return best.direction, best.clearance
             end
 
+            local function perform_forcefield_jump(character)
+                if not character or not character.Parent then
+                    return
+                end
+
+                local humanoid = FindFirstChildOfClass(character, "Humanoid")
+                if humanoid and humanoid.Health > 0 then
+                    pcall(function()
+                        humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+                        humanoid.Jump = true
+                        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+                    end)
+                end
+
+                if vim then
+                    pcall(function()
+                        vim:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+                        task.wait(0.03)
+                        vim:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+                    end)
+                end
+            end
+
+            local function stop_forcefield_jump_loop(stop_token)
+                if stop_token then
+                    stop_token.done = true
+                end
+                if stop_token == active_forcefield_jump_stop then
+                    active_forcefield_jump_stop = nil
+                end
+            end
+
+            local function start_forcefield_jump_loop(character)
+                if active_forcefield_jump_stop and not active_forcefield_jump_stop.done then
+                    return active_forcefield_jump_stop
+                end
+
+                local stop_token = { done = false }
+                active_forcefield_jump_stop = stop_token
+                task.spawn(function()
+                    while not stop_token.done and character and character.Parent and not shared.is_unloading do
+                        perform_forcefield_jump(character)
+                        task.wait(0.15 + math.random() * 0.15)
+                    end
+                    if active_forcefield_jump_stop == stop_token then
+                        active_forcefield_jump_stop = nil
+                    end
+                end)
+                return stop_token
+            end
+
+            local function get_character_ground_height(character)
+                if not character or not FindFirstChild(character, "HumanoidRootPart") then
+                    return nil
+                end
+
+                local hrp = character.HumanoidRootPart
+                local ray_params = make_character_raycast_params(character)
+                local ground = ws:Raycast(hrp.Position + Vector3.new(0, 2, 0), Vector3.new(0, -60, 0), ray_params)
+                if ground and is_valid_vector3(ground.Position) then
+                    return ground.Position.Y
+                end
+
+                return nil
+            end
+
+            local function is_character_underground(character)
+                if not character or not FindFirstChild(character, "HumanoidRootPart") then
+                    return false
+                end
+
+                local ground_y = get_character_ground_height(character)
+                if not ground_y then
+                    return false
+                end
+
+                return (character.HumanoidRootPart.Position.Y - ground_y) < 2.5
+            end
+
+            local function recover_character_from_underground(character)
+                if not character or not FindFirstChild(character, "HumanoidRootPart") then
+                    return false
+                end
+
+                if not is_character_underground(character) then
+                    return false
+                end
+
+                local hrp = character.HumanoidRootPart
+                local ground_y = get_character_ground_height(character)
+                if not ground_y then
+                    return false
+                end
+
+                local recovered_position = Vector3.new(hrp.Position.X, ground_y + 4.25, hrp.Position.Z)
+                if not is_valid_vector3(recovered_position) or not is_stand_position_clear(recovered_position, character) then
+                    return false
+                end
+
+                if snap_character_to_position(character, recovered_position) then
+                    perform_forcefield_jump(character)
+                    task.wait(0.15)
+                    perform_forcefield_jump(character)
+                    return true
+                end
+
+                return false
+            end
+
             local function try_walk_out_of_forcefield(character, max_seconds)
                 if not character or not FindFirstChild(character, "HumanoidRootPart") then
                     return false
@@ -14083,10 +14204,19 @@ if is_hydroxide_supported_place() then
                     return false
                 end
 
+                local jump_stop = start_forcefield_jump_loop(character)
+                local function finish_walk(success)
+                    stop_forcefield_jump_loop(jump_stop)
+                    if success and character and character.Parent then
+                        recover_character_from_underground(character)
+                    end
+                    return success
+                end
+
                 if not is_character_grounded(character) then
                     task.wait(0.35)
                     if not is_character_grounded(character) then
-                        return false
+                        return finish_walk(false)
                     end
                 end
 
@@ -14098,13 +14228,13 @@ if is_hydroxide_supported_place() then
 
                 local open_direction, clearance = resolve_forcefield_escape_direction(character, nil)
                 if clearance < 2 then
-                    return false
+                    return finish_walk(false)
                 end
 
                 local walk_distance = math.clamp(math.min(clearance - 1.5, 12), 8, 12)
                 local walk_target = hrp.Position + open_direction * walk_distance
                 if not is_valid_vector3(walk_target) then
-                    return false
+                    return finish_walk(false)
                 end
 
                 pcall(function()
@@ -14114,11 +14244,11 @@ if is_hydroxide_supported_place() then
                 local deadline = tick() + math.min(max_seconds, 6)
                 while tick() < deadline and not shared.is_unloading do
                     if not character.Parent or not FindFirstChild(character, "HumanoidRootPart") then
-                        return false
+                        return finish_walk(false)
                     end
 
                     if not FindFirstChildOfClass(character, "ForceField") then
-                        return true
+                        return finish_walk(true)
                     end
 
                     if (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(walk_target.X, 0, walk_target.Z)).Magnitude <= 3 then
@@ -14128,7 +14258,7 @@ if is_hydroxide_supported_place() then
                     task.wait(0.15)
                 end
 
-                return not FindFirstChildOfClass(character, "ForceField")
+                return finish_walk(not FindFirstChildOfClass(character, "ForceField"))
             end
 
             local function find_safe_forcefield_exit_position(character, prefer_direction)
@@ -14170,6 +14300,10 @@ if is_hydroxide_supported_place() then
                     if ground_result and is_valid_vector3(ground_result.Position) then
                         local stand_position = ground_result.Position + Vector3.new(0, 4.25, 0)
                         if not is_valid_vector3(stand_position) then
+                            continue
+                        end
+
+                        if stand_position.Y < ground_result.Position.Y + 3 then
                             continue
                         end
 
@@ -14328,14 +14462,25 @@ if is_hydroxide_supported_place() then
             end
 
             local function clear_spawn_forcefield_for_restart(prefer_direction)
+                forcefield_exit_in_progress = true
+                currently_dropping = false
+                auto_drop_busy_since = nil
+
                 local character = plr.Character
                 if not character or not FindFirstChild(character, "HumanoidRootPart") then
+                    forcefield_exit_in_progress = false
                     return false
                 end
 
+                local jump_stop = start_forcefield_jump_loop(character)
                 local was_path_running = trinket_bot.path_running
                 local function finish(result)
+                    stop_forcefield_jump_loop(jump_stop)
+                    forcefield_exit_in_progress = false
                     destroy_forcefield_escape_platform()
+                    if character and character.Parent then
+                        recover_character_from_underground(character)
+                    end
                     if not was_path_running then
                         trinket_bot.path_running = false
                     end
@@ -14349,8 +14494,6 @@ if is_hydroxide_supported_place() then
                 if not trinket_bot.path_running then
                     trinket_bot.path_running = true
                 end
-
-                trinket_bot_debug_log("FORCEFIELD_EXIT", "walk_first")
 
                 if try_walk_out_of_forcefield(character, 10) then
                     return finish(trinket_bot.wait_for_forcefield_clear(character, 4, true))
@@ -14372,8 +14515,6 @@ if is_hydroxide_supported_place() then
                         continue
                     end
 
-                    trinket_bot_debug_log("FORCEFIELD_EXIT", string.format("teleport_attempt=%d", attempt_index))
-
                     local platform_ray_params = make_character_raycast_params(character, { platform })
                     local ground_result
                     pcall(function()
@@ -14383,16 +14524,21 @@ if is_hydroxide_supported_place() then
                     if ground_result and is_valid_vector3(ground_result.Position) then
                         platform.Position = ground_result.Position + Vector3.new(0, -0.5, 0)
                         safe_position = platform.Position + Vector3.new(0, 4.25, 0)
+                        if safe_position.Y < ground_result.Position.Y + 3 then
+                            continue
+                        end
                     else
                         platform.Position = safe_position + Vector3.new(0, -4.5, 0)
                     end
 
-                    if not is_valid_vector3(safe_position) or not is_stand_position_clear(safe_position, character, { platform }) then
+                    if not is_valid_vector3(safe_position)
+                        or not is_stand_position_clear(safe_position, character, { platform }) then
                         continue
                     end
 
                     SmoothTeleport(safe_position, false, true)
                     task.wait(0.5)
+                    recover_character_from_underground(character)
 
                     if not FindFirstChildOfClass(character, "ForceField") then
                         return finish(trinket_bot.wait_for_forcefield_clear(character, 4, true))
@@ -14415,13 +14561,16 @@ if is_hydroxide_supported_place() then
                 end
 
                 context_label = context_label or "spawn"
+                currently_dropping = false
+                auto_drop_busy_since = nil
                 library:Notify(string.format("Exiting spawn ForceField (%s)...", context_label))
-                trinket_bot_debug_log("FORCEFIELD_EXIT", "context=" .. tostring(context_label))
 
+                local ok_result = false
                 for attempt = 1, 3 do
                     character = plr.Character
                     if not character or not FindFirstChildOfClass(character, "ForceField") then
-                        return true
+                        ok_result = true
+                        break
                     end
 
                     trinket_bot.path_running = true
@@ -14434,11 +14583,13 @@ if is_hydroxide_supported_place() then
                         destroy_forcefield_escape_platform()
                         trinket_bot.cancel_active_tween()
                     elseif result then
-                        return true
+                        ok_result = true
+                        break
                     end
 
                     if not FindFirstChildOfClass(character, "ForceField") then
-                        return true
+                        ok_result = true
+                        break
                     end
 
                     pcall(function()
@@ -14448,7 +14599,10 @@ if is_hydroxide_supported_place() then
                 end
 
                 destroy_forcefield_escape_platform()
-                return not FindFirstChildOfClass(character, "ForceField")
+                if character and character.Parent then
+                    recover_character_from_underground(character)
+                end
+                return ok_result or not FindFirstChildOfClass(character, "ForceField")
             end
 
             local function Gate(where, expected_destination)
@@ -15943,17 +16097,12 @@ if is_hydroxide_supported_place() then
                     return
                 end
 
-                trinket_bot_debug_log(
-                    "EXECUTE_PATH",
-                    string.format(
-                        "test_mode=%s points=%d path=%s resume=%s restart=%s",
-                        tostring(test_mode),
-                        #trinket_bot.path_points,
-                        tostring(trinket_bot.current_path_name),
-                        mem:HasItem("trinket_bot_resume_after_hop") and mem:GetItem("trinket_bot_resume_after_hop") or "nil",
-                        mem:HasItem("trinket_bot_restart_after_hop") and mem:GetItem("trinket_bot_restart_after_hop") or "nil"
-                    )
-                )
+                if is_trinket_bot_executing() then
+                    library:Notify("Trinket bot already running!")
+                    return
+                end
+
+                mark_trinket_bot_executing()
 
                 test_mode = test_mode or false
                 trinket_bot.test_mode = test_mode
@@ -15961,6 +16110,7 @@ if is_hydroxide_supported_place() then
                 droppedTools = {}
                 currently_dropping = false
                 auto_drop_busy_since = nil
+                auto_drop_grace_until = tick() + 30
 
                 local serverhop_count = 0
                 if mem:HasItem("serverhop_count") then
@@ -16011,13 +16161,6 @@ if is_hydroxide_supported_place() then
                     end
                     return
                 end
-
-                if is_trinket_bot_executing() then
-                    library:Notify("Trinket bot already running!")
-                    return
-                end
-
-                mark_trinket_bot_executing()
 
                 local resuming_after_hop = not test_mode
                     and mem:HasItem("trinket_bot_resume_after_hop")
@@ -16981,15 +17124,10 @@ if is_hydroxide_supported_place() then
                 end
 
                 trinket_bot.path_running = true
-                trinket_bot_debug_log(
-                    "PATH_LOOP_START",
-                    string.format(
-                        "points=%d distance_to_p1=%.0f skip_distance=%s",
-                        #trinket_bot.path_points,
-                        distance_to_point_one(),
-                        tostring(trinket_bot.skip_distance_check)
-                    )
-                )
+                if plr.Character then
+                    wait_for_character_grounded(plr.Character, 4)
+                end
+                auto_drop_grace_until = tick() + 2
                 trinket_bot.request_auto_drop_scan("path_loop_start")
 
                 local i = 1
@@ -20565,6 +20703,10 @@ if is_hydroxide_supported_place() then
                 Text = "Start Path",
                 Tooltip = "Requires Blatant Mode to be enabled",
                 Func = function()
+                    if is_trinket_bot_already_active() then
+                        library:Notify("Trinket bot already running!")
+                        return
+                    end
                     task.spawn(ExecutePath, false)
                 end
             })
@@ -20971,12 +21113,16 @@ if is_hydroxide_supported_place() then
             end
 
             trinket_bot.auto_drop_should_defer = function()
-                if not character_has_spawn_forcefield() then
-                    return false
+                if forcefield_exit_in_progress then
+                    return true
                 end
 
-                if trinket_bot.path_running then
-                    return false
+                if tick() < auto_drop_grace_until then
+                    return true
+                end
+
+                if character_has_spawn_forcefield() then
+                    return true
                 end
 
                 if mem:HasItem("trinket_bot_resume_after_hop") and mem:GetItem("trinket_bot_resume_after_hop") == "true" then
@@ -20987,7 +21133,7 @@ if is_hydroxide_supported_place() then
                     return true
                 end
 
-                return true
+                return false
             end
 
             trinket_bot.auto_drop_bot_active = function()
@@ -21021,23 +21167,9 @@ if is_hydroxide_supported_place() then
             end
 
             trinket_bot.auto_drop_names_match = function(item_name, list_name)
-                local normalized_item_name = trinket_bot.normalize_auto_drop_name(item_name)
-                local normalized_list_name = trinket_bot.normalize_auto_drop_name(list_name)
-
-                if normalized_item_name == "" or normalized_list_name == "" then
-                    return false
-                end
-
-                if normalized_item_name == normalized_list_name then
-                    return true
-                end
-
-                if normalized_item_name == "iceessence" or normalized_list_name == "iceessence" then
-                    return normalized_item_name == "iceessence" and normalized_list_name == "iceessence"
-                end
-
                 local item_core_name = trinket_bot.auto_drop_core_name(item_name)
                 local list_core_name = trinket_bot.auto_drop_core_name(list_name)
+
                 if item_core_name == "" or list_core_name == "" then
                     return false
                 end
@@ -21052,17 +21184,26 @@ if is_hydroxide_supported_place() then
                 end
 
                 local dropdown = Options.AutoDropItems
+                local dropdown_value = dropdown.Value
                 local dropdown_values = dropdown.Values
 
-                for key, enabled in pairs(dropdown.Value) do
+                if dropdown_values then
+                    for _, value in ipairs(dropdown_values) do
+                        if dropdown_value[value] == true then
+                            names[value] = true
+                        end
+                    end
+                end
+
+                for key, enabled in pairs(dropdown_value) do
                     local list_name = nil
                     if enabled == true then
-                        if type(key) == "string" then
+                        if type(key) == "string" and dropdown_values and table.find(dropdown_values, key) then
                             list_name = key
                         elseif type(key) == "number" and dropdown_values and dropdown_values[key] then
                             list_name = dropdown_values[key]
                         end
-                    elseif type(enabled) == "string" then
+                    elseif type(enabled) == "string" and dropdown_values and table.find(dropdown_values, enabled) then
                         list_name = enabled
                     end
 
@@ -21097,12 +21238,20 @@ if is_hydroxide_supported_place() then
                     return nil
                 end
 
-                local containers = {plr.Character, plr.Backpack}
+                local expected_core = trinket_bot.auto_drop_core_name(list_name)
+                if expected_core == "" then
+                    return nil
+                end
+
+                local containers = {plr.Backpack, plr.Character}
                 for _, container in ipairs(containers) do
                     if container then
                         for _, tool in ipairs(container:GetChildren()) do
-                            if tool:IsA("Tool") and trinket_bot.auto_drop_names_match(tool.Name, list_name) then
-                                return tool
+                            if tool:IsA("Tool") then
+                                local tool_core = trinket_bot.auto_drop_core_name(tool.Name)
+                                if tool_core ~= "" and tool_core == expected_core then
+                                    return tool
+                                end
                             end
                         end
                     end
@@ -21178,6 +21327,10 @@ if is_hydroxide_supported_place() then
             end
 
             trinket_bot.drop_item = function(item)
+                if trinket_bot.auto_drop_should_defer() then
+                    return
+                end
+
                 if not trinket_bot.auto_drop_bot_active() or not item or not item:IsA("Tool") then
                     return
                 end
@@ -21190,6 +21343,12 @@ if is_hydroxide_supported_place() then
 
                 local live_tool = trinket_bot.find_inventory_tool_for_list_name(matched_list_name)
                 if not live_tool or not live_tool.Parent then
+                    return
+                end
+
+                local expected_core = trinket_bot.auto_drop_core_name(matched_list_name)
+                local tool_core = trinket_bot.auto_drop_core_name(live_tool.Name)
+                if expected_core == "" or tool_core ~= expected_core then
                     return
                 end
 
