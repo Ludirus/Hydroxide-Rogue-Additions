@@ -21044,8 +21044,18 @@ if is_hydroxide_supported_place() then
                 }
 
                 local phoenix_down_pop_in_progress = false
+                local last_one_life_pd_attempt = 0
 
-                local function can_pop_pd(force)
+                local function trinket_bot_running_for_pd()
+                    if trinket_bot.path_running then
+                        return true
+                    end
+
+                    return mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true"
+                end
+
+                local function can_pop_pd(force_reason)
+                    local force = force_reason ~= nil and force_reason ~= false
                     if not force and not (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true") then
                         return false, "bot_not_started"
                     end
@@ -21056,6 +21066,8 @@ if is_hydroxide_supported_place() then
 
                     local lives = Get("Lives")
                     if not lives then return false, "lives_unavailable" end
+                    lives = tonumber(lives)
+                    if not lives then return false, "lives_unavailable" end
 
                     local race = Get("Race")
                     if not race then return false, "race_unavailable" end
@@ -21064,6 +21076,9 @@ if is_hydroxide_supported_place() then
                     if not days_survived then return false, "days_unavailable" end
 
                     local max_lives = lives_table[race] or 3
+                    local one_life_emergency = force_reason == "one_life_emergency"
+                        and lives <= 1
+                        and trinket_bot_running_for_pd()
 
                     if lives >= max_lives then
                         return false, "max_lives"
@@ -21072,7 +21087,7 @@ if is_hydroxide_supported_place() then
                     local last_pd_key = "last_pd_day_" .. plr.UserId
                     if mem:HasItem(last_pd_key) then
                         local last_pd_day = tonumber(mem:GetItem(last_pd_key))
-                        if last_pd_day == days_survived then
+                        if last_pd_day == days_survived and not one_life_emergency then
                             return false, "already_used_today"
                         end
                     end
@@ -21141,12 +21156,11 @@ if is_hydroxide_supported_place() then
                 end
 
                 try_pop_pd = function(force_reason)
-                    local force = force_reason ~= nil and force_reason ~= false
                     if phoenix_down_pop_in_progress then
                         return false, "busy"
                     end
 
-                    local can_pop, current_day_or_reason = can_pop_pd(force)
+                    local can_pop, current_day_or_reason = can_pop_pd(force_reason)
                     if not can_pop then
                         return false, current_day_or_reason
                     end
@@ -21155,6 +21169,7 @@ if is_hydroxide_supported_place() then
                     if not old_lives then
                         return false, "lives_unavailable"
                     end
+                    old_lives = tonumber(old_lives) or old_lives
 
                     local pd = find_phoenix_down_tool(8)
                     if not pd then
@@ -21242,6 +21257,37 @@ if is_hydroxide_supported_place() then
                     while shared and not shared.is_unloading do
                         try_pop_pd()
                         task.wait(15)
+                    end
+                end)
+
+                task.spawn(function()
+                    while shared and not shared.is_unloading do
+                        if trinket_bot_running_for_pd()
+                            and Toggles.AutoPopPDs
+                            and Toggles.AutoPopPDs.Value
+                            and not phoenix_down_pop_in_progress then
+                            local lives = tonumber(Get("Lives"))
+                            if lives and lives <= 1 and tick() - last_one_life_pd_attempt >= 10 then
+                                last_one_life_pd_attempt = tick()
+                                task.spawn(function()
+                                    local ok, popped, status = pcall(function()
+                                        return try_pop_pd("one_life_emergency")
+                                    end)
+
+                                    if not ok then
+                                        pcall(function()
+                                            utility:plain_webhook("@here One-life Phoenix Down emergency errored: " .. tostring(popped))
+                                        end)
+                                    elseif not popped and status ~= "no_phoenix_down" and status ~= "busy" and status ~= "max_lives" then
+                                        pcall(function()
+                                            utility:plain_webhook("@here One-life Phoenix Down emergency did not verify: " .. tostring(status))
+                                        end)
+                                    end
+                                end)
+                            end
+                        end
+
+                        task.wait(1)
                     end
                 end)
             end
