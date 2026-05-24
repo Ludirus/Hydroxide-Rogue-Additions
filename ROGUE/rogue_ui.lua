@@ -16345,6 +16345,33 @@ if is_hydroxide_supported_place() then
                 end
 
                 local handle_death_with_lives_check
+                local death_webhook_sent = false
+                local function send_trinket_bot_death_webhook(previous_lives, context)
+                    if test_mode or death_webhook_sent then
+                        return
+                    end
+
+                    death_webhook_sent = true
+                    pcall(function()
+                        local lives_text = previous_lives and tostring(previous_lives) or "unknown"
+                        local auto_pop_enabled = Toggles.AutoPopPDs and Toggles.AutoPopPDs.Value or false
+                        local lives_check_enabled = Toggles.DeathLivesCheck and Toggles.DeathLivesCheck.Value or false
+                        local path_name = trinket_bot.current_path_name
+                        if not path_name or path_name == "" then
+                            path_name = mem:HasItem("trinket_bot_path") and mem:GetItem("trinket_bot_path") or "unknown"
+                        end
+
+                        utility:plain_webhook(string.format(
+                            "@here bot died (%s) | lives before death: %s | AutoPopPDs=%s | DeathLivesCheck=%s | path=%s",
+                            tostring(context or "trinket bot"),
+                            lives_text,
+                            tostring(auto_pop_enabled),
+                            tostring(lives_check_enabled),
+                            tostring(path_name)
+                        ))
+                    end)
+                end
+
                 local character = plr.Character
                 if character then
                     local humanoid = FindFirstChildOfClass(character, "Humanoid")
@@ -16359,6 +16386,7 @@ if is_hydroxide_supported_place() then
 
                             local previous_lives = Get("Lives")
                             if not test_mode and Toggles.DeathLivesCheck and Toggles.DeathLivesCheck.Value and handle_death_with_lives_check then
+                                send_trinket_bot_death_webhook(previous_lives, "death lives check")
                                 handle_death_with_lives_check(previous_lives)
                                 return
                             end
@@ -16527,10 +16555,19 @@ if is_hydroxide_supported_place() then
 
                         if confirmed_respawn then
                             task.wait(1)
-                            pcall(function()
-                                try_pop_pd()
+                            local pd_call_ok, pd_popped, pd_status = pcall(function()
+                                return try_pop_pd("death_lives_check")
                             end)
-                            task.wait(3)
+                            if not pd_call_ok then
+                                pcall(function()
+                                    utility:plain_webhook("@here Auto Pop Phoenix Down errored after death: " .. tostring(pd_popped))
+                                end)
+                            elseif not pd_popped and pd_status and pd_status ~= "no_phoenix_down" and pd_status ~= "max_lives" then
+                                pcall(function()
+                                    utility:plain_webhook("@here Auto Pop Phoenix Down did not verify after death: " .. tostring(pd_status))
+                                end)
+                            end
+                            task.wait(pd_popped and 1 or 3)
                         end
 
                         local after_pd_lives = Get("Lives") or latest_lives
@@ -21006,114 +21043,193 @@ if is_hydroxide_supported_place() then
                     ["Cameo"] = 9
                 }
 
-                local function can_pop_pd()
-                    if not (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true") then
-                        return false
+                local phoenix_down_pop_in_progress = false
+
+                local function can_pop_pd(force)
+                    if not force and not (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true") then
+                        return false, "bot_not_started"
                     end
 
                     if not (Toggles.AutoPopPDs and Toggles.AutoPopPDs.Value) then
-                        return false
+                        return false, "toggle_disabled"
                     end
 
                     local lives = Get("Lives")
-                    if not lives then return false end
+                    if not lives then return false, "lives_unavailable" end
 
                     local race = Get("Race")
-                    if not race then return false end
+                    if not race then return false, "race_unavailable" end
 
                     local days_survived = Get("DaysSurvived")
-                    if not days_survived then return false end
+                    if not days_survived then return false, "days_unavailable" end
 
                     local max_lives = lives_table[race] or 3
 
                     if lives >= max_lives then
-                        return false
+                        return false, "max_lives"
                     end
 
                     local last_pd_key = "last_pd_day_" .. plr.UserId
                     if mem:HasItem(last_pd_key) then
                         local last_pd_day = tonumber(mem:GetItem(last_pd_key))
                         if last_pd_day == days_survived then
-                            return false
+                            return false, "already_used_today"
                         end
                     end
 
                     return true, days_survived
                 end
 
-                try_pop_pd = function()
-                    local can_pop, current_day = can_pop_pd()
-                    if not can_pop then return end
+                local function find_phoenix_down_tool(timeout)
+                    timeout = timeout or 0
+                    local deadline = tick() + timeout
+
+                    repeat
+                        local backpack = FindFirstChild(plr, "Backpack")
+                        local character = plr.Character
+                        local pd = (backpack and FindFirstChild(backpack, "Phoenix Down")) or (character and FindFirstChild(character, "Phoenix Down"))
+                        if pd and pd:IsA("Tool") then
+                            return pd
+                        end
+
+                        if timeout <= 0 then
+                            break
+                        end
+                        task.wait(0.1)
+                    until tick() >= deadline or shared.is_unloading
+
+                    return nil
+                end
+
+                local function send_phoenix_down_webhook(old_lives, new_lives, status)
+                    local server_name, server_region = get_server_info()
+                    local player_count = #plrs:GetPlayers()
+                    local footer_text
+                    if cheat_client.config.webhook_show_username ~= false then
+                        footer_text = string.format("Players: %d/23 | %s | Job: %s", player_count, plr.Name, game.JobId)
+                    else
+                        footer_text = string.format("Players: %d/23 | Job: %s", player_count, game.JobId)
+                    end
+
+                    local embed = {
+                        title = "Auto Popped Phoenix Down",
+                        description = string.format(
+                            "**Server:** `%s (%s)`\n**Lives:** `%s -> %s`\n**Status:** `%s`",
+                            server_name ~= "" and server_name or "Unknown",
+                            server_region ~= "" and server_region or "Unknown",
+                            tostring(old_lives),
+                            tostring(new_lives),
+                            tostring(status or "verified")
+                        ),
+                        color = 0xFFAE00,
+                        footer = {
+                            text = footer_text
+                        },
+                        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                    }
+
+                    if cheat_client.config.webhook and cheat_client.config.webhook ~= "" then
+                        task.spawn(function()
+                            pcall(function()
+                                HXD_SEND_WEBHOOK(cheat_client.config.webhook, {
+                                    username = cheat_client.config.webhook_username or "bladee",
+                                    embeds = {embed}
+                                })
+                            end)
+                        end)
+                    end
+                end
+
+                try_pop_pd = function(force_reason)
+                    local force = force_reason ~= nil and force_reason ~= false
+                    if phoenix_down_pop_in_progress then
+                        return false, "busy"
+                    end
+
+                    local can_pop, current_day_or_reason = can_pop_pd(force)
+                    if not can_pop then
+                        return false, current_day_or_reason
+                    end
 
                     local old_lives = Get("Lives")
-                    if not old_lives then return end
-
-                    if not plr.Backpack then return end
-                    local pd = FindFirstChild(plr.Backpack, "Phoenix Down") or (plr.Character and FindFirstChild(plr.Character, "Phoenix Down"))
-                    if pd and pd:IsA("Tool") then
-                        local character = plr.Character
-                        if character and FindFirstChild(character, "Humanoid") then
-                            character.Humanoid:EquipTool(pd)
-
-                            task.spawn(function()
-                                local timeout = tick() + 5
-                                while pd.Parent ~= character and tick() < timeout do
-                                    task.wait()
-                                end
-
-                                if pd.Parent == character then
-                                    pd:Activate()
-                                    local last_pd_key = "last_pd_day_" .. plr.UserId
-                                    mem:SetItem(last_pd_key, tostring(current_day))
-
-                                    task.wait(1)
-                                    local new_lives = Get("Lives")
-                                    if new_lives then
-                                        local msg = string.format("Auto Popped Phoenix Down: %d → %d lives", old_lives, new_lives)
-                                        library:Notify(msg)
-                                        local server_name, server_region = get_server_info()
-
-                                        local player_count = #plrs:GetPlayers()
-                                        local footer_text
-                                        if cheat_client.config.webhook_show_username ~= false then
-                                            footer_text = string.format("Players: %d/23 | %s | Job: %s", player_count, plr.Name, game.JobId)
-                                        else
-                                            footer_text = string.format("Players: %d/23 | Job: %s", player_count, game.JobId)
-                                        end
-
-                                        local embed = {
-                                            title = "Auto Popped Phoenix Down",
-                                            description = string.format(
-                                                "**Server:** `%s (%s)`\n**Lives:** `%d → %d`",
-                                                server_name ~= "" and server_name or "Unknown",
-                                                server_region ~= "" and server_region or "Unknown",
-                                                old_lives,
-                                                new_lives
-                                            ),
-                                            color = 0xFFAE00,
-                                            footer = {
-                                                text = footer_text
-                                            },
-                                            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
-                                        }
-
-                                        if cheat_client.config.webhook and cheat_client.config.webhook ~= "" then
-                                            task.spawn(function()
-                                                pcall(function()
-                                                    HXD_SEND_WEBHOOK(cheat_client.config.webhook, {
-                                                        username = cheat_client.config.webhook_username or "bladee",
-                                                        embeds = {embed}
-                                                    })
-                                                end)
-                                            end)
-                                        end
-                                    else
-                                        library:Notify("Used Phoenix Down!")
-                                    end
-                                end
-                            end)
-                        end
+                    if not old_lives then
+                        return false, "lives_unavailable"
                     end
+
+                    local pd = find_phoenix_down_tool(8)
+                    if not pd then
+                        return false, "no_phoenix_down"
+                    end
+
+                    local character = plr.Character
+                    local humanoid = character and FindFirstChildOfClass(character, "Humanoid")
+                    if not character or not humanoid or humanoid.Health <= 0 then
+                        return false, "no_live_character"
+                    end
+
+                    phoenix_down_pop_in_progress = true
+                    local pop_ok, success, status, final_lives = pcall(function()
+                        if pd.Parent ~= character then
+                            humanoid:EquipTool(pd)
+                        end
+
+                        local equip_deadline = tick() + 3
+                        while pd.Parent ~= character and pd.Parent and tick() < equip_deadline and not shared.is_unloading do
+                            task.wait(0.05)
+                        end
+
+                        if pd.Parent ~= character then
+                            return false, "equip_failed", Get("Lives") or old_lives
+                        end
+
+                        local activated = pcall(function()
+                            pd:Activate()
+                        end)
+                        if not activated then
+                            return false, "activate_failed", Get("Lives") or old_lives
+                        end
+
+                        local activated_at = tick()
+                        local verify_deadline = activated_at + 8
+                        local new_lives = old_lives
+                        local consumed = false
+
+                        while tick() < verify_deadline and not shared.is_unloading do
+                            new_lives = Get("Lives") or new_lives
+                            if new_lives and new_lives > old_lives then
+                                return true, "verified", new_lives
+                            end
+
+                            if not find_phoenix_down_tool(0) then
+                                consumed = true
+                                if tick() - activated_at >= 1.5 then
+                                    return true, "consumed", new_lives
+                                end
+                            end
+
+                            task.wait(0.25)
+                        end
+
+                        return false, consumed and "consumed_unverified" or "not_verified", new_lives
+                    end)
+                    phoenix_down_pop_in_progress = false
+
+                    if not pop_ok then
+                        return false, tostring(success)
+                    end
+
+                    if success then
+                        local last_pd_key = "last_pd_day_" .. plr.UserId
+                        mem:SetItem(last_pd_key, tostring(current_day_or_reason))
+
+                        local msg = string.format("Auto Popped Phoenix Down: %s -> %s lives", tostring(old_lives), tostring(final_lives))
+                        library:Notify(msg)
+                        send_phoenix_down_webhook(old_lives, final_lives, status)
+                        return true, status, final_lives
+                    end
+
+                    library:Notify("Phoenix Down pop failed: " .. tostring(status))
+                    return false, status, final_lives
                 end
 
                 pd_char_connection = utility:Connection(plr.CharacterAdded, function(character)
