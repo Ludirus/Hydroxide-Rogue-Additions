@@ -3903,7 +3903,7 @@ if is_hydroxide_supported_place() then
         local loader_url = resolve_repo_file_url(has_entrypoint and entrypoint or "loader.lua")
         local entrypoint_assignment = has_entrypoint and (" getgenv().HYDROXIDE_ENTRYPOINT=" .. lua_string_literal(entrypoint)) or " getgenv().HYDROXIDE_ENTRYPOINT=nil"
         local queue_debug_setup = [[ local hxd_debug=false pcall(function() local lp=game:GetService("Players").LocalPlayer if getgenv and getgenv().HYDROXIDE_DEBUG~=nil then hxd_debug=getgenv().HYDROXIDE_DEBUG==true elseif lp and lp.Name==]] .. lua_string_literal(HYDROXIDE_DEBUG_USER) .. [[ then hxd_debug=true if getgenv then getgenv().HYDROXIDE_DEBUG=true end elseif getgenv then getgenv().HYDROXIDE_DEBUG=false end end) ]]
-        return resume_prefix .. [[if getgenv then getgenv().HYDROXIDE_REPO=]] .. lua_string_literal(repo_url) .. entrypoint_assignment .. [[ end if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1)]] .. queue_debug_setup .. [[local s,code=pcall(function() return game:HttpGet(]] .. lua_string_literal(loader_url) .. [[,true) end) if not s then if hxd_debug then print("[QUEUE ERROR] HttpGet failed:",code) end return end local fn,compileErr=loadstring(code) if not fn then if hxd_debug then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) end return end local ok,runErr=pcall(fn) if not ok and hxd_debug then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
+        return resume_prefix .. [[if getgenv then getgenv().HYDROXIDE_REPO=]] .. lua_string_literal(repo_url) .. entrypoint_assignment .. [[ end if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1)]] .. queue_debug_setup .. [[local loaderUrl=]] .. lua_string_literal(loader_url) .. [[ local sep=loaderUrl:find("?",1,true) and "&" or "?" loaderUrl=loaderUrl..sep.."hxd_t="..tostring(os.time()) local s,code=pcall(function() return game:HttpGet(loaderUrl,true) end) if not s then if hxd_debug then print("[QUEUE ERROR] HttpGet failed:",code) end return end local fn,compileErr=loadstring(code) if not fn then if hxd_debug then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) end return end local ok,runErr=pcall(fn) if not ok and hxd_debug then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
     end
 
     local function queue_hydroxide_loader_for_teleport(resume_payload)
@@ -18727,6 +18727,17 @@ if is_hydroxide_supported_place() then
                     return
                 end
 
+                local completed_entire_path = i > #trinket_bot.path_points
+                    and trinket_bot.path_running
+                    and not trinket_bot.moderator_detected
+                    and not shared.is_unloading
+                local completion_stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                local should_serverhop_after_completion = not test_mode and completed_entire_path and not completion_stay_in_server
+
+                if should_serverhop_after_completion then
+                    stage_trinket_bot_session_for_hop()
+                end
+
                 if auto_trinket_connection then
                     auto_trinket_connection:Disconnect()
                 end
@@ -18803,13 +18814,17 @@ if is_hydroxide_supported_place() then
                 end
 
                 if not test_mode and not mem:HasItem("botstarted") then
-                    trinket_bot.path_running = false
-                    library:Notify("Bot stopped")
-                    return
+                    if should_serverhop_after_completion then
+                        stage_trinket_bot_session_for_hop()
+                    else
+                        trinket_bot.path_running = false
+                        library:Notify("Bot stopped")
+                        return
+                    end
                 end
 
                 if not test_mode then
-                    local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                    local stay_in_server = completion_stay_in_server
 
                     if stay_in_server then
                         library:Notify("Path completed! Waiting at current position...")
@@ -18913,12 +18928,14 @@ if is_hydroxide_supported_place() then
                     else
                         library:Notify("Path completed! Serverhopping...")
                         task.wait(0.5)
+                        stage_trinket_bot_session_for_hop()
+                        trinket_bot.path_running = false
                         if not critical_serverhop_sent then
                             TrinketBotServerhop("Server farmed, serverhopping")
                         else
                             TrinketBotServerhop("Server farmed after critical event, serverhopping")
                         end
-                        trinket_bot.path_running = false
+                        return
                     end
                 else
                     trinket_bot.path_running = false
@@ -23260,7 +23277,16 @@ if is_hydroxide_supported_place() then
 
                         print("\n[Memory Items]")
                         if mem then
-                            local items = {"botstarted", "current_path", "current_point"}
+                            local items = {
+                                "botstarted",
+                                "trinket_bot_path",
+                                "trinket_bot_resume_after_hop",
+                                "trinket_bot_restart_after_hop",
+                                "trinket_bot_restart_reason",
+                                "hydroxide_trinket_session",
+                                "current_path",
+                                "current_point"
+                            }
                             for _, item in ipairs(items) do
                                 if mem:HasItem(item) then
                                     print(string.format("  %s: %s", item, tostring(mem:GetItem(item))))
