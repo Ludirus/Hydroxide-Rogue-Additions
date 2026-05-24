@@ -6078,6 +6078,10 @@ function Library:CreateWindow(WindowInfo)
     local ResizeButton
     local Tabs
     local Container
+    local SidebarScale = 0.255
+    local ContentScale = 1 - SidebarScale
+    local TopbarHeight = 56
+    local FooterHeight = 24
     do
         Library.KeybindFrame, Library.KeybindContainer = Library:AddDraggableMenu("Keybinds")
         Library.KeybindFrame.AnchorPoint = Vector2.new(0, 0.5)
@@ -6118,25 +6122,55 @@ function Library:CreateWindow(WindowInfo)
         })
         Library:MakePanelGradient(MainFrame, "BackgroundColor", 90)
         do
-           local Lines = {
-				{
-					Position = UDim2.fromOffset(0, 48),
-					Size = UDim2.new(1, 0, 0, 1),
-				},
-				{
-					Position = UDim2.fromScale(0.3, 0.08),
-					Size = UDim2.new(0, 1, 0.95, -21),
-				},
-				{
-					AnchorPoint = Vector2.new(0, 1),
-					Position = UDim2.new(0, 0, 1, -20),
-					Size = UDim2.new(1, 0, 0, 1),
-				},
-			}
-			for _, Info in pairs(Lines) do
-				Library:MakeLine(MainFrame, Info)
-			end
-			Library:MakeOutline(MainFrame, WindowInfo.CornerRadius, 0)
+            local Lines = {
+                {
+                    Position = UDim2.fromOffset(0, TopbarHeight),
+                    Size = UDim2.new(1, 0, 0, 1),
+                },
+                {
+                    Position = UDim2.new(SidebarScale, 0, 0, TopbarHeight),
+                    Size = UDim2.new(0, 1, 1, -(TopbarHeight + FooterHeight)),
+                },
+                {
+                    AnchorPoint = Vector2.new(0, 1),
+                    Position = UDim2.new(0, 0, 1, -FooterHeight),
+                    Size = UDim2.new(1, 0, 0, 1),
+                },
+            }
+            for _, Info in pairs(Lines) do
+                Library:MakeLine(MainFrame, Info)
+            end
+            Library:MakeOutline(MainFrame, WindowInfo.CornerRadius, 0)
+
+            local SidebarBackplate = New("Frame", {
+                BackgroundColor3 = "MainColor",
+                BackgroundTransparency = 0.56,
+                Position = UDim2.fromOffset(6, TopbarHeight + 6),
+                Size = UDim2.new(SidebarScale, -12, 1, -(TopbarHeight + FooterHeight + 14)),
+                Parent = MainFrame,
+            })
+            New("UICorner", {
+                CornerRadius = UDim.new(0, WindowInfo.CornerRadius + 1),
+                Parent = SidebarBackplate,
+            })
+            Library:MakePanelGradient(SidebarBackplate, "MainColor", 110)
+            local SidebarStroke = New("UIStroke", {
+                Color = "OutlineColor",
+                Transparency = 0.62,
+                Parent = SidebarBackplate,
+            })
+            Library:RegisterRainbowStroke(SidebarStroke, "OutlineColor", 0.08)
+
+            for Index = 1, 3 do
+                local Stripe = New("Frame", {
+                    BackgroundColor3 = "AccentColor",
+                    BackgroundTransparency = 0.86 + Index * 0.025,
+                    Position = UDim2.new(0, 10 + (Index - 1) * 9, 0, 12),
+                    Size = UDim2.new(0, 1, 1, -24),
+                    Parent = SidebarBackplate,
+                })
+                Library:MakeAccentGradient(Stripe, 90)
+            end
         end
 
         if WindowInfo.BackgroundImage then
@@ -6162,7 +6196,7 @@ function Library:CreateWindow(WindowInfo)
                 return Library:GetBetterColor(Library.Scheme.BackgroundColor, 3)
             end,
             BackgroundTransparency = 0.08,
-            Size = UDim2.new(1, 0, 0, 48),
+            Size = UDim2.new(1, 0, 0, TopbarHeight),
             Parent = MainFrame,
         })
         Library:MakePanelGradient(TopBar, "BackgroundColor", 0)
@@ -6178,10 +6212,36 @@ function Library:CreateWindow(WindowInfo)
 
         --// Title
         local TitleHolder = New("Frame", {
-            BackgroundTransparency = 1,
-            Size = UDim2.new(0.3, -8, 1, 0),
+            BackgroundColor3 = "MainColor",
+            BackgroundTransparency = 0.38,
+            Position = UDim2.fromOffset(8, 8),
+            Size = UDim2.new(SidebarScale, -16, 1, -16),
             Parent = TopBar,
         })
+        New("UICorner", {
+            CornerRadius = UDim.new(0, WindowInfo.CornerRadius + 1),
+            Parent = TitleHolder,
+        })
+        Library:MakePanelGradient(TitleHolder, "MainColor", 0)
+        local TitleStroke = New("UIStroke", {
+            Color = "OutlineColor",
+            Transparency = 0.68,
+            Parent = TitleHolder,
+        })
+        Library:RegisterRainbowStroke(TitleStroke, "OutlineColor", 0.3)
+        local TitleAccent = New("Frame", {
+            AnchorPoint = Vector2.zero,
+            BackgroundColor3 = "AccentColor",
+            BackgroundTransparency = 0.12,
+            Position = UDim2.fromScale(0, 0),
+            Size = UDim2.new(0, 2, 1, -18),
+            Parent = TitleHolder,
+        })
+        New("UICorner", {
+            CornerRadius = UDim.new(1, 0),
+            Parent = TitleAccent,
+        })
+        Library:MakeAccentGradient(TitleAccent, 90)
         New("UIListLayout", {
             FillDirection = Enum.FillDirection.Horizontal,
             HorizontalAlignment = Enum.HorizontalAlignment.Left,
@@ -6190,7 +6250,8 @@ function Library:CreateWindow(WindowInfo)
             Parent = TitleHolder,
         })
         New("UIPadding", {
-            PaddingLeft = UDim.new(0, 8),
+            PaddingLeft = UDim.new(0, 16),
+            PaddingRight = UDim.new(0, 8),
             Parent = TitleHolder,
         })
 
@@ -6221,8 +6282,8 @@ function Library:CreateWindow(WindowInfo)
         local RightWrapper = New("Frame", {
             BackgroundTransparency = 1,
             AnchorPoint = Vector2.new(0, 0.5),
-            Position = UDim2.new(0.3, 0, 0.5, 0),
-            Size = UDim2.new(0.7, -49, 1, -16),
+            Position = UDim2.new(SidebarScale, 0, 0.5, 0),
+            Size = UDim2.new(ContentScale, -49, 1, -16),
             Parent = TopBar,
         })
 
@@ -6237,9 +6298,21 @@ function Library:CreateWindow(WindowInfo)
         CurrentTabInfo = New("Frame", {
             Size = UDim2.fromScale(WindowInfo.DisableSearch and 1 or 0.5, 1),
             Visible = false,
-            BackgroundTransparency = 1,
+            BackgroundColor3 = "MainColor",
+            BackgroundTransparency = 0.52,
             Parent = RightWrapper,
         })
+        New("UICorner", {
+            CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
+            Parent = CurrentTabInfo,
+        })
+        Library:MakePanelGradient(CurrentTabInfo, "MainColor", 0)
+        local CurrentTabStroke = New("UIStroke", {
+            Color = "OutlineColor",
+            Transparency = 0.72,
+            Parent = CurrentTabInfo,
+        })
+        Library:RegisterRainbowStroke(CurrentTabStroke, "OutlineColor", 0.42)
 
         New("UIListLayout", {
             FillDirection = Enum.FillDirection.Vertical,
@@ -6342,7 +6415,7 @@ function Library:CreateWindow(WindowInfo)
                 return Library:GetBetterColor(Library.Scheme.BackgroundColor, 4)
             end,
             Position = UDim2.fromScale(0, 1),
-            Size = UDim2.new(1, 0, 0, 20),
+            Size = UDim2.new(1, 0, 0, FooterHeight),
             Parent = MainFrame,
         })
         do
@@ -6403,25 +6476,55 @@ function Library:CreateWindow(WindowInfo)
         Tabs = New("ScrollingFrame", {
             AutomaticCanvasSize = Enum.AutomaticSize.Y,
             BackgroundColor3 = "BackgroundColor",
+            BackgroundTransparency = 1,
             CanvasSize = UDim2.fromScale(0, 0),
-            Position = UDim2.fromOffset(0, 49),
+            Position = UDim2.fromOffset(0, TopbarHeight + 1),
             ScrollBarThickness = 0,
-            Size = UDim2.new(0.3, 0, 1, -70),
+            Size = UDim2.new(SidebarScale, 0, 1, -(TopbarHeight + FooterHeight + 2)),
             Parent = MainFrame,
         })
         Library:MakePanelGradient(Tabs, "BackgroundColor", 90)
 
         New("UIListLayout", {
-            Padding = UDim.new(0, 4),
+            Padding = UDim.new(0, 6),
             Parent = Tabs,
         })
         New("UIPadding", {
-            PaddingBottom = UDim.new(0, 6),
-            PaddingLeft = UDim.new(0, 6),
-            PaddingRight = UDim.new(0, 6),
-            PaddingTop = UDim.new(0, 6),
+            PaddingBottom = UDim.new(0, 8),
+            PaddingLeft = UDim.new(0, 9),
+            PaddingRight = UDim.new(0, 9),
+            PaddingTop = UDim.new(0, 8),
             Parent = Tabs,
         })
+        local NavChrome = New("Frame", {
+            BackgroundTransparency = 1,
+            LayoutOrder = -100,
+            Size = UDim2.new(1, 0, 0, 13),
+            Parent = Tabs,
+        })
+        local NavLine = New("Frame", {
+            AnchorPoint = Vector2.new(0, 0.5),
+            BackgroundColor3 = "AccentColor",
+            BackgroundTransparency = 0.35,
+            Position = UDim2.new(0, 0, 0.5, 0),
+            Size = UDim2.new(1, -34, 0, 1),
+            Parent = NavChrome,
+        })
+        Library:MakeAccentGradient(NavLine, 0)
+        for Index = 1, 3 do
+            local Dot = New("Frame", {
+                AnchorPoint = Vector2.new(1, 0.5),
+                BackgroundColor3 = Index == 1 and "AccentColor" or "OutlineColor",
+                BackgroundTransparency = Index == 1 and 0.08 or 0.28,
+                Position = UDim2.new(1, -((Index - 1) * 9), 0.5, 0),
+                Size = UDim2.fromOffset(4, 4),
+                Parent = NavChrome,
+            })
+            New("UICorner", {
+                CornerRadius = UDim.new(1, 0),
+                Parent = Dot,
+            })
+        end
 
         --// Container \\--
         Container = New("Frame", {
@@ -6430,8 +6533,8 @@ function Library:CreateWindow(WindowInfo)
                 return Library:GetBetterColor(Library.Scheme.BackgroundColor, 1)
             end,
             Name = "Container",
-            Position = UDim2.new(1, 0, 0, 49),
-            Size = UDim2.new(0.7, -1, 1, -70),
+            Position = UDim2.new(1, 0, 0, TopbarHeight + 1),
+            Size = UDim2.new(ContentScale, -7, 1, -(TopbarHeight + FooterHeight + 2)),
             Parent = MainFrame,
         })
         Library:MakePanelGradient(Container, "BackgroundColor", 90)
@@ -6468,7 +6571,9 @@ function Library:CreateWindow(WindowInfo)
         local TabLabel
         local TabIcon
         local TabButtonStroke
+        local TabGlow
         local TabRail
+        local TabNotch
 
         local TabContainer
         local TabLeft
@@ -6484,8 +6589,8 @@ function Library:CreateWindow(WindowInfo)
         do
             TabButton = New("TextButton", {
                 BackgroundColor3 = "MainColor",
-                BackgroundTransparency = 0.82,
-                Size = UDim2.new(1, 0, 0, 38),
+                BackgroundTransparency = 0.9,
+                Size = UDim2.new(1, 0, 0, 42),
                 Text = "",
                 Parent = Tabs,
             })
@@ -6500,11 +6605,22 @@ function Library:CreateWindow(WindowInfo)
                 Parent = TabButton,
             })
             Library:RegisterRainbowStroke(TabButtonStroke, "OutlineColor", 0.55)
+            TabGlow = New("Frame", {
+                BackgroundColor3 = "AccentColor",
+                BackgroundTransparency = 1,
+                Size = UDim2.fromScale(1, 1),
+                Parent = TabButton,
+            })
+            New("UICorner", {
+                CornerRadius = UDim.new(0, WindowInfo.CornerRadius + 1),
+                Parent = TabGlow,
+            })
+            Library:MakeAccentGradient(TabGlow, 0)
             TabRail = New("Frame", {
                 BackgroundColor3 = "AccentColor",
                 BackgroundTransparency = 1,
-                Position = UDim2.fromOffset(5, 7),
-                Size = UDim2.new(0, 3, 1, -14),
+                Position = UDim2.fromOffset(6, 8),
+                Size = UDim2.new(0, 3, 1, -16),
                 Parent = TabButton,
             })
             New("UICorner", {
@@ -6512,19 +6628,32 @@ function Library:CreateWindow(WindowInfo)
                 Parent = TabRail,
             })
             Library:MakeAccentGradient(TabRail, 90)
+            TabNotch = New("Frame", {
+                AnchorPoint = Vector2.new(1, 0.5),
+                BackgroundColor3 = "AccentColor",
+                BackgroundTransparency = 1,
+                Position = UDim2.new(1, -8, 0.5, 0),
+                Size = UDim2.fromOffset(5, 16),
+                Parent = TabButton,
+            })
+            New("UICorner", {
+                CornerRadius = UDim.new(1, 0),
+                Parent = TabNotch,
+            })
+            Library:MakeAccentGradient(TabNotch, 90)
 
             New("UIPadding", {
                 PaddingBottom = UDim.new(0, 11),
-                PaddingLeft = UDim.new(0, 15),
-                PaddingRight = UDim.new(0, 12),
+                PaddingLeft = UDim.new(0, 17),
+                PaddingRight = UDim.new(0, 18),
                 PaddingTop = UDim.new(0, 11),
                 Parent = TabButton,
             })
 
             TabLabel = New("TextLabel", {
                 BackgroundTransparency = 1,
-                Position = UDim2.fromOffset(30, 0),
-                Size = UDim2.new(1, -30, 1, 0),
+                Position = UDim2.fromOffset(34, 0),
+                Size = UDim2.new(1, -42, 1, 0),
                 Text = Name,
                 TextSize = 16,
                 TextTransparency = 0.5,
@@ -6820,6 +6949,37 @@ function Library:CreateWindow(WindowInfo)
                     Size = UDim2.new(1, -24, 0, 1),
                     Parent = GroupboxHolder,
                 })
+                local HeaderPlate = New("Frame", {
+                    BackgroundColor3 = "MainColor",
+                    BackgroundTransparency = 0.46,
+                    Position = UDim2.fromOffset(6, 6),
+                    Size = UDim2.new(1, -12, 0, 22),
+                    Parent = GroupboxHolder,
+                })
+                New("UICorner", {
+                    CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
+                    Parent = HeaderPlate,
+                })
+                Library:MakePanelGradient(HeaderPlate, "MainColor", 0)
+                local HeaderStroke = New("UIStroke", {
+                    Color = "OutlineColor",
+                    Transparency = 0.78,
+                    Parent = HeaderPlate,
+                })
+                Library:RegisterRainbowStroke(HeaderStroke, "OutlineColor", 0.18)
+                local HeaderTrim = New("Frame", {
+                    AnchorPoint = Vector2.new(1, 0.5),
+                    BackgroundColor3 = "AccentColor",
+                    BackgroundTransparency = 0.28,
+                    Position = UDim2.new(1, -9, 0.5, 0),
+                    Size = UDim2.fromOffset(22, 2),
+                    Parent = HeaderPlate,
+                })
+                New("UICorner", {
+                    CornerRadius = UDim.new(1, 0),
+                    Parent = HeaderTrim,
+                })
+                Library:MakeAccentGradient(HeaderTrim, 0)
 
                 local BoxIcon = Library:GetCustomIcon(Info.IconName)
                 if BoxIcon then
@@ -6963,13 +7123,24 @@ function Library:CreateWindow(WindowInfo)
             function Tabbox:AddTab(Name)
                 local Button = New("TextButton", {
                     BackgroundColor3 = "MainColor",
-                    BackgroundTransparency = 0,
+                    BackgroundTransparency = 0.32,
                     Size = UDim2.fromOffset(0, 34),
                     Text = Name,
                     TextSize = 15,
                     TextTransparency = 0.5,
                     Parent = TabboxButtons,
                 })
+                New("UICorner", {
+                    CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
+                    Parent = Button,
+                })
+                Library:MakePanelGradient(Button, "MainColor", 0)
+                local ButtonStroke = New("UIStroke", {
+                    Color = "OutlineColor",
+                    Transparency = 0.78,
+                    Parent = Button,
+                })
+                Library:RegisterRainbowStroke(ButtonStroke, "OutlineColor", 0.35)
 
                 local Line = Library:MakeLine(Button, {
                     AnchorPoint = Vector2.new(0, 1),
@@ -7010,8 +7181,9 @@ function Library:CreateWindow(WindowInfo)
                         Tabbox.ActiveTab:Hide()
                     end
 
-                    Button.BackgroundTransparency = 1
+                    Button.BackgroundTransparency = 0.02
                     Button.TextTransparency = 0
+                    ButtonStroke.Transparency = 0.28
                     Line.Visible = false
 
                     Container.Visible = true
@@ -7021,8 +7193,9 @@ function Library:CreateWindow(WindowInfo)
                 end
 
                 function Tab:Hide()
-                    Button.BackgroundTransparency = 0
+                    Button.BackgroundTransparency = 0.32
                     Button.TextTransparency = 0.5
+                    ButtonStroke.Transparency = 0.78
                     Line.Visible = true
                     Container.Visible = false
 
@@ -7076,10 +7249,16 @@ function Library:CreateWindow(WindowInfo)
                 TextTransparency = Hovering and 0.25 or 0.5,
             }):Play()
             TweenService:Create(TabButton, Library.TweenInfo, {
-                BackgroundTransparency = Hovering and 0.58 or 0.82,
+                BackgroundTransparency = Hovering and 0.7 or 0.9,
             }):Play()
             TweenService:Create(TabButtonStroke, Library.TweenInfo, {
                 Transparency = Hovering and 0.45 or 0.75,
+            }):Play()
+            TweenService:Create(TabGlow, Library.TweenInfo, {
+                BackgroundTransparency = Hovering and 0.94 or 1,
+            }):Play()
+            TweenService:Create(TabNotch, Library.TweenInfo, {
+                BackgroundTransparency = Hovering and 0.58 or 1,
             }):Play()
             if TabIcon then
                 TweenService:Create(TabIcon, Library.TweenInfo, {
@@ -7094,13 +7273,19 @@ function Library:CreateWindow(WindowInfo)
             end
 
             TweenService:Create(TabButton, Library.TweenInfo, {
-                BackgroundTransparency = 0.08,
+                BackgroundTransparency = 0.18,
             }):Play()
             TweenService:Create(TabButtonStroke, Library.TweenInfo, {
                 Transparency = 0.12,
             }):Play()
+            TweenService:Create(TabGlow, Library.TweenInfo, {
+                BackgroundTransparency = 0.84,
+            }):Play()
             TweenService:Create(TabRail, Library.TweenInfo, {
                 BackgroundTransparency = 0,
+            }):Play()
+            TweenService:Create(TabNotch, Library.TweenInfo, {
+                BackgroundTransparency = 0.14,
             }):Play()
             TweenService:Create(TabLabel, Library.TweenInfo, {
                 TextTransparency = 0,
@@ -7130,12 +7315,18 @@ function Library:CreateWindow(WindowInfo)
 
         function Tab:Hide()
             TweenService:Create(TabButton, Library.TweenInfo, {
-                BackgroundTransparency = 0.82,
+                BackgroundTransparency = 0.9,
             }):Play()
             TweenService:Create(TabButtonStroke, Library.TweenInfo, {
                 Transparency = 0.75,
             }):Play()
+            TweenService:Create(TabGlow, Library.TweenInfo, {
+                BackgroundTransparency = 1,
+            }):Play()
             TweenService:Create(TabRail, Library.TweenInfo, {
+                BackgroundTransparency = 1,
+            }):Play()
+            TweenService:Create(TabNotch, Library.TweenInfo, {
                 BackgroundTransparency = 1,
             }):Play()
             TweenService:Create(TabLabel, Library.TweenInfo, {
@@ -7177,15 +7368,17 @@ function Library:CreateWindow(WindowInfo)
         local TabLabel
         local TabIcon
         local TabButtonStroke
+        local TabGlow
         local TabRail
+        local TabNotch
 
         local TabContainer
 
         do
             TabButton = New("TextButton", {
                 BackgroundColor3 = "MainColor",
-                BackgroundTransparency = 0.82,
-                Size = UDim2.new(1, 0, 0, 38),
+                BackgroundTransparency = 0.9,
+                Size = UDim2.new(1, 0, 0, 42),
                 Text = "",
                 Parent = Tabs,
             })
@@ -7200,11 +7393,22 @@ function Library:CreateWindow(WindowInfo)
                 Parent = TabButton,
             })
             Library:RegisterRainbowStroke(TabButtonStroke, "OutlineColor", 0.65)
+            TabGlow = New("Frame", {
+                BackgroundColor3 = "AccentColor",
+                BackgroundTransparency = 1,
+                Size = UDim2.fromScale(1, 1),
+                Parent = TabButton,
+            })
+            New("UICorner", {
+                CornerRadius = UDim.new(0, WindowInfo.CornerRadius + 1),
+                Parent = TabGlow,
+            })
+            Library:MakeAccentGradient(TabGlow, 0)
             TabRail = New("Frame", {
                 BackgroundColor3 = "AccentColor",
                 BackgroundTransparency = 1,
-                Position = UDim2.fromOffset(5, 7),
-                Size = UDim2.new(0, 3, 1, -14),
+                Position = UDim2.fromOffset(6, 8),
+                Size = UDim2.new(0, 3, 1, -16),
                 Parent = TabButton,
             })
             New("UICorner", {
@@ -7212,18 +7416,31 @@ function Library:CreateWindow(WindowInfo)
                 Parent = TabRail,
             })
             Library:MakeAccentGradient(TabRail, 90)
+            TabNotch = New("Frame", {
+                AnchorPoint = Vector2.new(1, 0.5),
+                BackgroundColor3 = "AccentColor",
+                BackgroundTransparency = 1,
+                Position = UDim2.new(1, -8, 0.5, 0),
+                Size = UDim2.fromOffset(5, 16),
+                Parent = TabButton,
+            })
+            New("UICorner", {
+                CornerRadius = UDim.new(1, 0),
+                Parent = TabNotch,
+            })
+            Library:MakeAccentGradient(TabNotch, 90)
             New("UIPadding", {
                 PaddingBottom = UDim.new(0, 11),
-                PaddingLeft = UDim.new(0, 15),
-                PaddingRight = UDim.new(0, 12),
+                PaddingLeft = UDim.new(0, 17),
+                PaddingRight = UDim.new(0, 18),
                 PaddingTop = UDim.new(0, 11),
                 Parent = TabButton,
             })
 
             TabLabel = New("TextLabel", {
                 BackgroundTransparency = 1,
-                Position = UDim2.fromOffset(30, 0),
-                Size = UDim2.new(1, -30, 1, 0),
+                Position = UDim2.fromOffset(34, 0),
+                Size = UDim2.new(1, -42, 1, 0),
                 Text = Name,
                 TextSize = 16,
                 TextTransparency = 0.5,
@@ -7340,10 +7557,16 @@ function Library:CreateWindow(WindowInfo)
                 TextTransparency = Hovering and 0.25 or 0.5,
             }):Play()
             TweenService:Create(TabButton, Library.TweenInfo, {
-                BackgroundTransparency = Hovering and 0.58 or 0.82,
+                BackgroundTransparency = Hovering and 0.7 or 0.9,
             }):Play()
             TweenService:Create(TabButtonStroke, Library.TweenInfo, {
                 Transparency = Hovering and 0.45 or 0.75,
+            }):Play()
+            TweenService:Create(TabGlow, Library.TweenInfo, {
+                BackgroundTransparency = Hovering and 0.94 or 1,
+            }):Play()
+            TweenService:Create(TabNotch, Library.TweenInfo, {
+                BackgroundTransparency = Hovering and 0.58 or 1,
             }):Play()
             if TabIcon then
                 TweenService:Create(TabIcon, Library.TweenInfo, {
@@ -7358,13 +7581,19 @@ function Library:CreateWindow(WindowInfo)
             end
 
             TweenService:Create(TabButton, Library.TweenInfo, {
-                BackgroundTransparency = 0.08,
+                BackgroundTransparency = 0.18,
             }):Play()
             TweenService:Create(TabButtonStroke, Library.TweenInfo, {
                 Transparency = 0.12,
             }):Play()
+            TweenService:Create(TabGlow, Library.TweenInfo, {
+                BackgroundTransparency = 0.84,
+            }):Play()
             TweenService:Create(TabRail, Library.TweenInfo, {
                 BackgroundTransparency = 0,
+            }):Play()
+            TweenService:Create(TabNotch, Library.TweenInfo, {
+                BackgroundTransparency = 0.14,
             }):Play()
             TweenService:Create(TabLabel, Library.TweenInfo, {
                 TextTransparency = 0,
@@ -7381,12 +7610,18 @@ function Library:CreateWindow(WindowInfo)
 
         function Tab:Hide()
             TweenService:Create(TabButton, Library.TweenInfo, {
-                BackgroundTransparency = 0.82,
+                BackgroundTransparency = 0.9,
             }):Play()
             TweenService:Create(TabButtonStroke, Library.TweenInfo, {
                 Transparency = 0.75,
             }):Play()
+            TweenService:Create(TabGlow, Library.TweenInfo, {
+                BackgroundTransparency = 1,
+            }):Play()
             TweenService:Create(TabRail, Library.TweenInfo, {
+                BackgroundTransparency = 1,
+            }):Play()
+            TweenService:Create(TabNotch, Library.TweenInfo, {
                 BackgroundTransparency = 1,
             }):Play()
             TweenService:Create(TabLabel, Library.TweenInfo, {
