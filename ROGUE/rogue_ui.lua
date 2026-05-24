@@ -12910,11 +12910,16 @@ if is_hydroxide_supported_place() then
                 session_start_time = 0,
                 moderator_detected = false,
                 pending_artifact_logs = {},
-                pending_pickup_ids = {}
+                pending_pickup_ids = {},
+                one_life_cautious = false,
+                one_life_cautious_reason = nil,
+                one_life_cautious_since = nil
             }
 
             cheat_client.trinket_bot = trinket_bot
 
+            local ONE_LIFE_CAUTION_CRITICAL_DISTANCE = 350
+            local ONE_LIFE_CAUTION_PROXIMITY_DISTANCE = 500
             local DEEPFOREST_RESTART_GATE = "Deepforest 5"
             local DEEPFOREST_PREP_MIN_DISTANCE = 600
             local RESTART_AT_POINT_ONE_DISTANCE = 75
@@ -12956,6 +12961,24 @@ if is_hydroxide_supported_place() then
 
                 local path_name = trinket_bot.current_path_name or ""
                 return uploaded_deepforest_restart_path_keys[normalize_trinket_path_name(path_name)] == true
+            end
+
+            local function get_effective_critical_distance(default_value)
+                local configured = Options and Options.CriticalDistance and Options.CriticalDistance.Value or default_value or 0
+                if trinket_bot.one_life_cautious then
+                    return math.max(configured, ONE_LIFE_CAUTION_CRITICAL_DISTANCE)
+                end
+
+                return configured
+            end
+
+            local function get_effective_proximity_distance(default_value)
+                local configured = Options and Options.ProximityCheck and Options.ProximityCheck.Value or default_value or 0
+                if trinket_bot.one_life_cautious then
+                    return math.max(configured, ONE_LIFE_CAUTION_PROXIMITY_DISTANCE)
+                end
+
+                return configured
             end
 
             local function clear_trinket_bot_session_locks()
@@ -15712,8 +15735,8 @@ if is_hydroxide_supported_place() then
                 end
 
                 local root_position = plr.Character.HumanoidRootPart.Position
-                local critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 0
-                local proximity_check_distance = Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                local critical_distance = get_effective_critical_distance(0)
+                local proximity_check_distance = get_effective_proximity_distance(0)
                 local check_distance = math.max(critical_distance, proximity_check_distance)
 
                 if check_distance <= 0 then
@@ -15741,8 +15764,8 @@ if is_hydroxide_supported_place() then
                 end
 
                 local bot_pos = plr.Character.HumanoidRootPart.Position
-                local critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 0
-                local proximity_check_distance = Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                local critical_distance = get_effective_critical_distance(0)
+                local proximity_check_distance = get_effective_proximity_distance(0)
 
                 if critical_distance <= 0 and proximity_check_distance <= 0 then
                     return nil
@@ -15811,8 +15834,8 @@ if is_hydroxide_supported_place() then
                     return false
                 end
 
-                local critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 0
-                local proximity_check_distance = Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                local critical_distance = get_effective_critical_distance(0)
+                local proximity_check_distance = get_effective_proximity_distance(0)
                 local configured_limit = blocker_kind == "critical" and critical_distance or proximity_check_distance
 
                 trinket_bot.path_running = false
@@ -16571,9 +16594,34 @@ if is_hydroxide_supported_place() then
                         end
 
                         local after_pd_lives = Get("Lives") or latest_lives
-                        local lives_preserved = previous_lives and after_pd_lives and after_pd_lives >= previous_lives
+                        local numeric_after_pd_lives = tonumber(after_pd_lives)
+                        local numeric_previous_lives = tonumber(previous_lives)
 
-                        if confirmed_respawn and (lives_preserved or (not previous_lives and after_pd_lives)) then
+                        if numeric_after_pd_lives and numeric_after_pd_lives <= 0 then
+                            trinket_bot.death_resume_pending = false
+                            trinket_bot.path_running = false
+                            pcall(function()
+                                mem:RemoveItem("botstarted")
+                                mem:RemoveItem("trinket_bot_resume_after_hop")
+                                mem:RemoveItem("trinket_bot_restart_after_hop")
+                            end)
+                            pcall(function()
+                                utility:plain_webhook(string.format(
+                                    "@everyone Account has wiped: lives are 0 after death check. Kicking bot. Path: %s | Job: %s",
+                                    tostring(trinket_bot.current_path_name or ""),
+                                    tostring(game.JobId)
+                                ))
+                            end)
+                            task.wait(0.3)
+                            plr:Kick("Account wiped (0 lives)")
+                            return
+                        end
+
+                        local lives_preserved = numeric_previous_lives
+                            and numeric_after_pd_lives
+                            and numeric_after_pd_lives >= numeric_previous_lives
+
+                        if confirmed_respawn and (lives_preserved or (not numeric_previous_lives and numeric_after_pd_lives and numeric_after_pd_lives > 0)) then
                             trinket_bot.death_resume_pending = false
                             mem:SetItem("botstarted", "true")
                             library:Notify("Lives check passed - continuing trinket bot")
@@ -16728,7 +16776,7 @@ if is_hydroxide_supported_place() then
                 end
 
                 local function get_proximity_distance()
-                    return Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                    return get_effective_proximity_distance(0)
                 end
 
                 local function emergency_path_traverse(current_pos, player_name)
@@ -16880,7 +16928,7 @@ if is_hydroxide_supported_place() then
                 proximity_connection = track_connection("proximity", utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
                     if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
                         local bot_pos = plr.Character.HumanoidRootPart.Position
-                        local critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 60
+                        local critical_distance = get_effective_critical_distance(60)
                         local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
 
                         if critical_distance > 0 and not critical_serverhop_sent and not stay_in_server then
@@ -17409,7 +17457,7 @@ if is_hydroxide_supported_place() then
 
                                 local CollectionService = Services.CollectionService
                                 if plr.Character and CollectionService:HasTag(plr.Character, "SnapCool") then
-                                    local critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 60
+                                    local critical_distance = get_effective_critical_distance(60)
                                     local player_in_critical_range = false
                                     local closest_player_dist = math.huge
 
@@ -17976,7 +18024,7 @@ if is_hydroxide_supported_place() then
                                 else
                                     if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
                                         local bot_pos = plr.Character.HumanoidRootPart.Position
-                                        local critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 60
+                                        local critical_distance = get_effective_critical_distance(60)
                                         local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
 
                                         if critical_distance > 0 and not stay_in_server then
@@ -20014,7 +20062,7 @@ if is_hydroxide_supported_place() then
                                                     library:Notify(string.format("Resuming after serverhop - continuing from saved position (closest point %d)", closest_point_index))
                                                     task.wait(1)
 
-                                                    local proximity_check_distance = Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                                                    local proximity_check_distance = get_effective_proximity_distance(0)
                                                     if proximity_check_distance > 0 and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
                                                         local char_pos = plr.Character.HumanoidRootPart.Position
 
@@ -20112,7 +20160,7 @@ if is_hydroxide_supported_place() then
                                                         library:Notify(string.format("Resuming after serverhop (no saved position) - gating to last gate point %d", last_gate_index))
                                                         task.wait(1)
 
-                                                        local proximity_check_distance = Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                                                        local proximity_check_distance = get_effective_proximity_distance(0)
                                                         if proximity_check_distance > 0 and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
                                                             local char_pos = plr.Character.HumanoidRootPart.Position
 
@@ -20253,7 +20301,7 @@ if is_hydroxide_supported_place() then
                                                 library:Notify(string.format("Far recovery with saved position - closest point %d is %.1f studs from saved pos", saved_closest_idx, saved_closest_dist))
                                                 task.wait(1)
 
-                                                local prox_check_dist = Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                                                local prox_check_dist = get_effective_proximity_distance(0)
                                                 if prox_check_dist > 0 and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
                                                     local char_pos = plr.Character.HumanoidRootPart.Position
                                                     for _, other_player in next, plrs:GetPlayers() do
@@ -20353,7 +20401,7 @@ if is_hydroxide_supported_place() then
                                                     library:Notify(string.format("Far from path recovery - respawning before gating to last gate point %d", recovery_gate_index))
                                                     task.wait(1)
 
-                                                    local prox_check_dist = Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                                                    local prox_check_dist = get_effective_proximity_distance(0)
                                                     if prox_check_dist > 0 and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
                                                         local char_pos = plr.Character.HumanoidRootPart.Position
 
@@ -21045,6 +21093,8 @@ if is_hydroxide_supported_place() then
 
                 local phoenix_down_pop_in_progress = false
                 local last_one_life_pd_attempt = 0
+                local last_one_life_caution_webhook = 0
+                local zero_life_wipe_handled = false
 
                 local function trinket_bot_running_for_pd()
                     if trinket_bot.path_running then
@@ -21074,11 +21124,9 @@ if is_hydroxide_supported_place() then
 
                     local days_survived = Get("DaysSurvived")
                     if not days_survived then return false, "days_unavailable" end
+                    local days_survived_key = tostring(days_survived)
 
                     local max_lives = lives_table[race] or 3
-                    local one_life_emergency = force_reason == "one_life_emergency"
-                        and lives <= 1
-                        and trinket_bot_running_for_pd()
 
                     if lives >= max_lives then
                         return false, "max_lives"
@@ -21086,13 +21134,13 @@ if is_hydroxide_supported_place() then
 
                     local last_pd_key = "last_pd_day_" .. plr.UserId
                     if mem:HasItem(last_pd_key) then
-                        local last_pd_day = tonumber(mem:GetItem(last_pd_key))
-                        if last_pd_day == days_survived and not one_life_emergency then
+                        local last_pd_day = tostring(mem:GetItem(last_pd_key))
+                        if last_pd_day == days_survived_key then
                             return false, "already_used_today"
                         end
                     end
 
-                    return true, days_survived
+                    return true, days_survived_key
                 end
 
                 local function find_phoenix_down_tool(timeout)
@@ -21155,6 +21203,84 @@ if is_hydroxide_supported_place() then
                     end
                 end
 
+                local function send_one_life_caution_webhook(reason)
+                    local now = tick()
+                    if now - last_one_life_caution_webhook < 120 then
+                        return
+                    end
+
+                    last_one_life_caution_webhook = now
+                    local server_name, server_region = get_server_info()
+                    pcall(function()
+                        if utility and utility.plain_webhook then
+                            utility:plain_webhook(string.format(
+                                "@here Account is 1 life and Phoenix Down cannot be used (%s). Continuing trinket path in cautious mode. Server: %s (%s) | Path: %s | Job: %s",
+                                tostring(reason or "unknown"),
+                                server_name ~= "" and server_name or "Unknown",
+                                server_region ~= "" and server_region or "Unknown",
+                                tostring(trinket_bot.current_path_name or ""),
+                                tostring(game.JobId)
+                            ))
+                        end
+                    end)
+                end
+
+                local function enter_one_life_cautious_mode(reason)
+                    reason = tostring(reason or "Phoenix Down unavailable")
+                    if not trinket_bot.one_life_cautious then
+                        library:Notify("One-life cautious mode enabled: " .. reason)
+                    end
+
+                    trinket_bot.one_life_cautious = true
+                    trinket_bot.one_life_cautious_reason = reason
+                    trinket_bot.one_life_cautious_since = trinket_bot.one_life_cautious_since or tick()
+                    send_one_life_caution_webhook(reason)
+                end
+
+                local function clear_one_life_cautious_mode()
+                    if trinket_bot.one_life_cautious then
+                        library:Notify("One-life cautious mode cleared")
+                    end
+
+                    trinket_bot.one_life_cautious = false
+                    trinket_bot.one_life_cautious_reason = nil
+                    trinket_bot.one_life_cautious_since = nil
+                end
+
+                local function handle_zero_life_wipe()
+                    if zero_life_wipe_handled then
+                        return
+                    end
+
+                    zero_life_wipe_handled = true
+                    trinket_bot.path_running = false
+                    clear_one_life_cautious_mode()
+
+                    pcall(function()
+                        mem:RemoveItem("botstarted")
+                        mem:RemoveItem("trinket_bot_resume_after_hop")
+                        mem:RemoveItem("trinket_bot_restart_after_hop")
+                    end)
+
+                    local server_name, server_region = get_server_info()
+                    pcall(function()
+                        if utility and utility.plain_webhook then
+                            utility:plain_webhook(string.format(
+                                "@everyone Account has wiped: lives are 0. Kicking bot. Server: %s (%s) | Path: %s | Job: %s",
+                                server_name ~= "" and server_name or "Unknown",
+                                server_region ~= "" and server_region or "Unknown",
+                                tostring(trinket_bot.current_path_name or ""),
+                                tostring(game.JobId)
+                            ))
+                        end
+                    end)
+
+                    task.wait(0.5)
+                    pcall(function()
+                        plr:Kick("Account wiped (0 lives)")
+                    end)
+                end
+
                 try_pop_pd = function(force_reason)
                     if phoenix_down_pop_in_progress then
                         return false, "busy"
@@ -21210,8 +21336,11 @@ if is_hydroxide_supported_place() then
                         local consumed = false
 
                         while tick() < verify_deadline and not shared.is_unloading do
-                            new_lives = Get("Lives") or new_lives
-                            if new_lives and new_lives > old_lives then
+                            local live_value = Get("Lives")
+                            new_lives = tonumber(live_value) or live_value or new_lives
+                            local numeric_new_lives = tonumber(new_lives)
+                            local numeric_old_lives = tonumber(old_lives)
+                            if numeric_new_lives and numeric_old_lives and numeric_new_lives > numeric_old_lives then
                                 return true, "verified", new_lives
                             end
 
@@ -21262,28 +21391,49 @@ if is_hydroxide_supported_place() then
 
                 task.spawn(function()
                     while shared and not shared.is_unloading do
-                        if trinket_bot_running_for_pd()
-                            and Toggles.AutoPopPDs
-                            and Toggles.AutoPopPDs.Value
-                            and not phoenix_down_pop_in_progress then
+                        if trinket_bot_running_for_pd() then
                             local lives = tonumber(Get("Lives"))
-                            if lives and lives <= 1 and tick() - last_one_life_pd_attempt >= 10 then
-                                last_one_life_pd_attempt = tick()
-                                task.spawn(function()
-                                    local ok, popped, status = pcall(function()
-                                        return try_pop_pd("one_life_emergency")
-                                    end)
+                            if lives and lives <= 0 then
+                                handle_zero_life_wipe()
+                                break
+                            end
 
-                                    if not ok then
-                                        pcall(function()
-                                            utility:plain_webhook("@here One-life Phoenix Down emergency errored: " .. tostring(popped))
-                                        end)
-                                    elseif not popped and status ~= "no_phoenix_down" and status ~= "busy" and status ~= "max_lives" then
-                                        pcall(function()
-                                            utility:plain_webhook("@here One-life Phoenix Down emergency did not verify: " .. tostring(status))
-                                        end)
-                                    end
+                            if lives and lives > 1 then
+                                clear_one_life_cautious_mode()
+                            elseif lives
+                                and lives <= 1
+                                and Toggles.AutoPopPDs
+                                and Toggles.AutoPopPDs.Value
+                                and not phoenix_down_pop_in_progress
+                                and tick() - last_one_life_pd_attempt >= 10 then
+                                last_one_life_pd_attempt = tick()
+
+                                local ok, popped, status, final_lives = pcall(function()
+                                    return try_pop_pd("one_life_emergency")
                                 end)
+
+                                if not ok then
+                                    local error_message = tostring(popped)
+                                    enter_one_life_cautious_mode("Phoenix Down error: " .. error_message)
+                                    pcall(function()
+                                        if utility and utility.plain_webhook then
+                                            utility:plain_webhook("@here One-life Phoenix Down emergency errored: " .. error_message)
+                                        end
+                                    end)
+                                elseif popped then
+                                    local recovered_lives = tonumber(final_lives)
+                                    if recovered_lives and recovered_lives > 1 then
+                                        clear_one_life_cautious_mode()
+                                    else
+                                        enter_one_life_cautious_mode("Phoenix Down used but lives still 1")
+                                    end
+                                elseif status == "already_used_today" then
+                                    enter_one_life_cautious_mode("Phoenix Down already used today")
+                                elseif status == "no_phoenix_down" then
+                                    enter_one_life_cautious_mode("no Phoenix Down available")
+                                elseif status ~= "busy" and status ~= "max_lives" then
+                                    enter_one_life_cautious_mode("Phoenix Down unavailable: " .. tostring(status))
+                                end
                             end
                         end
 
