@@ -1614,21 +1614,21 @@ function Library:MakeLine(Frame: GuiObject, Info)
 end
 
 function Library:MakeOutline(Frame: GuiObject, Corner: number?, ZIndex: number?)
-    local Shadow = New("Frame", {
-        BackgroundColor3 = "Dark",
-        BackgroundTransparency = 0.38,
-        Position = UDim2.fromOffset(1, 2),
-        Size = UDim2.new(1, 6, 1, 6),
-        ZIndex = ZIndex and math.max(ZIndex - 1, 0) or nil,
-        Parent = Frame,
-    })
-
     local Holder = New("Frame", {
         BackgroundColor3 = "Dark",
         Position = UDim2.fromOffset(-2, -2),
         Size = UDim2.new(1, 4, 1, 4),
         ZIndex = ZIndex,
         Parent = Frame,
+    })
+
+    local Shadow = New("Frame", {
+        BackgroundColor3 = "Dark",
+        BackgroundTransparency = 0.62,
+        Position = UDim2.fromOffset(3, 4),
+        Size = UDim2.fromScale(1, 1),
+        ZIndex = ZIndex,
+        Parent = Holder,
     })
 
     local Outline = New("Frame", {
