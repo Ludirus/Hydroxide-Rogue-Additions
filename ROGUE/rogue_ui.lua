@@ -13229,15 +13229,31 @@ if is_hydroxide_supported_place() then
             local collected_trinket_ids = {}
             local COLLECTED_IDS_MAX_SIZE = 500
             local pending_pickup_ids = trinket_bot.pending_pickup_ids
-            local active_tween_data = {tween = nil, connection = nil}
+            local active_tween_data = {tween = nil, connection = nil, collision_states = nil}
             local currently_dropping = false
             local droppedTools = {}
             local auto_drop_busy_since = nil
-            local AUTO_DROP_BUSY_TIMEOUT = 9
+            local AUTO_DROP_BUSY_TIMEOUT = nil
             local forcefield_exit_in_progress = false
             local auto_drop_grace_until = 0
             local active_forcefield_jump_stop = nil
             local try_pop_pd = function() end
+
+            local function restore_active_tween_collision()
+                local collision_states = active_tween_data.collision_states
+                if not collision_states then
+                    return
+                end
+
+                active_tween_data.collision_states = nil
+                for part, can_collide in pairs(collision_states) do
+                    if part and part.Parent then
+                        pcall(function()
+                            part.CanCollide = can_collide
+                        end)
+                    end
+                end
+            end
 
             trinket_bot.cancel_active_tween = function()
                 if active_tween_data.tween then
@@ -13253,6 +13269,8 @@ if is_hydroxide_supported_place() then
                     end)
                     active_tween_data.connection = nil
                 end
+
+                restore_active_tween_collision()
             end
 
             trinket_bot.wait_for_drop = function(context)
@@ -13712,6 +13730,7 @@ if is_hydroxide_supported_place() then
                 trinket_bot.cancel_active_tween()
 
                 local use_path_noclip = not allow_without_path_running
+                active_tween_data.collision_states = use_path_noclip and {} or nil
 
                 local character = plr.Character
                 if character then
@@ -13744,6 +13763,9 @@ if is_hydroxide_supported_place() then
                         for _, v in pairs(active_character:GetDescendants()) do
                             if v:IsA("BasePart") then
                                 pcall(function()
+                                    if active_tween_data.collision_states and active_tween_data.collision_states[v] == nil then
+                                        active_tween_data.collision_states[v] = v.CanCollide
+                                    end
                                     v.Velocity = Vector3.zero
                                     v.AssemblyLinearVelocity = Vector3.zero
                                     v.AssemblyAngularVelocity = Vector3.zero
@@ -13778,6 +13800,7 @@ if is_hydroxide_supported_place() then
                     end
                     active_tween_data.tween = nil
                     active_tween_data.connection = nil
+                    restore_active_tween_collision()
                     warn("SmoothTeleport tween failed:", tween_err)
                     return false
                 end
@@ -13844,6 +13867,7 @@ if is_hydroxide_supported_place() then
 
                 active_tween_data.tween = nil
                 active_tween_data.connection = nil
+                restore_active_tween_collision()
 
                 if not root or not root.Parent then
                     return false
@@ -14079,6 +14103,8 @@ if is_hydroxide_supported_place() then
                 return best.direction, best.clearance
             end
 
+            local snap_character_to_position
+
             local function perform_forcefield_jump(character)
                 if not character or not character.Parent then
                     return
@@ -14137,7 +14163,7 @@ if is_hydroxide_supported_place() then
 
                 local hrp = character.HumanoidRootPart
                 local ray_params = make_character_raycast_params(character)
-                local ground = ws:Raycast(hrp.Position + Vector3.new(0, 2, 0), Vector3.new(0, -60, 0), ray_params)
+                local ground = ws:Raycast(hrp.Position + Vector3.new(0, 8, 0), Vector3.new(0, -120, 0), ray_params)
                 if ground and is_valid_vector3(ground.Position) then
                     return ground.Position.Y
                 end
@@ -14155,7 +14181,7 @@ if is_hydroxide_supported_place() then
                     return false
                 end
 
-                return (character.HumanoidRootPart.Position.Y - ground_y) < 2.5
+                return (character.HumanoidRootPart.Position.Y - ground_y) < 3
             end
 
             local function recover_character_from_underground(character)
@@ -14173,7 +14199,7 @@ if is_hydroxide_supported_place() then
                     return false
                 end
 
-                local recovered_position = Vector3.new(hrp.Position.X, ground_y + 4.25, hrp.Position.Z)
+                local recovered_position = Vector3.new(hrp.Position.X, ground_y + 5.25, hrp.Position.Z)
                 if not is_valid_vector3(recovered_position) or not is_stand_position_clear(recovered_position, character) then
                     return false
                 end
@@ -14365,7 +14391,7 @@ if is_hydroxide_supported_place() then
                 return flat.Unit
             end
 
-            local function snap_character_to_position(character, position)
+            snap_character_to_position = function(character, position)
                 if not character or not FindFirstChild(character, "HumanoidRootPart") then
                     return false
                 end
@@ -14378,7 +14404,12 @@ if is_hydroxide_supported_place() then
                 local ok = pcall(function()
                     hrp.AssemblyLinearVelocity = Vector3.zero
                     hrp.AssemblyAngularVelocity = Vector3.zero
-                    hrp.CFrame = CFrame.new(position)
+                    local humanoid = FindFirstChildOfClass(character, "Humanoid")
+                    if humanoid then
+                        humanoid.PlatformStand = false
+                        humanoid.Sit = false
+                    end
+                    character:PivotTo(CFrame.new(position))
                 end)
                 return ok
             end
@@ -19295,7 +19326,7 @@ if is_hydroxide_supported_place() then
                     "Scroll of Telorum"
                 },
                 Multi = true,
-                Default = 1,
+                Default = {},
                 Tooltip = "Select items to automatically drop during botting"
             })
 
@@ -21107,7 +21138,7 @@ if is_hydroxide_supported_place() then
                     return
                 end
 
-                if auto_drop_busy_since and tick() - auto_drop_busy_since >= AUTO_DROP_BUSY_TIMEOUT then
+                if AUTO_DROP_BUSY_TIMEOUT and auto_drop_busy_since and tick() - auto_drop_busy_since >= AUTO_DROP_BUSY_TIMEOUT then
                     clear_auto_drop_busy_state()
                 end
             end
@@ -21152,6 +21183,11 @@ if is_hydroxide_supported_place() then
                 return tostring(item_name or ""):lower():gsub("[^%w]", "")
             end
 
+            local AUTO_DROP_SCROLL_CORES = {
+                trahere = true,
+                telorum = true,
+            }
+
             trinket_bot.auto_drop_core_name = function(item_name)
                 local normalized_name = trinket_bot.normalize_auto_drop_name(item_name)
                 if normalized_name == "" then
@@ -21166,6 +21202,47 @@ if is_hydroxide_supported_place() then
                 return normalized_name
             end
 
+            trinket_bot.get_tool_auto_drop_cores = function(tool)
+                local cores = {}
+                local seen = {}
+
+                local function add_candidate(candidate)
+                    local core = trinket_bot.auto_drop_core_name(candidate)
+                    if core ~= "" and not seen[core] then
+                        seen[core] = true
+                        table.insert(cores, core)
+                    end
+                end
+
+                if not tool or not tool:IsA("Tool") then
+                    return cores
+                end
+
+                add_candidate(tool.Name)
+
+                local spell_marker = FindFirstChild(tool, "Spell")
+                if spell_marker then
+                    if spell_marker:IsA("StringValue") and spell_marker.Value ~= "" then
+                        add_candidate(spell_marker.Value)
+                        add_candidate("Scroll of " .. spell_marker.Value)
+                    end
+                    if spell_marker.Name and spell_marker.Name ~= "Spell" then
+                        add_candidate(spell_marker.Name)
+                        add_candidate("Scroll of " .. spell_marker.Name)
+                    end
+                end
+
+                local ok_attribute, attribute_spell = pcall(function()
+                    return tool:GetAttribute("Spell")
+                end)
+                if ok_attribute and attribute_spell then
+                    add_candidate(attribute_spell)
+                    add_candidate("Scroll of " .. tostring(attribute_spell))
+                end
+
+                return cores
+            end
+
             trinket_bot.auto_drop_names_match = function(item_name, list_name)
                 local item_core_name = trinket_bot.auto_drop_core_name(item_name)
                 local list_core_name = trinket_bot.auto_drop_core_name(list_name)
@@ -21177,6 +21254,31 @@ if is_hydroxide_supported_place() then
                 return item_core_name == list_core_name
             end
 
+            trinket_bot.auto_drop_tool_matches_list = function(tool, list_name)
+                local expected_core = trinket_bot.auto_drop_core_name(list_name)
+                if expected_core == "" then
+                    return false
+                end
+
+                local tool_cores = trinket_bot.get_tool_auto_drop_cores(tool)
+                if AUTO_DROP_SCROLL_CORES[expected_core] then
+                    for _, tool_core in ipairs(tool_cores) do
+                        if tool_core == expected_core then
+                            return true
+                        end
+                    end
+                    return false
+                end
+
+                for _, tool_core in ipairs(tool_cores) do
+                    if tool_core == expected_core then
+                        return true
+                    end
+                end
+
+                return false
+            end
+
             trinket_bot.get_auto_drop_list_names = function()
                 local names = {}
                 if not (Options.AutoDropItems and Options.AutoDropItems.Value) then
@@ -21186,6 +21288,13 @@ if is_hydroxide_supported_place() then
                 local dropdown = Options.AutoDropItems
                 local dropdown_value = dropdown.Value
                 local dropdown_values = dropdown.Values
+
+                if type(dropdown_value) ~= "table" then
+                    if type(dropdown_value) == "string" and dropdown_values and table.find(dropdown_values, dropdown_value) then
+                        names[dropdown_value] = true
+                    end
+                    return names
+                end
 
                 if dropdown_values then
                     for _, value in ipairs(dropdown_values) do
@@ -21200,8 +21309,6 @@ if is_hydroxide_supported_place() then
                     if enabled == true then
                         if type(key) == "string" and dropdown_values and table.find(dropdown_values, key) then
                             list_name = key
-                        elseif type(key) == "number" and dropdown_values and dropdown_values[key] then
-                            list_name = dropdown_values[key]
                         end
                     elseif type(enabled) == "string" and dropdown_values and table.find(dropdown_values, enabled) then
                         list_name = enabled
@@ -21229,6 +21336,20 @@ if is_hydroxide_supported_place() then
                 return nil
             end
 
+            trinket_bot.get_auto_drop_list_name_for_tool = function(tool)
+                if not tool or not tool:IsA("Tool") then
+                    return nil
+                end
+
+                for dropdown_name, _ in pairs(trinket_bot.get_auto_drop_list_names()) do
+                    if trinket_bot.auto_drop_tool_matches_list(tool, dropdown_name) then
+                        return dropdown_name
+                    end
+                end
+
+                return nil
+            end
+
             trinket_bot.should_auto_drop_item_name = function(item_name)
                 return trinket_bot.get_auto_drop_list_name_for_item(item_name) ~= nil
             end
@@ -21247,11 +21368,8 @@ if is_hydroxide_supported_place() then
                 for _, container in ipairs(containers) do
                     if container then
                         for _, tool in ipairs(container:GetChildren()) do
-                            if tool:IsA("Tool") then
-                                local tool_core = trinket_bot.auto_drop_core_name(tool.Name)
-                                if tool_core ~= "" and tool_core == expected_core then
-                                    return tool
-                                end
+                            if tool:IsA("Tool") and trinket_bot.auto_drop_tool_matches_list(tool, list_name) then
+                                return tool
                             end
                         end
                     end
@@ -21336,7 +21454,7 @@ if is_hydroxide_supported_place() then
                 end
 
                 local item_name = item.Name
-                local matched_list_name = trinket_bot.get_auto_drop_list_name_for_item(item_name)
+                local matched_list_name = trinket_bot.get_auto_drop_list_name_for_tool(item)
                 if not matched_list_name then
                     return
                 end
@@ -21347,8 +21465,7 @@ if is_hydroxide_supported_place() then
                 end
 
                 local expected_core = trinket_bot.auto_drop_core_name(matched_list_name)
-                local tool_core = trinket_bot.auto_drop_core_name(live_tool.Name)
-                if expected_core == "" or tool_core ~= expected_core then
+                if expected_core == "" or not trinket_bot.auto_drop_tool_matches_list(live_tool, matched_list_name) then
                     return
                 end
 
@@ -21387,19 +21504,17 @@ if is_hydroxide_supported_place() then
                 droppedTools[drop_keys[3]] = true
                 droppedTools[drop_keys[4]] = true
                 trinket_bot.cancel_active_tween()
+                local drop_character = plr.Character
+                if drop_character and not FindFirstChildOfClass(drop_character, "ForceField") then
+                    recover_character_from_underground(drop_character)
+                end
                 library:Notify(string.format("Auto-dropping %s", item_name))
 
                 local drop_verified = false
                 local attempts = 0
                 local sent_failure_alert = false
-                local drop_timed_out = false
 
                 while trinket_bot.auto_drop_bot_active() and not shared.is_unloading do
-                    if auto_drop_busy_since and tick() - auto_drop_busy_since >= AUTO_DROP_BUSY_TIMEOUT then
-                        drop_timed_out = true
-                        break
-                    end
-
                     local current_item = trinket_bot.find_inventory_tool_for_list_name(matched_list_name)
                     if not current_item then
                         drop_verified = true
@@ -21464,10 +21579,7 @@ if is_hydroxide_supported_place() then
                     end
                 end
 
-                if drop_timed_out then
-                    library:Notify(string.format("Auto-drop timed out for %s; resuming scans", item_name))
-                    clear_auto_drop_busy_state(drop_keys)
-                elseif drop_verified then
+                if drop_verified then
                     library:Notify(string.format("Dropped %s", item_name))
                     trinket_bot.wait_for_drop_danger_clear(item_name)
                     trinket_bot.request_auto_drop_scan("post_drop")
@@ -21516,7 +21628,7 @@ if is_hydroxide_supported_place() then
 
                     task.wait(0.05)
 
-                    if trinket_bot.should_auto_drop_item_name(obj.Name) then
+                    if trinket_bot.get_auto_drop_list_name_for_tool(obj) then
                         task.spawn(trinket_bot.drop_item, obj)
                         return
                     end
