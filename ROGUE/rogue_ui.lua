@@ -21188,6 +21188,26 @@ if is_hydroxide_supported_place() then
                 telorum = true,
             }
 
+            trinket_bot.is_auto_drop_scroll_tool = function(tool)
+                if not tool or not tool:IsA("Tool") then
+                    return false
+                end
+
+                local normalized_tool_name = trinket_bot.normalize_auto_drop_name(tool.Name)
+                if normalized_tool_name == "scroll" or normalized_tool_name:sub(1, 8) == "scrollof" then
+                    return true
+                end
+
+                if FindFirstChild(tool, "Scroll") then
+                    return true
+                end
+
+                local ok_scroll_attribute, scroll_attribute = pcall(function()
+                    return tool:GetAttribute("Scroll")
+                end)
+                return ok_scroll_attribute and scroll_attribute == true
+            end
+
             trinket_bot.auto_drop_core_name = function(item_name)
                 local normalized_name = trinket_bot.normalize_auto_drop_name(item_name)
                 if normalized_name == "" then
@@ -21262,6 +21282,10 @@ if is_hydroxide_supported_place() then
 
                 local tool_cores = trinket_bot.get_tool_auto_drop_cores(tool)
                 if AUTO_DROP_SCROLL_CORES[expected_core] then
+                    if not trinket_bot.is_auto_drop_scroll_tool(tool) then
+                        return false
+                    end
+
                     for _, tool_core in ipairs(tool_cores) do
                         if tool_core == expected_core then
                             return true
