@@ -400,6 +400,11 @@ do
             Default = "Code",
             Values = { "BuilderSans", "Code", "Fantasy", "Gotham", "Jura", "Roboto", "RobotoMono", "SourceSans" },
         })
+        groupbox:AddToggle("RainbowBorders", {
+            Text = "Rainbow Borders",
+            Default = self.Library.RainbowBorders == true,
+            Tooltip = "Animates outline and border accents with a rainbow gradient"
+        })
 
         local ThemesArray = {}
         for Name, Theme in pairs(self.BuiltInThemes) do
@@ -504,6 +509,9 @@ do
         self.Library.Options.FontFace:OnChanged(function(Value)
             self.Library:SetFont(Enum.Font[Value])
             self.Library:UpdateColorsUsingRegistry()
+        end)
+        self.Library.Options.RainbowBorders:OnChanged(function(Value)
+            self.Library:SetRainbowBorders(Value)
         end)
     end
 

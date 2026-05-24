@@ -73,11 +73,15 @@ local Library = {
     HideInactiveStatus = false,
     StatusFrameEnabled = false,
     NotifyOnError = false,
+    RainbowBorders = false,
+    RainbowSpeed = 0.18,
 
     CantDragForced = false,
 
     Signals = {},
     UnloadSignals = {},
+    RainbowStrokes = {},
+    RainbowGradients = {},
 
     MinSize = Vector2.new(480, 360),
     DPIScale = 1,
@@ -86,10 +90,10 @@ local Library = {
     IsLightTheme = false,
     Scheme = {
         BackgroundColor = Color3.fromRGB(15, 15, 15),
-        MainColor = Color3.fromRGB(25, 25, 25),
-        AccentColor = Color3.fromRGB(125, 85, 255),
-        OutlineColor = Color3.fromRGB(40, 40, 40),
-        FontColor = Color3.new(1, 1, 1),
+        MainColor = Color3.fromRGB(24, 26, 30),
+        AccentColor = Color3.fromRGB(0, 240, 255),
+        OutlineColor = Color3.fromRGB(62, 66, 78),
+        FontColor = Color3.fromRGB(238, 255, 255),
         Font = Font.fromEnum(Enum.Font.Code),
 
         Red = Color3.fromRGB(255, 50, 50),
@@ -967,6 +971,10 @@ function Library:UpdateColorsUsingRegistry()
             end
         end
     end
+
+    if Library.RefreshDynamicVisuals then
+        Library:RefreshDynamicVisuals()
+    end
 end
 
 function Library:UpdateDPI(Instance, Properties)
@@ -1269,6 +1277,165 @@ function Library:GetDarkerColor(Color: Color3): Color3
     return Color3.fromHSV(H, S, V / 2)
 end
 
+function Library:GetDimmedColor(Color: Color3, Factor: number): Color3
+    return Color3.new(
+        math.clamp(Color.R * Factor, 0, 1),
+        math.clamp(Color.G * Factor, 0, 1),
+        math.clamp(Color.B * Factor, 0, 1)
+    )
+end
+
+function Library:GetBrightenedColor(Color: Color3, Factor: number): Color3
+    return Color3.new(
+        Color.R + (1 - Color.R) * Factor,
+        Color.G + (1 - Color.G) * Factor,
+        Color.B + (1 - Color.B) * Factor
+    )
+end
+
+function Library:MakeColorSequence(ColorA: Color3, ColorB: Color3?, ColorC: Color3?): ColorSequence
+    ColorB = ColorB or ColorA
+    ColorC = ColorC or ColorA
+
+    return ColorSequence.new({
+        ColorSequenceKeypoint.new(0, ColorA),
+        ColorSequenceKeypoint.new(0.5, ColorB),
+        ColorSequenceKeypoint.new(1, ColorC),
+    })
+end
+
+function Library:MakePanelGradient(Parent: GuiObject, ColorKey: string?, Rotation: number?)
+    ColorKey = ColorKey or "BackgroundColor"
+
+    return New("UIGradient", {
+        Color = function()
+            local Base = Library.Scheme[ColorKey] or Library.Scheme.BackgroundColor
+            return Library:MakeColorSequence(
+                Library:GetBrightenedColor(Base, 0.08),
+                Base,
+                Library:GetDimmedColor(Base, 0.7)
+            )
+        end,
+        Rotation = Rotation or 90,
+        Parent = Parent,
+    })
+end
+
+function Library:MakeAccentGradient(Parent: GuiObject, Rotation: number?)
+    return New("UIGradient", {
+        Color = function()
+            local Accent = Library.Scheme.AccentColor
+            return Library:MakeColorSequence(
+                Library:GetBrightenedColor(Accent, 0.35),
+                Accent,
+                Library:GetDimmedColor(Accent, 0.55)
+            )
+        end,
+        Rotation = Rotation or 0,
+        Parent = Parent,
+    })
+end
+
+function Library:GetRainbowColor(Offset: number?): Color3
+    local Hue = (tick() * Library.RainbowSpeed + (Offset or 0)) % 1
+    return Color3.fromHSV(Hue, 0.88, 1)
+end
+
+function Library:GetRainbowSequence(Offset: number?): ColorSequence
+    local Base = (tick() * Library.RainbowSpeed + (Offset or 0)) % 1
+    return ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromHSV(Base % 1, 0.9, 1)),
+        ColorSequenceKeypoint.new(0.2, Color3.fromHSV((Base + 0.18) % 1, 0.9, 1)),
+        ColorSequenceKeypoint.new(0.4, Color3.fromHSV((Base + 0.36) % 1, 0.9, 1)),
+        ColorSequenceKeypoint.new(0.6, Color3.fromHSV((Base + 0.54) % 1, 0.9, 1)),
+        ColorSequenceKeypoint.new(0.8, Color3.fromHSV((Base + 0.72) % 1, 0.9, 1)),
+        ColorSequenceKeypoint.new(1, Color3.fromHSV((Base + 0.9) % 1, 0.9, 1)),
+    })
+end
+
+function Library:RegisterRainbowStroke(Stroke: UIStroke, ColorKey: string?, Offset: number?)
+    table.insert(Library.RainbowStrokes, {
+        Stroke = Stroke,
+        ColorKey = ColorKey or "OutlineColor",
+        Offset = Offset or 0,
+    })
+
+    if Library.RainbowBorders then
+        Stroke.Color = Library:GetRainbowColor(Offset)
+    end
+end
+
+function Library:RegisterRainbowGradient(Gradient: UIGradient, ColorKey: string?, Offset: number?)
+    table.insert(Library.RainbowGradients, {
+        Gradient = Gradient,
+        ColorKey = ColorKey or "OutlineColor",
+        Offset = Offset or 0,
+    })
+
+    if Library.RainbowBorders then
+        Gradient.Color = Library:GetRainbowSequence(Offset)
+    end
+end
+
+function Library:RefreshDynamicVisuals()
+    for Index = #Library.RainbowStrokes, 1, -1 do
+        local Entry = Library.RainbowStrokes[Index]
+        if not Entry.Stroke or not Entry.Stroke.Parent then
+            table.remove(Library.RainbowStrokes, Index)
+        elseif not Library.RainbowBorders then
+            Entry.Stroke.Color = Library.Scheme[Entry.ColorKey] or Library.Scheme.OutlineColor
+        end
+    end
+
+    for Index = #Library.RainbowGradients, 1, -1 do
+        local Entry = Library.RainbowGradients[Index]
+        if not Entry.Gradient or not Entry.Gradient.Parent then
+            table.remove(Library.RainbowGradients, Index)
+        elseif not Library.RainbowBorders then
+            local Base = Library.Scheme[Entry.ColorKey] or Library.Scheme.OutlineColor
+            Entry.Gradient.Color = Library:MakeColorSequence(
+                Library:GetBrightenedColor(Base, 0.28),
+                Base,
+                Library:GetDimmedColor(Base, 0.72)
+            )
+        end
+    end
+end
+
+function Library:UpdateRainbowVisuals()
+    if not Library.RainbowBorders then
+        return
+    end
+
+    for Index = #Library.RainbowStrokes, 1, -1 do
+        local Entry = Library.RainbowStrokes[Index]
+        if not Entry.Stroke or not Entry.Stroke.Parent then
+            table.remove(Library.RainbowStrokes, Index)
+        else
+            Entry.Stroke.Color = Library:GetRainbowColor(Entry.Offset)
+        end
+    end
+
+    for Index = #Library.RainbowGradients, 1, -1 do
+        local Entry = Library.RainbowGradients[Index]
+        if not Entry.Gradient or not Entry.Gradient.Parent then
+            table.remove(Library.RainbowGradients, Index)
+        else
+            Entry.Gradient.Color = Library:GetRainbowSequence(Entry.Offset)
+            Entry.Gradient.Rotation = (Entry.Gradient.Rotation + 0.35) % 360
+        end
+    end
+end
+
+function Library:SetRainbowBorders(Value: boolean)
+    Library.RainbowBorders = Value == true
+    Library:RefreshDynamicVisuals()
+end
+
+Library:GiveSignal(RunService.RenderStepped:Connect(function()
+    Library:UpdateRainbowVisuals()
+end))
+
 function Library:GetKeyString(KeyCode: Enum.KeyCode)
     if KeyCode.EnumType == Enum.KeyCode and KeyCode.Value > 33 and KeyCode.Value < 127 then
         return string.char(KeyCode.Value)
@@ -1459,6 +1626,28 @@ function Library:MakeOutline(Frame: GuiObject, Corner: number?, ZIndex: number?)
         BackgroundColor3 = "OutlineColor",
         Position = UDim2.fromOffset(1, 1),
         Size = UDim2.new(1, -2, 1, -2),
+        ZIndex = ZIndex,
+        Parent = Holder,
+    })
+    local OutlineGradient = New("UIGradient", {
+        Color = function()
+            local Base = Library.Scheme.OutlineColor
+            return Library:MakeColorSequence(
+                Library:GetBrightenedColor(Base, 0.28),
+                Base,
+                Library:GetDimmedColor(Base, 0.72)
+            )
+        end,
+        Rotation = 35,
+        Parent = Outline,
+    })
+    Library:RegisterRainbowGradient(OutlineGradient, "OutlineColor", 0)
+
+    New("Frame", {
+        BackgroundColor3 = "AccentColor",
+        BackgroundTransparency = 0.84,
+        Position = UDim2.fromOffset(2, 2),
+        Size = UDim2.new(1, -4, 0, 1),
         ZIndex = ZIndex,
         Parent = Holder,
     })
@@ -3395,12 +3584,18 @@ do
                 Visible = Button.Visible,
                 Parent = Holder,
             })
+            New("UICorner", {
+                CornerRadius = UDim.new(0, math.max(Library.CornerRadius - 1, 2)),
+                Parent = Base,
+            })
+            Library:MakePanelGradient(Base, Button.Disabled and "BackgroundColor" or "MainColor", 90)
 
             local Stroke = New("UIStroke", {
                 Color = "OutlineColor",
                 Transparency = Button.Disabled and 0.5 or 0,
                 Parent = Base,
             })
+            Library:RegisterRainbowStroke(Stroke, "OutlineColor", 0.1)
 
             return Base, Stroke
         end
@@ -3883,6 +4078,19 @@ do
             Color = "OutlineColor",
             Parent = Switch,
         })
+        Library:RegisterRainbowStroke(SwitchStroke, "OutlineColor", 0.35)
+        local SwitchGradient = New("UIGradient", {
+            Color = function()
+                local Base = Toggle.Value and Library.Scheme.AccentColor or Library.Scheme.MainColor
+                return Library:MakeColorSequence(
+                    Library:GetBrightenedColor(Base, Toggle.Value and 0.4 or 0.08),
+                    Base,
+                    Library:GetDimmedColor(Base, Toggle.Value and 0.58 or 0.7)
+                )
+            end,
+            Rotation = 90,
+            Parent = Switch,
+        })
 
         local Ball = New("Frame", {
             BackgroundColor3 = "FontColor",
@@ -3894,6 +4102,7 @@ do
             CornerRadius = UDim.new(1, 0),
             Parent = Ball,
         })
+        Library:MakePanelGradient(Ball, "FontColor", 90)
 
         function Toggle:UpdateColors()
             Toggle:Display()
@@ -3911,6 +4120,7 @@ do
 
             Switch.BackgroundColor3 = Toggle.Value and Library.Scheme.AccentColor or Library.Scheme.MainColor
             SwitchStroke.Color = Toggle.Value and Library.Scheme.AccentColor or Library.Scheme.OutlineColor
+            SwitchGradient.Color = Library.Registry[SwitchGradient].Color()
 
             Library.Registry[Switch].BackgroundColor3 = Toggle.Value and "AccentColor" or "MainColor"
             Library.Registry[SwitchStroke].Color = Toggle.Value and "AccentColor" or "OutlineColor"
@@ -4239,12 +4449,22 @@ do
             AnchorPoint = Vector2.new(0, 1),
             BackgroundColor3 = "MainColor",
             BorderColor3 = "OutlineColor",
-            BorderSizePixel = 1,
+            BorderSizePixel = 0,
             Position = UDim2.fromScale(0, 1),
             Size = UDim2.new(1, 0, 0, 13),
             Text = "",
             Parent = Holder,
         })
+        New("UICorner", {
+            CornerRadius = UDim.new(0, math.max(Library.CornerRadius - 1, 2)),
+            Parent = Bar,
+        })
+        Library:MakePanelGradient(Bar, "MainColor", 90)
+        local BarStroke = New("UIStroke", {
+            Color = "OutlineColor",
+            Parent = Bar,
+        })
+        Library:RegisterRainbowStroke(BarStroke, "OutlineColor", 0.45)
 
         local DisplayLabel = New("TextLabel", {
             BackgroundTransparency = 1,
@@ -4270,6 +4490,22 @@ do
                 Size = true,
             },
         })
+        New("UICorner", {
+            CornerRadius = UDim.new(0, math.max(Library.CornerRadius - 1, 2)),
+            Parent = Fill,
+        })
+        local FillGradient = New("UIGradient", {
+            Color = function()
+                local Base = Slider.Disabled and Library.Scheme.OutlineColor or Library.Scheme.AccentColor
+                return Library:MakeColorSequence(
+                    Library:GetBrightenedColor(Base, 0.35),
+                    Base,
+                    Library:GetDimmedColor(Base, 0.55)
+                )
+            end,
+            Rotation = 0,
+            Parent = Fill,
+        })
 
         function Slider:UpdateColors()
             if Library.Unloaded then
@@ -4283,6 +4519,7 @@ do
 
             Fill.BackgroundColor3 = Slider.Disabled and Library.Scheme.OutlineColor or Library.Scheme.AccentColor
             Library.Registry[Fill].BackgroundColor3 = Slider.Disabled and "OutlineColor" or "AccentColor"
+            FillGradient.Color = Library.Registry[FillGradient].Color()
         end
 
         function Slider:Display()
@@ -5413,6 +5650,7 @@ do
                 CornerRadius = UDim.new(0, Library.CornerRadius - 1),
                 Parent = DepGroupboxContainer,
             })
+            Library:MakePanelGradient(DepGroupboxContainer, "BackgroundColor", 90)
 
             DepGroupboxList = New("UIListLayout", {
                 Padding = UDim.new(0, 8),
@@ -5865,6 +6103,7 @@ function Library:CreateWindow(WindowInfo)
             CornerRadius = UDim.new(0, WindowInfo.CornerRadius - 1),
             Parent = MainFrame,
         })
+        Library:MakePanelGradient(MainFrame, "BackgroundColor", 90)
         do
            local Lines = {
 				{
@@ -5906,9 +6145,21 @@ function Library:CreateWindow(WindowInfo)
 
         --// Top Bar \\-
         local TopBar = New("Frame", {
-            BackgroundTransparency = 1,
+            BackgroundColor3 = function()
+                return Library:GetBetterColor(Library.Scheme.BackgroundColor, 3)
+            end,
+            BackgroundTransparency = 0.08,
             Size = UDim2.new(1, 0, 0, 48),
             Parent = MainFrame,
+        })
+        Library:MakePanelGradient(TopBar, "BackgroundColor", 0)
+        New("Frame", {
+            AnchorPoint = Vector2.new(0.5, 1),
+            BackgroundColor3 = "AccentColor",
+            BackgroundTransparency = 0.58,
+            Position = UDim2.fromScale(0.5, 1),
+            Size = UDim2.new(1, -16, 0, 1),
+            Parent = TopBar,
         })
         Library:MakeDraggable(MainFrame, TopBar, false, true)
 
@@ -6033,10 +6284,12 @@ function Library:CreateWindow(WindowInfo)
             PaddingTop = UDim.new(0, 8),
             Parent = SearchBox,
         })
-        New("UIStroke", {
+        Library:MakePanelGradient(SearchBox, "MainColor", 90)
+        local SearchStroke = New("UIStroke", {
             Color = "OutlineColor",
             Parent = SearchBox,
         })
+        Library:RegisterRainbowStroke(SearchStroke, "OutlineColor", 0.2)
 
         local SearchIcon = Library:GetIcon("search")
         if SearchIcon then
@@ -6091,6 +6344,7 @@ function Library:CreateWindow(WindowInfo)
             CornerRadius = UDim.new(0, WindowInfo.CornerRadius - 1),
             Parent = BottomBar,
         })
+        Library:MakePanelGradient(BottomBar, "BackgroundColor", 0)
 
         --// Footer
         New("TextLabel", {
@@ -6142,6 +6396,7 @@ function Library:CreateWindow(WindowInfo)
             Size = UDim2.new(0.3, 0, 1, -70),
             Parent = MainFrame,
         })
+        Library:MakePanelGradient(Tabs, "BackgroundColor", 90)
 
         New("UIListLayout", {
             Parent = Tabs,
@@ -6158,6 +6413,7 @@ function Library:CreateWindow(WindowInfo)
             Size = UDim2.new(0.7, -1, 1, -70),
             Parent = MainFrame,
         })
+        Library:MakePanelGradient(Container, "BackgroundColor", 90)
 
         New("UIPadding", {
             PaddingBottom = UDim.new(0, 0),
@@ -6506,9 +6762,17 @@ function Library:CreateWindow(WindowInfo)
                     CornerRadius = UDim.new(0, WindowInfo.CornerRadius - 1),
                     Parent = GroupboxHolder,
                 })
+                Library:MakePanelGradient(GroupboxHolder, "BackgroundColor", 90)
                 Library:MakeLine(GroupboxHolder, {
                     Position = UDim2.fromOffset(0, 34),
                     Size = UDim2.new(1, 0, 0, 1),
+                })
+                New("Frame", {
+                    BackgroundColor3 = "AccentColor",
+                    BackgroundTransparency = 0.76,
+                    Position = UDim2.fromOffset(12, 33),
+                    Size = UDim2.new(1, -24, 0, 1),
+                    Parent = GroupboxHolder,
                 })
 
                 local BoxIcon = Library:GetCustomIcon(Info.IconName)
@@ -6628,6 +6892,7 @@ function Library:CreateWindow(WindowInfo)
                     CornerRadius = UDim.new(0, WindowInfo.CornerRadius - 1),
                     Parent = TabboxHolder,
                 })
+                Library:MakePanelGradient(TabboxHolder, "BackgroundColor", 90)
 
                 TabboxButtons = New("Frame", {
                     BackgroundTransparency = 1,
