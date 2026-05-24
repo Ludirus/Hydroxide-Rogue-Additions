@@ -21194,18 +21194,7 @@ if is_hydroxide_supported_place() then
                 end
 
                 local normalized_tool_name = trinket_bot.normalize_auto_drop_name(tool.Name)
-                if normalized_tool_name == "scroll" or normalized_tool_name:sub(1, 8) == "scrollof" then
-                    return true
-                end
-
-                if FindFirstChild(tool, "Scroll") then
-                    return true
-                end
-
-                local ok_scroll_attribute, scroll_attribute = pcall(function()
-                    return tool:GetAttribute("Scroll")
-                end)
-                return ok_scroll_attribute and scroll_attribute == true
+                return normalized_tool_name == "scroll" or normalized_tool_name:sub(1, 8) == "scrollof"
             end
 
             trinket_bot.auto_drop_core_name = function(item_name)
