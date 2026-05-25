@@ -94,7 +94,7 @@ local Library = {
         MainColor = Color3.fromRGB(22, 25, 29),
         AccentColor = Color3.fromRGB(0, 205, 220),
         OutlineColor = Color3.fromRGB(68, 76, 84),
-        FontColor = Color3.fromRGB(232, 240, 244),
+        FontColor = Color3.fromRGB(202, 214, 218),
         Font = Font.fromEnum(Enum.Font.Code),
 
         Red = Color3.fromRGB(255, 50, 50),
@@ -6439,7 +6439,7 @@ function Library:CreateWindow(WindowInfo)
                 ImageRectSize = SearchIcon.ImageRectSize,
                 ImageTransparency = 0.5,
                 AnchorPoint = Vector2.new(0, 0.5),
-                Position = UDim2.new(0, 10, 0.5, 0),
+                Position = UDim2.new(0, -24, 0.5, 0),
                 Size = UDim2.fromOffset(18, 18),
                 Parent = SearchBox,
             })

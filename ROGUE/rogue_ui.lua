@@ -9091,7 +9091,71 @@ if is_hydroxide_supported_place() then
             local group_character = Tabs.Exploits:AddLeftGroupbox("Character")
             local group_camera = Tabs.Exploits:AddRightGroupbox("Camera")
             local group_exploits = Tabs.Exploits:AddRightGroupbox("Exploits")
-    
+            local default_camera_max_zoom = plr.CameraMaxZoomDistance
+            local default_camera_occlusion = plr.DevCameraOcclusionMode
+            local max_zoom_connection
+            local invis_cam_connection
+
+            local function set_max_zoom(state)
+                cheat_client.config.max_zoom = state
+
+                if max_zoom_connection then
+                    max_zoom_connection:Disconnect()
+                    max_zoom_connection = nil
+                end
+
+                if state then
+                    pcall(function()
+                        plr.CameraMaxZoomDistance = 9e9
+                    end)
+                    max_zoom_connection = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
+                        if not cheat_client.config.max_zoom then
+                            return
+                        end
+
+                        pcall(function()
+                            if plr.CameraMaxZoomDistance < 9e8 then
+                                plr.CameraMaxZoomDistance = 9e9
+                            end
+                        end)
+                    end))
+                else
+                    pcall(function()
+                        plr.CameraMaxZoomDistance = default_camera_max_zoom or 50
+                    end)
+                end
+            end
+
+            local function set_invis_cam(state)
+                cheat_client.config.invis_cam = state
+
+                if invis_cam_connection then
+                    invis_cam_connection:Disconnect()
+                    invis_cam_connection = nil
+                end
+
+                if state then
+                    pcall(function()
+                        plr.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Invisicam
+                    end)
+                    invis_cam_connection = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
+                        if not cheat_client.config.invis_cam then
+                            return
+                        end
+
+                        pcall(function()
+                            if plr.DevCameraOcclusionMode ~= Enum.DevCameraOcclusionMode.Invisicam then
+                                plr.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Invisicam
+                            end
+                        end)
+                    end))
+                else
+                    pcall(function()
+                        plr.DevCameraOcclusionMode = default_camera_occlusion or Enum.DevCameraOcclusionMode.Zoom
+                    end)
+                end
+            end
+
             do
                 group_character:AddToggle("instant_mine", {
                     Text = "Instant Mine",
@@ -9159,6 +9223,26 @@ if is_hydroxide_supported_place() then
                         end
                     end
                 })
+            end
+
+            group_camera:AddToggle("invis_cam", {
+                Text = "Invis Cam",
+                Default = cheat_client.config.invis_cam,
+                Tooltip = "Uses Roblox Invisicam so camera blockers fade instead of forcing zoom.",
+                Callback = set_invis_cam
+            })
+
+            group_camera:AddToggle("max_zoom", {
+                Text = "Max Zoom",
+                Default = cheat_client.config.max_zoom,
+                Tooltip = "Raises CameraMaxZoomDistance and keeps it from being reset.",
+                Callback = set_max_zoom
+            })
+            if cheat_client.config.invis_cam then
+                set_invis_cam(true)
+            end
+            if cheat_client.config.max_zoom then
+                set_max_zoom(true)
             end
 
             if game.PlaceId ~= 3541987450 then
