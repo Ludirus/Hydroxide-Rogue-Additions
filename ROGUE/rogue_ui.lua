@@ -6863,6 +6863,28 @@ if is_hydroxide_supported_place() then
                     is_restoring_ambience = false
                 end)
             end
+
+            local is_applying_no_fog = false
+            function cheat_client:apply_no_fog()
+                if is_applying_no_fog then return end
+                is_applying_no_fog = true
+
+                if FindFirstChild(lit, "TimeBrightness") and FindFirstChild(lit, "AreaFog") then
+                    local time_brightness = lit.TimeBrightness.Value
+                    local area_fog = lit.AreaFog.Value
+                    local color_shift = 0.4 + time_brightness * 0.6
+                    lit.FogColor = Color3.new(area_fog.r * color_shift, area_fog.g * color_shift, area_fog.b * color_shift)
+                else
+                    cheat_client:restore_ambience()
+                end
+
+                lit.FogEnd = 1000000
+                lit.FogStart = 100000
+
+                task.defer(function()
+                    is_applying_no_fog = false
+                end)
+            end
         end
 
         do
@@ -10393,9 +10415,7 @@ if is_hydroxide_supported_place() then
                             cheat_client:restore_ambience()
 
                             if cheat_client.config.no_fog then
-                                lit.FogColor = Color3.fromRGB(254, 254, 254)
-                                lit.FogEnd = 100000
-                                lit.FogStart = 50
+                                cheat_client:apply_no_fog()
                             end
                         end
                     end
@@ -10438,9 +10458,7 @@ if is_hydroxide_supported_place() then
                         cheat_client.config.no_fog = state
 
                         if state then
-                            lit.FogColor = Color3.fromRGB(254, 254, 254)
-                            lit.FogEnd = 100000
-                            lit.FogStart = 50
+                            cheat_client:apply_no_fog()
                         else
                             cheat_client:restore_ambience()
                         end
@@ -28479,9 +28497,7 @@ if is_hydroxide_supported_place() then
                 is_updating_fog = true
 
                 if Toggles and Toggles.no_fog and Toggles.no_fog.Value then
-                    lit.FogColor = Color3.fromRGB(254, 254, 254)
-                    lit.FogEnd = 100000
-                    lit.FogStart = 50
+                    cheat_client:apply_no_fog()
                 else
                     cheat_client:restore_ambience()
                 end
@@ -28495,8 +28511,8 @@ if is_hydroxide_supported_place() then
                 is_updating_fog_start = true
 
                 if Toggles and Toggles.no_fog and Toggles.no_fog.Value then
-                    if lit.FogStart ~= 50 then
-                        lit.FogStart = 50
+                    if lit.FogStart ~= 100000 then
+                        cheat_client:apply_no_fog()
                     end
                 else
                     cheat_client:restore_ambience()
@@ -28511,10 +28527,7 @@ if is_hydroxide_supported_place() then
                 is_updating_fog_color = true
 
                 if Toggles and Toggles.no_fog and Toggles.no_fog.Value then
-                    local target_color = Color3.fromRGB(254, 254, 254)
-                    if lit.FogColor ~= target_color then
-                        lit.FogColor = target_color
-                    end
+                    cheat_client:apply_no_fog()
                 else
                     cheat_client:restore_ambience()
                 end
