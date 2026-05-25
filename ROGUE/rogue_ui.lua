@@ -9095,6 +9095,66 @@ if is_hydroxide_supported_place() then
             local default_camera_occlusion = plr.DevCameraOcclusionMode
             local max_zoom_connection
             local invis_cam_connection
+            local camera_read_mask_installed = false
+
+            local function safe_set_camera_property(property, value)
+                local success, err = pcall(function()
+                    plr[property] = value
+                end)
+
+                if not success then
+                    debug_warn("[HYDROXIDE] Failed to set camera property:", property, err)
+                end
+
+                return success
+            end
+
+            local function install_camera_read_mask()
+                if camera_read_mask_installed then
+                    return
+                end
+
+                if type(hookmetamethod) ~= "function" or type(newcclosure) ~= "function" or type(checkcaller) ~= "function" then
+                    return
+                end
+
+                local executor_name = ""
+                pcall(function()
+                    executor_name = identifyexecutor and tostring(identifyexecutor()) or ""
+                end)
+                if executor_name:lower():find("volt", 1, true) then
+                    return
+                end
+
+                local old_index
+                local success, original_index = pcall(function()
+                    return hookmetamethod(game, "__index", newcclosure(function(self, key)
+                        if not checkcaller() and self == plr and (key == "DevCameraOcclusionMode" or key == "CameraMaxZoomDistance") then
+                            local calling_script
+                            pcall(function()
+                                calling_script = getcallingscript and getcallingscript()
+                            end)
+
+                            if calling_script and calling_script.Name == "Input" then
+                                if key == "DevCameraOcclusionMode" then
+                                    return default_camera_occlusion or Enum.DevCameraOcclusionMode.Zoom
+                                end
+
+                                return default_camera_max_zoom or 50
+                            end
+                        end
+
+                        if old_index then
+                            return old_index(self, key)
+                        end
+                    end))
+                end)
+
+                if success and type(original_index) == "function" then
+                    old_index = original_index
+                    camera_read_mask_installed = true
+                end
+            end
 
             local function set_max_zoom(state)
                 cheat_client.config.max_zoom = state
@@ -9105,24 +9165,23 @@ if is_hydroxide_supported_place() then
                 end
 
                 if state then
-                    pcall(function()
-                        plr.CameraMaxZoomDistance = 9e9
-                    end)
-                    max_zoom_connection = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
+                    install_camera_read_mask()
+                    safe_set_camera_property("CameraMaxZoomDistance", 9e9)
+                    max_zoom_connection = utility:Connection(plr:GetPropertyChangedSignal("CameraMaxZoomDistance"), function()
                         if not cheat_client.config.max_zoom then
                             return
                         end
 
+                        local zoom = 0
                         pcall(function()
-                            if plr.CameraMaxZoomDistance < 9e8 then
-                                plr.CameraMaxZoomDistance = 9e9
-                            end
+                            zoom = plr.CameraMaxZoomDistance
                         end)
-                    end))
-                else
-                    pcall(function()
-                        plr.CameraMaxZoomDistance = default_camera_max_zoom or 50
+                        if zoom < 9e8 then
+                            safe_set_camera_property("CameraMaxZoomDistance", 9e9)
+                        end
                     end)
+                else
+                    safe_set_camera_property("CameraMaxZoomDistance", default_camera_max_zoom or 50)
                 end
             end
 
@@ -9135,24 +9194,23 @@ if is_hydroxide_supported_place() then
                 end
 
                 if state then
-                    pcall(function()
-                        plr.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Invisicam
-                    end)
-                    invis_cam_connection = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
+                    install_camera_read_mask()
+                    safe_set_camera_property("DevCameraOcclusionMode", Enum.DevCameraOcclusionMode.Invisicam)
+                    invis_cam_connection = utility:Connection(plr:GetPropertyChangedSignal("DevCameraOcclusionMode"), function()
                         if not cheat_client.config.invis_cam then
                             return
                         end
 
+                        local occlusion_mode
                         pcall(function()
-                            if plr.DevCameraOcclusionMode ~= Enum.DevCameraOcclusionMode.Invisicam then
-                                plr.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Invisicam
-                            end
+                            occlusion_mode = plr.DevCameraOcclusionMode
                         end)
-                    end))
-                else
-                    pcall(function()
-                        plr.DevCameraOcclusionMode = default_camera_occlusion or Enum.DevCameraOcclusionMode.Zoom
+                        if occlusion_mode ~= Enum.DevCameraOcclusionMode.Invisicam then
+                            safe_set_camera_property("DevCameraOcclusionMode", Enum.DevCameraOcclusionMode.Invisicam)
+                        end
                     end)
+                else
+                    safe_set_camera_property("DevCameraOcclusionMode", default_camera_occlusion or Enum.DevCameraOcclusionMode.Zoom)
                 end
             end
 
@@ -9225,9 +9283,10 @@ if is_hydroxide_supported_place() then
                 })
             end
 
+            cheat_client.config.invis_cam = false
             group_camera:AddToggle("invis_cam", {
                 Text = "Invis Cam",
-                Default = cheat_client.config.invis_cam,
+                Default = false,
                 Tooltip = "Uses Roblox Invisicam so camera blockers fade instead of forcing zoom.",
                 Callback = set_invis_cam
             })
@@ -9238,9 +9297,6 @@ if is_hydroxide_supported_place() then
                 Tooltip = "Raises CameraMaxZoomDistance and keeps it from being reset.",
                 Callback = set_max_zoom
             })
-            if cheat_client.config.invis_cam then
-                set_invis_cam(true)
-            end
             if cheat_client.config.max_zoom then
                 set_max_zoom(true)
             end
@@ -24406,7 +24462,7 @@ if is_hydroxide_supported_place() then
                 shared.SaveManager:SetFolder(config_folder)
                 shared.ThemeManager:SetFolder("HYDROXIDE")
 
-                shared.SaveManager:SetIgnoreIndexes({ "SavedPaths" })
+                shared.SaveManager:SetIgnoreIndexes({ "SavedPaths", "invis_cam" })
 
                 shared.SaveManager.OnConfigLoaded = function(configName)
                     if cheat_client.config.persistent_configs and mem and configName then

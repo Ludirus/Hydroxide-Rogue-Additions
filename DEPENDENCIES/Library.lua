@@ -94,7 +94,7 @@ local Library = {
         MainColor = Color3.fromRGB(22, 25, 29),
         AccentColor = Color3.fromRGB(0, 205, 220),
         OutlineColor = Color3.fromRGB(68, 76, 84),
-        FontColor = Color3.fromRGB(202, 214, 218),
+        FontColor = Color3.fromRGB(220, 230, 232),
         Font = Font.fromEnum(Enum.Font.Code),
 
         Red = Color3.fromRGB(255, 50, 50),
@@ -3992,7 +3992,7 @@ do
             end
 
             TweenService:Create(Label, Library.TweenInfo, {
-                TextTransparency = Toggle.Value and 0 or 0.4,
+                TextTransparency = Toggle.Value and 0 or 0.18,
             }):Play()
             TweenService:Create(CheckImage, Library.TweenInfo, {
                 ImageTransparency = Toggle.Value and 0 or 1,
@@ -4131,7 +4131,7 @@ do
             Size = UDim2.new(1, -40, 1, 0),
             Text = Toggle.Text,
             TextSize = 14,
-            TextTransparency = 0.4,
+            TextTransparency = 0.18,
             TextXAlignment = Enum.TextXAlignment.Left,
             Parent = Button,
         })
@@ -4226,7 +4226,7 @@ do
             end
 
             TweenService:Create(Label, Library.TweenInfo, {
-                TextTransparency = Toggle.Value and 0 or 0.4,
+                TextTransparency = Toggle.Value and 0 or 0.18,
             }):Play()
             TweenService:Create(Ball, Library.TweenInfo, {
                 AnchorPoint = Vector2.new(Offset, 0),
