@@ -41,6 +41,7 @@ local Library = {
 
     ActiveTab = nil,
     Tabs = {},
+    TabList = {},
     DependencyBoxes = {},
 
     KeybindFrame = nil,
@@ -657,6 +658,10 @@ function Library:UpdateSearch(SearchText)
 
     --// Reset Elements Visibility in All Last Searched Tabs
     for _, LastTab in pairs(Library.LastSearchTabs) do
+        if LastTab.ButtonHolder then
+            LastTab.ButtonHolder.Visible = true
+        end
+
         for _, Groupbox in pairs(LastTab.Groupboxes) do
             for _, ElementInfo in pairs(Groupbox.Elements) do
                 ElementInfo.Holder.Visible = typeof(ElementInfo.Visible) == "boolean" and ElementInfo.Visible or true
@@ -740,16 +745,25 @@ function Library:UpdateSearch(SearchText)
     if Trim(Search) == "" or (Library.ActiveTab and Library.ActiveTab.IsKeyTab) then
         Library.Searching = false
         Library.LastSearchTabs = {}
+        for _, Tab in ipairs(Library.TabList) do
+            if Tab.ButtonHolder then
+                Tab.ButtonHolder.Visible = true
+            end
+        end
         return
     end
 
     Library.Searching = true
     Library.LastSearchTabs = {}
     local TabMatchCounts = {}
+    local TotalMatches = 0
 
     --// Loop through ALL tabs to search across entire UI
-    for _, CurrentTab in pairs(Library.Tabs) do
+    for _, CurrentTab in ipairs(Library.TabList) do
         if CurrentTab.IsKeyTab then
+            if CurrentTab.ButtonHolder then
+                CurrentTab.ButtonHolder.Visible = false
+            end
             continue
         end
 
@@ -807,9 +821,9 @@ function Library:UpdateSearch(SearchText)
             --// Track match count for this tab
             TabMatchCounts[CurrentTab] += VisibleElements
 
-            --// Always resize and keep groupbox visible (clean look)
+            --// During search, only keep groups that actually contain results.
             Groupbox:Resize()
-            Groupbox.Holder.Visible = true
+            Groupbox.Holder.Visible = VisibleElements > 0
         end
 
         for _, Tabbox in pairs(CurrentTab.Tabboxes) do
@@ -872,14 +886,13 @@ function Library:UpdateSearch(SearchText)
 
                     if Tabbox.ActiveTab == Tab then
                         Tab:Resize()
-                    elseif VisibleElements[Tabbox.ActiveTab] == 0 then
+                    elseif not Tabbox.ActiveTab or VisibleElements[Tabbox.ActiveTab] == 0 then
                         Tab:Show()
                     end
                 end
             end
 
-            --// Keep tabbox visible for clean look
-            Tabbox.Holder.Visible = true
+            Tabbox.Holder.Visible = VisibleTabs > 0
         end
 
         for _, DepGroupbox in pairs(CurrentTab.DependencyGroupboxes) do
@@ -936,18 +949,29 @@ function Library:UpdateSearch(SearchText)
             --// Track match count for this tab
             TabMatchCounts[CurrentTab] += VisibleElements
 
-            --// Always resize and keep visible (clean look)
             DepGroupbox:Resize()
-            DepGroupbox.Holder.Visible = true
+            DepGroupbox.Holder.Visible = VisibleElements > 0
         end
+
+        if CurrentTab.ButtonHolder then
+            CurrentTab.ButtonHolder.Visible = TabMatchCounts[CurrentTab] > 0
+        end
+        TotalMatches += TabMatchCounts[CurrentTab]
     end
 
-    --// Auto-switch to first tab with matches if current tab has no matches
-    if Library.ActiveTab and TabMatchCounts[Library.ActiveTab] == 0 then
-        for _, CurrentTab in ipairs(Library.LastSearchTabs) do
-            if not CurrentTab.IsKeyTab and TabMatchCounts[CurrentTab] and TabMatchCounts[CurrentTab] > 0 then
+    if TotalMatches == 0 then
+        if Library.ActiveTab and Library.ActiveTab.ButtonHolder then
+            Library.ActiveTab.ButtonHolder.Visible = true
+        end
+        return
+    end
+
+    local ActiveHasMatches = Library.ActiveTab and TabMatchCounts[Library.ActiveTab] and TabMatchCounts[Library.ActiveTab] > 0
+    if not ActiveHasMatches then
+        for _, CurrentTab in ipairs(Library.TabList) do
+            if TabMatchCounts[CurrentTab] and TabMatchCounts[CurrentTab] > 0 then
                 CurrentTab:Show()
-                break
+                return
             end
         end
     end
@@ -962,6 +986,10 @@ function Library:RemoveFromRegistry(Instance)
 end
 
 function Library:UpdateColorsUsingRegistry()
+    if Library.UpdateThemeContrastState then
+        Library:UpdateThemeContrastState()
+    end
+
     for Instance, Properties in pairs(Library.Registry) do
         for Property, ColorIdx in pairs(Properties) do
             if typeof(ColorIdx) == "string" then
@@ -1252,7 +1280,7 @@ do
         AnchorPoint = Vector2.new(1, 0),
         BackgroundTransparency = 1,
         Position = UDim2.new(1, -6, 0, 6),
-        Size = UDim2.new(0, 300, 1, -6),
+        Size = UDim2.new(0, 320, 1, -6),
         Parent = ScreenGui,
     })
     NotificationList = New("UIListLayout", {
@@ -1293,6 +1321,18 @@ function Library:GetBrightenedColor(Color: Color3, Factor: number): Color3
     )
 end
 
+function Library:GetColorLuminance(Color: Color3): number
+    return 0.2126 * Color.R + 0.7152 * Color.G + 0.0722 * Color.B
+end
+
+function Library:IsColorLight(Color: Color3): boolean
+    return Library:GetColorLuminance(Color) > 0.55
+end
+
+function Library:UpdateThemeContrastState()
+    Library.IsLightTheme = Library:IsColorLight(Library.Scheme.BackgroundColor)
+end
+
 function Library:MakeColorSequence(ColorA: Color3, ColorB: Color3?, ColorC: Color3?): ColorSequence
     ColorB = ColorB or ColorA
     ColorC = ColorC or ColorA
@@ -1310,10 +1350,18 @@ function Library:MakePanelGradient(Parent: GuiObject, ColorKey: string?, Rotatio
     return New("UIGradient", {
         Color = function()
             local Base = Library.Scheme[ColorKey] or Library.Scheme.BackgroundColor
+            if Library:IsColorLight(Base) then
+                return Library:MakeColorSequence(
+                    Library:GetDimmedColor(Base, 0.96),
+                    Base,
+                    Library:GetBrightenedColor(Base, 0.05)
+                )
+            end
+
             return Library:MakeColorSequence(
                 Library:GetBrightenedColor(Base, 0.08),
                 Base,
-                Library:GetDimmedColor(Base, 0.7)
+                Library:GetDimmedColor(Base, 0.84)
             )
         end,
         Rotation = Rotation or 90,
@@ -1393,11 +1441,19 @@ function Library:RefreshDynamicVisuals()
             table.remove(Library.RainbowGradients, Index)
         elseif not Library.RainbowBorders then
             local Base = Library.Scheme[Entry.ColorKey] or Library.Scheme.OutlineColor
-            Entry.Gradient.Color = Library:MakeColorSequence(
-                Library:GetBrightenedColor(Base, 0.28),
-                Base,
-                Library:GetDimmedColor(Base, 0.72)
-            )
+            if Library:IsColorLight(Base) then
+                Entry.Gradient.Color = Library:MakeColorSequence(
+                    Library:GetDimmedColor(Base, 0.95),
+                    Base,
+                    Library:GetBrightenedColor(Base, 0.04)
+                )
+            else
+                Entry.Gradient.Color = Library:MakeColorSequence(
+                    Library:GetBrightenedColor(Base, 0.28),
+                    Base,
+                    Library:GetDimmedColor(Base, 0.72)
+                )
+            end
         end
     end
 end
@@ -1615,7 +1671,11 @@ end
 
 function Library:MakeOutline(Frame: GuiObject, Corner: number?, ZIndex: number?)
     local Holder = New("Frame", {
-        BackgroundColor3 = "Dark",
+        BackgroundColor3 = function()
+            return Library:IsColorLight(Library.Scheme.BackgroundColor)
+                and Library:GetDimmedColor(Library.Scheme.OutlineColor, 0.92)
+                or Library.Scheme.Dark
+        end,
         Position = UDim2.fromOffset(-2, -2),
         Size = UDim2.new(1, 4, 1, 4),
         ZIndex = ZIndex,
@@ -1623,8 +1683,14 @@ function Library:MakeOutline(Frame: GuiObject, Corner: number?, ZIndex: number?)
     })
 
     local Shadow = New("Frame", {
-        BackgroundColor3 = "Dark",
-        BackgroundTransparency = 0.62,
+        BackgroundColor3 = function()
+            return Library:IsColorLight(Library.Scheme.BackgroundColor)
+                and Library:GetDimmedColor(Library.Scheme.OutlineColor, 0.8)
+                or Library.Scheme.Dark
+        end,
+        BackgroundTransparency = function()
+            return Library:IsColorLight(Library.Scheme.BackgroundColor) and 0.78 or 0.62
+        end,
         Position = UDim2.fromOffset(3, 4),
         Size = UDim2.fromScale(1, 1),
         ZIndex = ZIndex,
@@ -1641,6 +1707,14 @@ function Library:MakeOutline(Frame: GuiObject, Corner: number?, ZIndex: number?)
     local OutlineGradient = New("UIGradient", {
         Color = function()
             local Base = Library.Scheme.OutlineColor
+            if Library:IsColorLight(Base) then
+                return Library:MakeColorSequence(
+                    Library:GetDimmedColor(Base, 0.95),
+                    Base,
+                    Library:GetBrightenedColor(Base, 0.04)
+                )
+            end
+
             return Library:MakeColorSequence(
                 Library:GetBrightenedColor(Base, 0.28),
                 Base,
@@ -5847,6 +5921,7 @@ function Library:Notify(...)
 
     local Holder = New("Frame", {
         BackgroundColor3 = "MainColor",
+        BackgroundTransparency = 0.04,
         Position = UDim2.fromOffset(2, 2),
         Size = UDim2.new(1, -4, 1, -4),
         Parent = Background,
@@ -5855,15 +5930,34 @@ function Library:Notify(...)
         CornerRadius = UDim.new(0, Library.CornerRadius - 1),
         Parent = Holder,
     })
+    Library:MakePanelGradient(Holder, "MainColor", 0)
+    local HolderStroke = New("UIStroke", {
+        Color = "OutlineColor",
+        Transparency = 0.72,
+        Parent = Holder,
+    })
+    Library:RegisterRainbowStroke(HolderStroke, "OutlineColor", 0.18)
+    local ToastAccent = New("Frame", {
+        BackgroundColor3 = "AccentColor",
+        BackgroundTransparency = 0.1,
+        Position = UDim2.fromOffset(5, 6),
+        Size = UDim2.new(0, 3, 1, -12),
+        Parent = Background,
+    })
+    New("UICorner", {
+        CornerRadius = UDim.new(1, 0),
+        Parent = ToastAccent,
+    })
+    Library:MakeAccentGradient(ToastAccent, 90)
     New("UIListLayout", {
-        Padding = UDim.new(0, 4),
+        Padding = UDim.new(0, 5),
         Parent = Holder,
     })
     New("UIPadding", {
-        PaddingBottom = UDim.new(0, 8),
-        PaddingLeft = UDim.new(0, 8),
-        PaddingRight = UDim.new(0, 8),
-        PaddingTop = UDim.new(0, 8),
+        PaddingBottom = UDim.new(0, 9),
+        PaddingLeft = UDim.new(0, 14),
+        PaddingRight = UDim.new(0, 10),
+        PaddingTop = UDim.new(0, 9),
         Parent = Holder,
     })
 
@@ -5879,6 +5973,7 @@ function Library:Notify(...)
             BackgroundTransparency = 1,
             Text = Data.Title,
             TextSize = 15,
+            TextTransparency = 0,
             TextXAlignment = Enum.TextXAlignment.Left,
             TextWrapped = true,
             Parent = Holder,
@@ -5894,6 +5989,7 @@ function Library:Notify(...)
             BackgroundTransparency = 1,
             Text = Data.Description,
             TextSize = 14,
+            TextTransparency = 0.18,
             TextXAlignment = Enum.TextXAlignment.Left,
             TextWrapped = true,
             Parent = Holder,
@@ -5974,23 +6070,31 @@ function Library:Notify(...)
 
     local TimerHolder = New("Frame", {
         BackgroundTransparency = 1,
-        Size = UDim2.new(1, 0, 0, 7),
+        Size = UDim2.new(1, 0, 0, 6),
         Visible = (Data.Persist ~= true and typeof(Data.Time) ~= "Instance") or typeof(Data.Steps) == "number",
         Parent = Holder,
     })
     local TimerBar = New("Frame", {
-        BackgroundColor3 = "BackgroundColor",
-        BorderColor3 = "OutlineColor",
-        BorderSizePixel = 1,
-        Position = UDim2.fromOffset(0, 3),
-        Size = UDim2.new(1, 0, 0, 2),
+        BackgroundColor3 = "OutlineColor",
+        BackgroundTransparency = 0.7,
+        Position = UDim2.fromOffset(0, 2),
+        Size = UDim2.new(1, 0, 0, 3),
         Parent = TimerHolder,
+    })
+    New("UICorner", {
+        CornerRadius = UDim.new(1, 0),
+        Parent = TimerBar,
     })
     TimerFill = New("Frame", {
         BackgroundColor3 = "AccentColor",
         Size = UDim2.fromScale(1, 1),
         Parent = TimerBar,
     })
+    New("UICorner", {
+        CornerRadius = UDim.new(1, 0),
+        Parent = TimerFill,
+    })
+    Library:MakeAccentGradient(TimerFill, 0)
 
     if typeof(Data.Time) == "Instance" then
         TimerFill.Size = UDim2.fromScale(0, 1)
@@ -6128,11 +6232,6 @@ function Library:CreateWindow(WindowInfo)
                 },
                 {
                     Position = UDim2.fromOffset(0, TopbarHeight + TabbarHeight),
-                    Size = UDim2.new(1, 0, 0, 1),
-                },
-                {
-                    AnchorPoint = Vector2.new(0, 1),
-                    Position = UDim2.new(0, 0, 1, -FooterHeight),
                     Size = UDim2.new(1, 0, 0, 1),
                 },
             }
@@ -6304,7 +6403,7 @@ function Library:CreateWindow(WindowInfo)
 
         SearchBox = New("TextBox", {
             BackgroundColor3 = "MainColor",
-            PlaceholderText = "Search",
+            PlaceholderText = "Search options",
             Size = WindowInfo.SearchbarSize,
             TextScaled = false,
             TextSize = 18,
@@ -6331,18 +6430,51 @@ function Library:CreateWindow(WindowInfo)
         Library:RegisterRainbowStroke(SearchStroke, "OutlineColor", 0.2)
 
         local SearchIcon = Library:GetIcon("search")
+        local SearchIconLabel
         if SearchIcon then
-            New("ImageLabel", {
+            SearchIconLabel = New("ImageLabel", {
                 Image = SearchIcon.Url,
                 ImageColor3 = "FontColor",
                 ImageRectOffset = SearchIcon.ImageRectOffset,
                 ImageRectSize = SearchIcon.ImageRectSize,
                 ImageTransparency = 0.5,
-                Position = UDim2.new(0, 10, 0.5, -9),
+                AnchorPoint = Vector2.new(0, 0.5),
+                Position = UDim2.new(0, 10, 0.5, 0),
                 Size = UDim2.fromOffset(18, 18),
                 Parent = SearchBox,
             })
         end
+        local SearchFocused = false
+        local function UpdateSearchChrome(Active: boolean)
+            TweenService:Create(SearchStroke, Library.TweenInfo, {
+                Transparency = Active and 0.24 or 0.62,
+            }):Play()
+            TweenService:Create(SearchBox, Library.TweenInfo, {
+                BackgroundTransparency = Active and 0.08 or 0.18,
+            }):Play()
+            if SearchIconLabel then
+                TweenService:Create(SearchIconLabel, Library.TweenInfo, {
+                    ImageTransparency = Active and 0.12 or 0.5,
+                }):Play()
+            end
+        end
+        UpdateSearchChrome(false)
+        SearchBox.Focused:Connect(function()
+            SearchFocused = true
+            UpdateSearchChrome(true)
+        end)
+        SearchBox.FocusLost:Connect(function()
+            SearchFocused = false
+            UpdateSearchChrome(Trim(SearchBox.Text) ~= "")
+        end)
+        SearchBox.MouseEnter:Connect(function()
+            UpdateSearchChrome(true)
+        end)
+        SearchBox.MouseLeave:Connect(function()
+            if not SearchFocused and Trim(SearchBox.Text) == "" then
+                UpdateSearchChrome(false)
+            end
+        end)
 
 
 
@@ -6367,23 +6499,11 @@ function Library:CreateWindow(WindowInfo)
             BackgroundColor3 = function()
                 return Library:GetBetterColor(Library.Scheme.BackgroundColor, 4)
             end,
+            BackgroundTransparency = 1,
             Position = UDim2.fromScale(0, 1),
             Size = UDim2.new(1, 0, 0, FooterHeight),
             Parent = MainFrame,
         })
-        do
-            local Cover = Library:MakeCover(BottomBar, "Top")
-            Library:AddToRegistry(Cover, {
-                BackgroundColor3 = function()
-                    return Library:GetBetterColor(Library.Scheme.BackgroundColor, 4)
-                end,
-            })
-        end
-        New("UICorner", {
-            CornerRadius = UDim.new(0, WindowInfo.CornerRadius - 1),
-            Parent = BottomBar,
-        })
-        Library:MakePanelGradient(BottomBar, "BackgroundColor", 0)
 
         --// Footer
         New("TextLabel", {
@@ -6391,7 +6511,7 @@ function Library:CreateWindow(WindowInfo)
             Size = UDim2.fromScale(1, 1),
             Text = WindowInfo.Footer,
             TextSize = 14,
-            TextTransparency = 0.5,
+            TextTransparency = 1,
             Parent = BottomBar,
         })
 
@@ -6750,6 +6870,7 @@ function Library:CreateWindow(WindowInfo)
 
         --// Tab Table \\--
         local Tab = {
+            ButtonHolder = TabButton,
             Groupboxes = {},
             Tabboxes = {},
             DependencyGroupboxes = {},
@@ -7303,6 +7424,7 @@ function Library:CreateWindow(WindowInfo)
         TabButton.MouseButton1Click:Connect(Tab.Show)
 
         Library.Tabs[Name] = Tab
+        table.insert(Library.TabList, Tab)
 
         return Tab
     end
@@ -7433,6 +7555,7 @@ function Library:CreateWindow(WindowInfo)
 
         --// Tab Table \\--
         local Tab = {
+            ButtonHolder = TabButton,
             Elements = {},
             IsKeyTab = true,
         }
@@ -7601,6 +7724,7 @@ function Library:CreateWindow(WindowInfo)
         setmetatable(Tab, BaseGroupbox)
 
         Library.Tabs[Name] = Tab
+        table.insert(Library.TabList, Tab)
 
         return Tab
     end
