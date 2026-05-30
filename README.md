@@ -2,12 +2,12 @@
 
 ![](https://img.shields.io/github/downloads/heisenburgah/HYDROXIDE/total?style=flat-square)
 ![](https://img.shields.io/github/last-commit/heisenburgah/HYDROXIDE?style=flat-square)
-![](https://img.shields.io/badge/lines%20of%20code-~41%2C000-blue?style=flat-square)
+![](https://img.shields.io/badge/lines%20of%20code-~41%2C500-blue?style=flat-square)
 ![](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)
 ![](https://img.shields.io/discord/819956523479334933?style=flat-square&cacheSeconds=0)
 ![](https://hits.sh/github.com/heisenburgah/HYDROXIDE.svg?style=flat-square&label=views)
 
-A comprehensive Roblox utility suite for Rogue Lineage and Rogue Lineage Battlegrounds. ~41,000 lines of Lua across two game modules.
+A comprehensive Roblox utility suite for Rogue Lineage, Rogue Lineage Battlegrounds, and Hydrogen legit mode. ~41,500 lines of Lua across three game modules.
 
 **Website:** [hydroxide.solutions](https://hydroxide.solutions) | **Discord:** [discord.gg/fnpNyCsG4u](https://discord.gg/fnpNyCsG4u)
 
@@ -22,7 +22,51 @@ A comprehensive Roblox utility suite for Rogue Lineage and Rogue Lineage Battleg
 ```lua
 pcall(function()
     loadstring(game:HttpGet(
-        "https://raw.githubusercontent.com/heisenburgah/HYDROXIDE/refs/heads/main/loader.lua",
+        "https://raw.githubusercontent.com/Ludirus/Hydroxide-Rogue-Additions/main/loader.lua",
+        true
+    ))()
+end)
+```
+
+The loader checks the current game and picks the right encrypted artifact. Rogue Lineage Battlegrounds also checks the direct place ID `100010170789226`.
+
+### Hydrogen Legit Mode
+
+```lua
+getgenv().HYDROGEN_LEGIT = true
+
+pcall(function()
+    loadstring(game:HttpGet(
+        "https://raw.githubusercontent.com/Ludirus/Hydroxide-Rogue-Additions/main/loader.lua",
+        true
+    ))()
+end)
+```
+
+### Direct Artifacts
+
+```lua
+pcall(function()
+    loadstring(game:HttpGet(
+        "https://raw.githubusercontent.com/Ludirus/Hydroxide-Rogue-Additions/main/dist/rogue_lineage.lua",
+        true
+    ))()
+end)
+```
+
+```lua
+pcall(function()
+    loadstring(game:HttpGet(
+        "https://raw.githubusercontent.com/Ludirus/Hydroxide-Rogue-Additions/main/dist/rogue_battlegrounds.lua",
+        true
+    ))()
+end)
+```
+
+```lua
+pcall(function()
+    loadstring(game:HttpGet(
+        "https://raw.githubusercontent.com/Ludirus/Hydroxide-Rogue-Additions/main/dist/hydrogen.lua",
         true
     ))()
 end)
@@ -50,6 +94,7 @@ end)
 |------|--------|-------|
 | Rogue Lineage | `ROGUE/rogue_ui.lua` | ~27,000 |
 | Rogue Lineage Battlegrounds | `ROGUE_BATTLEGROUNDS/rlb.lua` | ~14,000 |
+| Hydrogen Legit Mode | `Hydrogen/hydrogen.lua` | ~500 |
 
 ---
 
@@ -122,20 +167,45 @@ PvP-focused module inheriting Rogue Lineage's combat systems, optimized for aren
 
 ---
 
+## Hydrogen
+
+Small legit-mode scaffold for Rogue Lineage. It stays quiet when injected, opens from the top-left with the minus key, and uses a compact dropdown menu instead of the full Hydroxide window.
+
+Hydrogen has its own embedded `HYDROGEN` logo, dark cyan styling, keyboard navigation, and a short list of legit settings: Auto Block, block delay, Silent Aim, target part, FOV, smoothness, visibility check, FOV circle, Legit Intent, and Panic Disable.
+
+It is compiled as `dist/hydrogen.lua`. The main loader only uses it when `getgenv().HYDROGEN_LEGIT = true` or `getgenv().HYDROXIDE_LEGIT = true` is set before running the loader.
+
+---
+
 ## Project Structure
 
 ```
 Hydroxide/
+  loader.lua                  -- Game dispatcher for encrypted dist artifacts
   ROGUE/
     rogue_ui.lua              -- Main Rogue Lineage script (~27,000 lines)
   ROGUE_BATTLEGROUNDS/
     rlb.lua                   -- Rogue Battlegrounds script (~14,000 lines)
+  Hydrogen/
+    hydrogen.lua              -- Minimal Rogue Lineage legit scaffold (~500 lines)
   DEPENDENCIES/
     Library.lua               -- UI framework
     SaveManager.lua           -- Config save/load
     ThemeManager.lua          -- UI theming
     Chatlogger.lua            -- Chat logging module
+  dist/
+    rogue_lineage.lua         -- Encrypted Rogue artifact
+    rogue_battlegrounds.lua   -- Encrypted Battlegrounds artifact
+    hydrogen.lua              -- Encrypted Hydrogen artifact
 ```
+
+## Build Artifacts
+
+`scripts/compile_dist.py` generates the encrypted Lua artifacts under `dist/` for Rogue Lineage, Rogue Lineage Battlegrounds, and Hydrogen. The generated files are chunked self-decrypting scripts, not source-loadstring one-liners.
+
+The default repo base is `https://raw.githubusercontent.com/Ludirus/Hydroxide-Rogue-Additions/main/`.
+
+For renamed or moved GitHub-hosted dist files, run `python scripts/compile_dist.py --repo-base <raw-base> --rogue-entrypoint <path-or-url> --battlegrounds-entrypoint <path-or-url> --hydrogen-entrypoint <path-or-url>` so dependencies and queued reloads stay on the intended encrypted artifact.
 
 ## Stella - Community Data Collection
 
