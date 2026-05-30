@@ -13,6 +13,8 @@ A comprehensive Roblox utility suite for Rogue Lineage, Rogue Lineage Battlegrou
 
 **This project is open source and maintained on a casual basis. Updates may come from time to time. Issues and pull requests are welcome.**
 
+This repo is a fork of the original hydroXide with a few small fixes and workflow improvements layered on top. Most of the base, naming, and layout still come from the original project.
+
 **Fair warning:** The codebase dates back to 2019 and is pretty sloppy. Single files with tens of thousands of lines, no modular structure, and inconsistent patterns throughout. A full rewrite was planned for 2025 but never happened. Hydroxide originally started as a passion project to test out a custom whitelist system — keys were sold for 1k silver at launch. The whitelist system may get a full public release in the future, so keep an eye on the [community server](https://discord.gg/fnpNyCsG4u). The code itself was never written to be maintainable or readable by anyone else. Good luck.
 
 ---
@@ -94,7 +96,7 @@ end)
 |------|--------|-------|
 | Rogue Lineage | `ROGUE/rogue_ui.lua` | ~27,000 |
 | Rogue Lineage Battlegrounds | `ROGUE_BATTLEGROUNDS/rlb.lua` | ~14,000 |
-| Hydrogen Legit Mode | `Hydrogen/hydrogen.lua` | ~500 |
+| Hydrogen Legit Mode | `Hydrogen/hydrogen.lua` | ~900 |
 
 ---
 
@@ -169,9 +171,23 @@ PvP-focused module inheriting Rogue Lineage's combat systems, optimized for aren
 
 ## Hydrogen
 
-Small legit-mode scaffold for Rogue Lineage. It stays quiet when injected, opens from the top-left with the minus key, and uses a compact dropdown menu instead of the full Hydroxide window.
+Small legit-mode scaffold for Rogue Lineage. It stays quiet when injected, opens from the top-left with minus/keypad minus or the equals key, and uses a compact dropdown menu instead of the full Hydroxide window.
 
-Hydrogen has its own embedded `HYDROGEN` logo, dark cyan styling, keyboard navigation, and a short list of legit settings: Auto Block, block delay, Silent Aim, target part, FOV, smoothness, visibility check, FOV circle, Legit Intent, and Panic Disable.
+Hydrogen has its own embedded `HYDROGEN` logo, cleaner charcoal/cyan styling, keyboard navigation, and a short list of legit settings: Auto Block, block chance, block delay, Silent Aim, target part, FOV, smoothness, visibility check, FOV circle, Legit Intent, Legit Healthview, and Panic Disable.
+
+Legit settings are easy to change before the loader runs:
+
+```lua
+getgenv().HYDROGEN_LEGIT = true
+getgenv().HYDROGEN_SETTINGS = {
+    auto_block = true,
+    auto_block_chance = 80,
+    block_delay = 55,
+    legit_healthview = true,
+}
+```
+
+`Legit Healthview` only changes the leaderboard while it is active. It uses the original edict gold color from the Rogue module. `Save and Close For Session` stores the current Hydrogen settings in memory, closes the menu, and locks the toggle key for the rest of the current game session.
 
 It is compiled as `dist/hydrogen.lua`. The main loader only uses it when `getgenv().HYDROGEN_LEGIT = true` or `getgenv().HYDROXIDE_LEGIT = true` is set before running the loader.
 
@@ -187,7 +203,7 @@ Hydroxide/
   ROGUE_BATTLEGROUNDS/
     rlb.lua                   -- Rogue Battlegrounds script (~14,000 lines)
   Hydrogen/
-    hydrogen.lua              -- Minimal Rogue Lineage legit scaffold (~500 lines)
+    hydrogen.lua              -- Minimal Rogue Lineage legit scaffold (~900 lines)
   DEPENDENCIES/
     Library.lua               -- UI framework
     SaveManager.lua           -- Config save/load

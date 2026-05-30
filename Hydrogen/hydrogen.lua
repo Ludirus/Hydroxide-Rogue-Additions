@@ -28,33 +28,117 @@ if existing then
     existing:Destroy()
 end
 
+local menuWidth = 318
+local edictGold = Color3.fromRGB(255, 214, 81)
+
+local theme = {
+    accent = Color3.fromRGB(64, 221, 235),
+    accentSoft = Color3.fromRGB(96, 140, 255),
+    background = Color3.fromRGB(7, 9, 12),
+    panel = Color3.fromRGB(16, 19, 25),
+    panelLight = Color3.fromRGB(25, 30, 38),
+    text = Color3.fromRGB(236, 244, 246),
+    dim = Color3.fromRGB(152, 166, 174),
+    border = Color3.fromRGB(56, 68, 78),
+}
+
+local defaultConfig = {
+    auto_block = false,
+    auto_block_chance = 85,
+    block_delay = 45,
+    silent_aim = false,
+    aim_fov = 80,
+    smoothness = 6,
+    visible_check = true,
+    fov_circle = false,
+    legit_intent = false,
+    legit_healthview = false,
+    target_part = "Closest",
+    panic = false,
+}
+
+local function env_table(name)
+    if type(getgenv) ~= "function" then
+        return nil
+    end
+
+    local ok, env = pcall(getgenv)
+    if not ok or type(env) ~= "table" then
+        return nil
+    end
+
+    local value = env[name]
+    return type(value) == "table" and value or nil
+end
+
+local function env_value(name)
+    if type(getgenv) ~= "function" then
+        return nil
+    end
+
+    local ok, env = pcall(getgenv)
+    if not ok or type(env) ~= "table" then
+        return nil
+    end
+
+    return env[name]
+end
+
+local function set_env_value(name, value)
+    if type(getgenv) ~= "function" then
+        return
+    end
+
+    local ok, env = pcall(getgenv)
+    if ok and type(env) == "table" then
+        env[name] = value
+    end
+end
+
+local function copy_config(source)
+    local copy = {}
+    for key, value in pairs(source) do
+        copy[key] = value
+    end
+    return copy
+end
+
+local function apply_config(target, source)
+    if type(source) ~= "table" then
+        return
+    end
+
+    for key, value in pairs(source) do
+        if target[key] ~= nil then
+            target[key] = value
+        end
+    end
+end
+
+local config = copy_config(defaultConfig)
+apply_config(config, env_table("HYDROGEN_SESSION_CONFIG"))
+apply_config(config, env_table("HYDROGEN_SETTINGS"))
+
 local Hydrogen = {
     open = false,
     selected = 1,
-    accent = Color3.fromRGB(0, 214, 230),
-    background = Color3.fromRGB(8, 10, 12),
-    panel = Color3.fromRGB(16, 18, 22),
-    panelLight = Color3.fromRGB(24, 28, 34),
-    text = Color3.fromRGB(224, 235, 237),
-    dim = Color3.fromRGB(126, 145, 150),
-    config = {
-        auto_block = false,
-        block_delay = 45,
-        silent_aim = false,
-        aim_fov = 80,
-        smoothness = 6,
-        visible_check = true,
-        fov_circle = false,
-        legit_intent = false,
-        target_part = "Closest",
-        panic = false,
-    },
+    closed_for_session = env_value("HYDROGEN_CLOSED_FOR_SESSION") == true,
+    theme = theme,
+    defaults = defaultConfig,
+    accent = theme.accent,
+    background = theme.background,
+    panel = theme.panel,
+    panelLight = theme.panelLight,
+    text = theme.text,
+    dim = theme.dim,
+    config = config,
     connections = {},
 }
 
 local items = {
     { section = "combat" },
     { key = "auto_block", label = "Auto Block", type = "toggle" },
+    { key = "auto_block_chance", label = "Block Chance", type = "number", min = 0, max = 100, step = 5, suffix = "%" },
     { key = "block_delay", label = "Block Delay", type = "number", min = 0, max = 250, step = 5, suffix = "ms" },
     { section = "aim" },
     { key = "silent_aim", label = "Silent Aim", type = "toggle" },
@@ -65,6 +149,7 @@ local items = {
     { key = "fov_circle", label = "FOV Circle", type = "toggle" },
     { section = "legit" },
     { key = "legit_intent", label = "Legit Intent", type = "toggle" },
+    { key = "legit_healthview", label = "Legit Healthview", type = "toggle" },
     { key = "panic", label = "Panic Disable", type = "action" },
 }
 
@@ -88,7 +173,7 @@ root.BackgroundColor3 = Hydrogen.background
 root.BorderSizePixel = 0
 root.ClipsDescendants = true
 root.Position = UDim2.fromOffset(14, 14)
-root.Size = UDim2.fromOffset(292, 0)
+root.Size = UDim2.fromOffset(menuWidth, 0)
 root.Visible = false
 root.Parent = gui
 
@@ -97,15 +182,16 @@ rootCorner.CornerRadius = UDim.new(0, 6)
 rootCorner.Parent = root
 
 local rootStroke = Instance.new("UIStroke")
-rootStroke.Color = Color3.fromRGB(48, 58, 64)
+rootStroke.Color = theme.border
 rootStroke.Thickness = 1
 rootStroke.Transparency = 0.08
 rootStroke.Parent = root
 
 local rootGradient = Instance.new("UIGradient")
 rootGradient.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(18, 22, 27)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(4, 6, 8)),
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 24, 31)),
+    ColorSequenceKeypoint.new(0.55, Color3.fromRGB(11, 13, 18)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(6, 8, 11)),
 })
 rootGradient.Rotation = 90
 rootGradient.Parent = root
@@ -119,9 +205,9 @@ header.Parent = root
 
 local headerGradient = Instance.new("UIGradient")
 headerGradient.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(23, 28, 34)),
-    ColorSequenceKeypoint.new(0.55, Color3.fromRGB(12, 15, 18)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(5, 7, 9)),
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(26, 31, 40)),
+    ColorSequenceKeypoint.new(0.62, Color3.fromRGB(13, 16, 21)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(7, 9, 12)),
 })
 headerGradient.Rotation = 0
 headerGradient.Parent = header
@@ -136,7 +222,7 @@ accentBar.Parent = header
 
 local logo = Instance.new("Frame")
 logo.Name = "Logo"
-logo.BackgroundColor3 = Color3.fromRGB(9, 14, 17)
+logo.BackgroundColor3 = Color3.fromRGB(13, 19, 25)
 logo.BorderSizePixel = 0
 logo.Position = UDim2.fromOffset(12, 8)
 logo.Size = UDim2.fromOffset(28, 28)
@@ -154,8 +240,8 @@ logoStroke.Parent = logo
 
 local logoGradient = Instance.new("UIGradient")
 logoGradient.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 42, 48)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(8, 10, 12)),
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(9, 61, 70)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(11, 13, 18)),
 })
 logoGradient.Rotation = 45
 logoGradient.Parent = logo
@@ -240,8 +326,8 @@ bodyStroke.Parent = body
 
 local bodyGradient = Instance.new("UIGradient")
 bodyGradient.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(19, 23, 28)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(8, 10, 12)),
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 24, 31)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 12, 16)),
 })
 bodyGradient.Rotation = 90
 bodyGradient.Parent = body
@@ -315,6 +401,46 @@ for index, item in ipairs(items) do
     end
 end
 
+local footer = Instance.new("Frame")
+footer.Name = "Footer"
+footer.BackgroundTransparency = 1
+footer.Position = UDim2.fromOffset(8, y + 6)
+footer.Size = UDim2.new(1, -16, 0, 34)
+footer.Parent = body
+
+local saveButton = Instance.new("TextButton")
+saveButton.Name = "SaveClose"
+saveButton.AutoButtonColor = false
+saveButton.BackgroundColor3 = Color3.fromRGB(21, 30, 38)
+saveButton.BorderSizePixel = 0
+saveButton.Font = Enum.Font.GothamSemibold
+saveButton.Text = "Save and Close For Session"
+saveButton.TextColor3 = Hydrogen.text
+saveButton.TextSize = 13
+saveButton.Size = UDim2.fromScale(1, 1)
+saveButton.Parent = footer
+
+local saveButtonCorner = Instance.new("UICorner")
+saveButtonCorner.CornerRadius = UDim.new(0, 5)
+saveButtonCorner.Parent = saveButton
+
+local saveButtonStroke = Instance.new("UIStroke")
+saveButtonStroke.Color = Hydrogen.accent
+saveButtonStroke.Transparency = 0.18
+saveButtonStroke.Thickness = 1
+saveButtonStroke.Parent = saveButton
+
+local saveButtonGradient = Instance.new("UIGradient")
+saveButtonGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(25, 40, 50)),
+    ColorSequenceKeypoint.new(0.55, Color3.fromRGB(18, 25, 32)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(13, 17, 23)),
+})
+saveButtonGradient.Rotation = 0
+saveButtonGradient.Parent = saveButton
+
+y = y + 46
+
 local bodyHeight = y + 8
 body.Size = UDim2.new(1, -16, 0, bodyHeight)
 
@@ -325,6 +451,185 @@ local function disconnect(name)
         Hydrogen.connections[name]:Disconnect()
         Hydrogen.connections[name] = nil
     end
+end
+
+local healthviewLabels = {}
+local healthviewFrame
+local hiddenNameMarker = string.char(226, 128, 142)
+
+local function trim_name(text)
+    text = tostring(text or "")
+    text = text:gsub(hiddenNameMarker, "")
+    text = text:gsub("^@", "")
+    text = text:gsub("^%s+", "")
+    text = text:gsub("%s+$", "")
+    return text
+end
+
+local function player_from_text(text)
+    local cleaned = trim_name(text)
+    if cleaned == "" then
+        return nil
+    end
+
+    local player = Players:FindFirstChild(cleaned)
+    if player then
+        return player
+    end
+
+    for _, candidate in ipairs(Players:GetPlayers()) do
+        if candidate.DisplayName == cleaned or candidate.Name == cleaned then
+            return candidate
+        end
+    end
+
+    local firstToken = cleaned:match("^([^%s]+)")
+    if firstToken and firstToken ~= cleaned then
+        return Players:FindFirstChild(firstToken)
+    end
+
+    return nil
+end
+
+local function player_from_value(value)
+    if typeof and typeof(value) == "Instance" and value:IsA("Player") then
+        return value
+    end
+
+    if type(value) == "string" then
+        return player_from_text(value)
+    end
+
+    return nil
+end
+
+local function resolve_player_from_label(label)
+    local player = player_from_text(label.Text) or player_from_text(label.Name)
+    if player then
+        return player
+    end
+
+    if type(getconnections) ~= "function" or not debug or type(debug.getupvalues) ~= "function" then
+        return nil
+    end
+
+    local ok, connections = pcall(getconnections, label.MouseEnter)
+    if not ok or type(connections) ~= "table" then
+        return nil
+    end
+
+    for _, connection in ipairs(connections) do
+        local fn = connection and connection.Function
+        if type(fn) == "function" then
+            local upvalueOk, upvalues = pcall(debug.getupvalues, fn)
+            if upvalueOk and type(upvalues) == "table" then
+                for _, value in pairs(upvalues) do
+                    player = player_from_value(value)
+                    if player then
+                        return player
+                    end
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+local function leaderboard_frame()
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    local leaderboardGui = playerGui and playerGui:FindFirstChild("LeaderboardGui")
+    local mainFrame = leaderboardGui and leaderboardGui:FindFirstChild("MainFrame")
+    return mainFrame and mainFrame:FindFirstChild("ScrollingFrame") or nil
+end
+
+local function restore_healthview_labels()
+    for label, color in pairs(healthviewLabels) do
+        if label and label.Parent then
+            label.TextColor3 = color
+        end
+    end
+
+    for label in pairs(healthviewLabels) do
+        healthviewLabels[label] = nil
+    end
+end
+
+local function apply_healthview_label(instance)
+    if not Hydrogen.config.legit_healthview then
+        return
+    end
+
+    if not instance or not instance:IsA("TextLabel") then
+        return
+    end
+
+    if not resolve_player_from_label(instance) then
+        return
+    end
+
+    if healthviewLabels[instance] == nil then
+        healthviewLabels[instance] = instance.TextColor3
+    end
+
+    instance.TextColor3 = edictGold
+end
+
+local function refresh_healthview()
+    if not Hydrogen.config.legit_healthview then
+        return
+    end
+
+    local frame = leaderboard_frame()
+    if not frame then
+        return
+    end
+
+    for _, instance in ipairs(frame:GetDescendants()) do
+        apply_healthview_label(instance)
+    end
+
+    if healthviewFrame ~= frame then
+        healthviewFrame = frame
+        disconnect("healthview_descendant_added")
+        Hydrogen.connections.healthview_descendant_added = frame.DescendantAdded:Connect(function(instance)
+            task.defer(apply_healthview_label, instance)
+        end)
+    end
+end
+
+local function set_healthview(enabled)
+    disconnect("healthview_descendant_added")
+    disconnect("healthview_gui_added")
+    disconnect("healthview_refresh")
+    healthviewFrame = nil
+
+    if not enabled then
+        restore_healthview_labels()
+        return
+    end
+
+    refresh_healthview()
+
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if playerGui then
+        Hydrogen.connections.healthview_gui_added = playerGui.ChildAdded:Connect(function(child)
+            if child.Name == "LeaderboardGui" then
+                task.defer(refresh_healthview)
+            end
+        end)
+    end
+
+    local elapsed = 0
+    Hydrogen.connections.healthview_refresh = RunService.Heartbeat:Connect(function(deltaTime)
+        elapsed = elapsed + deltaTime
+        if elapsed < 1 then
+            return
+        end
+
+        elapsed = 0
+        refresh_healthview()
+    end)
 end
 
 local function update_fov_circle()
@@ -363,6 +668,7 @@ local function panic_disable()
             Hydrogen.config[item.key] = false
         end
     end
+    set_healthview(false)
     update_fov_circle()
 end
 
@@ -416,6 +722,10 @@ local function apply_item(item, direction)
         panic_disable()
     end
 
+    if item.key == "legit_healthview" then
+        set_healthview(Hydrogen.config.legit_healthview)
+    end
+
     update_fov_circle()
     update_rows()
 end
@@ -432,17 +742,21 @@ local function move_selection(direction)
 end
 
 local function set_open(state)
+    if state and Hydrogen.closed_for_session then
+        return
+    end
+
     Hydrogen.open = state
 
     if state then
         root.Visible = true
-        root.Size = UDim2.fromOffset(292, 44)
+        root.Size = UDim2.fromOffset(menuWidth, 44)
         TweenService:Create(root, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            Size = UDim2.fromOffset(292, bodyHeight + 60),
+            Size = UDim2.fromOffset(menuWidth, bodyHeight + 60),
         }):Play()
     else
         TweenService:Create(root, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-            Size = UDim2.fromOffset(292, 0),
+            Size = UDim2.fromOffset(menuWidth, 0),
         }):Play()
         task.delay(0.12, function()
             if not Hydrogen.open then
@@ -452,18 +766,54 @@ local function set_open(state)
     end
 end
 
+local function save_and_close_for_session()
+    set_env_value("HYDROGEN_SESSION_CONFIG", copy_config(Hydrogen.config))
+    set_env_value("HYDROGEN_CLOSED_FOR_SESSION", true)
+    Hydrogen.closed_for_session = true
+    set_open(false)
+end
+
+saveButton.MouseButton1Click:Connect(save_and_close_for_session)
+saveButton.MouseEnter:Connect(function()
+    TweenService:Create(saveButton, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        BackgroundColor3 = Color3.fromRGB(29, 45, 55),
+    }):Play()
+    TweenService:Create(saveButtonStroke, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Transparency = 0,
+    }):Play()
+end)
+saveButton.MouseLeave:Connect(function()
+    TweenService:Create(saveButton, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        BackgroundColor3 = Color3.fromRGB(21, 30, 38),
+    }):Play()
+    TweenService:Create(saveButtonStroke, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Transparency = 0.18,
+    }):Play()
+end)
+
+local function is_toggle_key(key)
+    local keyName = tostring(key)
+    return key == Enum.KeyCode.Minus
+        or key == Enum.KeyCode.KeypadMinus
+        or keyName == "Enum.KeyCode.Equals"
+end
+
 local inputConnection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed or UserInputService:GetFocusedTextBox() then
         return
     end
 
     local key = input.KeyCode
-    if key == Enum.KeyCode.Minus or key == Enum.KeyCode.KeypadMinus then
+    if is_toggle_key(key) then
+        if Hydrogen.closed_for_session then
+            return
+        end
+
         set_open(not Hydrogen.open)
         return
     end
 
-    if not Hydrogen.open then
+    if Hydrogen.closed_for_session or not Hydrogen.open then
         return
     end
 
@@ -487,6 +837,7 @@ end)
 
 gui.Destroying:Connect(function()
     inputConnection:Disconnect()
+    set_healthview(false)
     for name in pairs(Hydrogen.connections) do
         disconnect(name)
     end
@@ -496,8 +847,41 @@ gui.Destroying:Connect(function()
     end
 end)
 
+function Hydrogen.GetConfig()
+    return copy_config(Hydrogen.config)
+end
+
+function Hydrogen.SetConfig(key, value)
+    if Hydrogen.config[key] == nil then
+        return false
+    end
+
+    Hydrogen.config[key] = value
+    if key == "legit_healthview" then
+        set_healthview(value == true)
+    end
+
+    update_fov_circle()
+    update_rows()
+    return true
+end
+
+function Hydrogen.SaveForSession()
+    save_and_close_for_session()
+end
+
+function Hydrogen.ShouldAutoBlock()
+    if not Hydrogen.config.auto_block then
+        return false
+    end
+
+    return math.random(1, 100) <= math.clamp(Hydrogen.config.auto_block_chance or 0, 0, 100)
+end
+
 if getgenv then
     getgenv().HYDROGEN = Hydrogen
 end
 
 update_rows()
+update_fov_circle()
+set_healthview(Hydrogen.config.legit_healthview)
