@@ -9,6 +9,7 @@ local TweenService = game:GetService("TweenService")
 local ContextActionService = game:GetService("ContextActionService")
 local CoreGui = game:GetService("CoreGui")
 local HttpService = game:GetService("HttpService")
+local Stats = game:GetService("Stats")
 local VirtualInputManager
 pcall(function()
     VirtualInputManager = game:GetService("VirtualInputManager")
@@ -80,11 +81,12 @@ local rainbowColors = {
 local defaultConfig = {
     auto_block = false,
     auto_block_chance = 85,
-    block_delay = 45,
+    block_delay = 0,
     block_viribus = true,
     block_owl_slash = true,
     block_shadowrush = true,
     block_perfect_cast = true,
+    block_grapple = true,
     silent_aim = false,
     aim_fov = 90,
     smoothness = 6,
@@ -102,7 +104,7 @@ local menuItems = {
     { section = "combat", id = "combat" },
     { key = "auto_block", label = "Auto Block", type = "toggle", tooltip = "Rolls the configured block chance before Hydrogen reports a block." },
     { key = "auto_block_chance", label = "Block Chance", type = "number", min = 0, max = 100, step = 5, suffix = "%", tooltip = "Left click increases. Right click decreases. Keypad bindings stay keypad-only." },
-    { key = "block_delay", label = "Block Delay", type = "number", min = 0, max = 250, step = 5, suffix = "ms", tooltip = "Delay value exposed to the legit block helper." },
+    { key = "block_delay", label = "Block Delay", type = "number", min = 0, max = 250, step = 5, suffix = "ms", tooltip = "Extra delay added after ping adjustment. Keep at 0 for hydroXide-style timing." },
     {
         key = "block_list",
         label = "Things To Block",
@@ -112,7 +114,8 @@ local menuItems = {
             { key = "block_viribus", label = "Viribus", type = "toggle", child = true },
             { key = "block_owl_slash", label = "Owl Slash", type = "toggle", child = true },
             { key = "block_shadowrush", label = "Shadowrush", type = "toggle", child = true },
-            { key = "block_perfect_cast", label = "Perfect Cast", type = "toggle", child = true },
+            { key = "block_perfect_cast", label = "Verdien", type = "toggle", child = true },
+            { key = "block_grapple", label = "Grapple", type = "toggle", child = true },
         },
     },
     { section = "aim", id = "aim" },
@@ -390,6 +393,7 @@ local update_rows
 local set_healthview
 local set_legit_intent
 local set_gate_hotkeys
+local set_auto_block
 local update_aim_loop
 local unload
 local queue_health_potion
@@ -584,39 +588,41 @@ New("Frame", {
     Size = UDim2.new(1, -16, 0, 1),
 }, footer)
 
-local statusText = New("TextLabel", {
-    Name = "Status",
-    BackgroundTransparency = 1,
-    Font = Enum.Font.Code,
-    Text = "ready",
-    TextColor3 = theme.dim,
-    TextSize = 11,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    Position = UDim2.fromOffset(10, 2),
-    Size = UDim2.new(0.36, -10, 1, -4),
-}, footer)
-
 local saveCloseButton = New("TextButton", {
     Name = "SaveClose",
     AutoButtonColor = false,
     BackgroundColor3 = theme.rowHover,
-    BackgroundTransparency = 1,
+    BackgroundTransparency = 0.92,
     BorderSizePixel = 0,
     Font = Enum.Font.Code,
     Text = "session lock -> save + close",
     TextColor3 = Color3.fromRGB(213, 205, 218),
     TextSize = 12,
-    TextXAlignment = Enum.TextXAlignment.Right,
-    Position = UDim2.new(0.36, 0, 0, 0),
-    Size = UDim2.new(0.64, -10, 1, 0),
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Position = UDim2.fromOffset(10, 0),
+    Size = UDim2.new(1, -20, 1, 0),
 }, footer)
+corner(saveCloseButton, 2)
+local saveCloseStroke = stroke(saveCloseButton, theme.borderSoft, 0.45, 1)
 
 local saveCloseMarker = New("Frame", {
     Name = "SaveCloseMarker",
     BackgroundColor3 = theme.muted,
     BorderSizePixel = 0,
-    Position = UDim2.new(0.36, 2, 0, 14),
+    Position = UDim2.fromOffset(5, 14),
     Size = UDim2.fromOffset(2, 15),
+}, footer)
+
+local saveCloseArrow = New("TextLabel", {
+    Name = "SaveCloseArrow",
+    BackgroundTransparency = 1,
+    Font = Enum.Font.Code,
+    Text = ">",
+    TextColor3 = theme.muted,
+    TextSize = 13,
+    TextXAlignment = Enum.TextXAlignment.Right,
+    Position = UDim2.new(1, -24, 0, 0),
+    Size = UDim2.fromOffset(16, FOOTER_HEIGHT),
 }, footer)
 
 local tooltip = New("TextLabel", {
@@ -639,9 +645,7 @@ local tooltip = New("TextLabel", {
 corner(tooltip, 3)
 stroke(tooltip, theme.red, 0.35, 1)
 
-notify = function(message)
-    statusText.Text = tostring(message or "ready")
-end
+notify = function() end
 
 do
     local offset = -1
@@ -760,6 +764,8 @@ local function run_side_effect(item)
         set_healthview(config.legit_healthview == true)
     elseif item.key == "gate_hotkeys" and set_gate_hotkeys then
         set_gate_hotkeys(config.gate_hotkeys == true)
+    elseif item.key == "auto_block" and set_auto_block then
+        set_auto_block(config.auto_block == true)
     elseif (item.key == "silent_aim" or item.key == "fov_circle" or item.key == "aim_fov" or item.key == "visible_check" or item.key == "target_part") and update_aim_loop then
         update_aim_loop()
     end
@@ -1208,6 +1214,511 @@ update_aim_loop = function()
             fovCircle.Radius = tonumber(config.aim_fov) or defaultConfig.aim_fov
             fovCircle.Visible = config.fov_circle == true and config.silent_aim == true
             fovCircle.Color = Hydrogen.current_target and theme.success or theme.red
+        end
+    end))
+end
+
+local AUTO_BLOCK_DETECTION_RANGE = 30
+local AUTO_BLOCK_COOLDOWN = 0.1
+local AUTO_BLOCK_FOV_ANGLE = 180
+local EARTH_PILLAR_BLOCK_DISTANCE = 10
+local EARTH_PILLAR_BLOCK_DURATION = 0.45
+
+local autoBlockConnections = {}
+local autoBlockPlayerConnections = {}
+local autoBlockCharacterConnections = {}
+local autoBlockLocalCharacterConnections = {}
+local autoBlockLast = 0
+local autoBlockInputBlocked = false
+
+local blockAbilityKeys = {
+    viribus = "block_viribus",
+    owlslash = "block_owl_slash",
+    ["owl slash"] = "block_owl_slash",
+    shadowrush = "block_shadowrush",
+    shadowrushcharge = "block_shadowrush",
+    ["shadow rush"] = "block_shadowrush",
+    perfectcast = "block_perfect_cast",
+    ["perfect cast"] = "block_perfect_cast",
+    verdien = "block_perfect_cast",
+    grapple = "block_grapple",
+}
+
+local autoBlockSounds = {
+    OwlSlash = { ability = "Owlslash", delay = 0.1, blockDuration = 0.7, requiresVisibility = false },
+    Shadowrush = { ability = "Shadowrush", delay = 0.05, blockDuration = 0.3, requiresVisibility = true },
+    ShadowrushCharge = { ability = "Shadowrush", delay = 0.05, blockDuration = 0.3, requiresVisibility = true },
+    PerfectCast = { ability = "Verdien", delay = 0, blockDuration = 0.25, requiresVisibility = true },
+}
+
+local function block_key_for_ability(abilityName)
+    local normalized = tostring(abilityName or ""):lower():gsub("_", " "):gsub("%s+", " ")
+    normalized = normalized:gsub("^%s+", ""):gsub("%s+$", "")
+    return blockAbilityKeys[normalized] or blockAbilityKeys[normalized:gsub("%s+", "")]
+end
+
+local function should_auto_block_ability(abilityName)
+    if not config.auto_block then
+        return false
+    end
+
+    local blockKey = block_key_for_ability(abilityName)
+    if blockKey and config[blockKey] == false then
+        return false
+    end
+
+    return math.random(1, 100) <= clamp_number(config.auto_block_chance, 0, 100)
+end
+
+local function auto_block_connect(connection)
+    autoBlockConnections[#autoBlockConnections + 1] = connection
+    return connection
+end
+
+local function auto_block_connect_local_character(connection)
+    autoBlockLocalCharacterConnections[#autoBlockLocalCharacterConnections + 1] = connection
+    return connection
+end
+
+local function disconnect_auto_block_local_character()
+    for _, connection in ipairs(autoBlockLocalCharacterConnections) do
+        pcall(function()
+            connection:Disconnect()
+        end)
+    end
+    autoBlockLocalCharacterConnections = {}
+end
+
+local function auto_block_bind_inputs()
+    autoBlockInputBlocked = true
+    ContextActionService:BindAction("HydrogenBlockAutoParryInputs", function()
+        return Enum.ContextActionResult.Sink
+    end, false, Enum.KeyCode.F, Enum.KeyCode.G)
+    ContextActionService:BindAction("HydrogenBlockAutoParryMouse", function()
+        if autoBlockInputBlocked then
+            return Enum.ContextActionResult.Sink
+        end
+        return Enum.ContextActionResult.Pass
+    end, false, Enum.UserInputType.MouseButton1, Enum.UserInputType.MouseButton2)
+end
+
+local function auto_block_unbind_inputs()
+    autoBlockInputBlocked = false
+    ContextActionService:UnbindAction("HydrogenBlockAutoParryInputs")
+    ContextActionService:UnbindAction("HydrogenBlockAutoParryMouse")
+end
+
+local function auto_block_ping()
+    local ok, ping = pcall(function()
+        local performanceStats = Stats:FindFirstChild("PerformanceStats")
+        local pingItem = performanceStats and performanceStats:FindFirstChild("Ping")
+        return pingItem and pingItem:GetValue() or 0
+    end)
+    return ok and tonumber(ping) or 0
+end
+
+local function auto_block_on_cooldown()
+    local character = LocalPlayer.Character
+    return not character or character:FindFirstChild("ParryCool") ~= nil
+end
+
+local function auto_block_visible(targetPart, checkFov)
+    local camera = workspace.CurrentCamera
+    local playerRoot = character_root()
+    if not camera or not targetPart or not playerRoot then
+        return false
+    end
+
+    local _, onScreen = camera:WorldToScreenPoint(targetPart.Position)
+    if not onScreen then
+        return false
+    end
+
+    local direction = targetPart.Position - playerRoot.Position
+    if direction.Magnitude <= 0 then
+        return true
+    end
+
+    if checkFov ~= false then
+        local angleThreshold = math.cos(math.rad(AUTO_BLOCK_FOV_ANGLE / 2))
+        if playerRoot.CFrame.LookVector:Dot(direction.Unit) <= angleThreshold then
+            return false
+        end
+    end
+
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = { LocalPlayer.Character }
+    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+
+    local rayResult = workspace:Raycast(playerRoot.Position, direction, rayParams)
+    return not rayResult or rayResult.Instance:IsDescendantOf(targetPart.Parent)
+end
+
+local function auto_block_in_fov(targetPart)
+    local playerRoot = character_root()
+    if not playerRoot or not targetPart then
+        return false
+    end
+
+    local direction = targetPart.Position - playerRoot.Position
+    if direction.Magnitude <= 0 then
+        return true
+    end
+
+    local angleThreshold = math.cos(math.rad(AUTO_BLOCK_FOV_ANGLE / 2))
+    return playerRoot.CFrame.LookVector:Dot(direction.Unit) > angleThreshold
+end
+
+local function auto_block_remotes()
+    local character = LocalPlayer.Character
+    local handler = character and character:FindFirstChild("CharacterHandler", true)
+    local remotes = handler and handler:FindFirstChild("Remotes")
+    return remotes and remotes:FindFirstChild("Block"), remotes and remotes:FindFirstChild("Unblock")
+end
+
+local function perform_auto_block(delaySeconds, blockDuration, useVim)
+    local character = LocalPlayer.Character
+    if not config.auto_block or not character or UserInputService:GetFocusedTextBox() then
+        return false
+    end
+
+    local now = tick()
+    if now - autoBlockLast < AUTO_BLOCK_COOLDOWN then
+        return false
+    end
+
+    if character:FindFirstChild("NoDash") or character:FindFirstChildOfClass("ForceField") or auto_block_on_cooldown() then
+        return false
+    end
+
+    autoBlockLast = now
+    blockDuration = tonumber(blockDuration) or 0.3
+
+    local adjustedDelay = tonumber(delaySeconds) or 0
+    adjustedDelay = adjustedDelay + ((tonumber(config.block_delay) or 0) / 1000)
+    adjustedDelay = math.max(0, adjustedDelay - (auto_block_ping() / 2000))
+
+    if not useVim then
+        auto_block_bind_inputs()
+    end
+
+    task.spawn(function()
+        if adjustedDelay > 0 then
+            task.wait(adjustedDelay)
+            if auto_block_on_cooldown() then
+                if not useVim then
+                    auto_block_unbind_inputs()
+                end
+                return
+            end
+        end
+
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local mana = character:FindFirstChild("Mana")
+        if humanoid and mana and tonumber(mana.Value) and mana.Value > 0 then
+            pcall(function()
+                humanoid:UnequipTools()
+            end)
+        end
+
+        local blockRemote, unblockRemote = auto_block_remotes()
+        if useVim and VirtualInputManager then
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+            task.delay(blockDuration, function()
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                auto_block_unbind_inputs()
+            end)
+        elseif blockRemote and unblockRemote then
+            blockRemote:FireServer(false)
+            task.delay(blockDuration, function()
+                unblockRemote:FireServer({})
+                auto_block_unbind_inputs()
+            end)
+        elseif VirtualInputManager then
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+            task.delay(blockDuration, function()
+                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+                auto_block_unbind_inputs()
+            end)
+        else
+            task.delay(blockDuration, auto_block_unbind_inputs)
+        end
+    end)
+
+    return true
+end
+
+local function disconnect_auto_block_character(player)
+    local connections = autoBlockCharacterConnections[player]
+    if connections then
+        for _, connection in ipairs(connections) do
+            pcall(function()
+                connection:Disconnect()
+            end)
+        end
+    end
+    autoBlockCharacterConnections[player] = nil
+end
+
+local function connect_auto_block_character(player, character)
+    if not character then
+        return
+    end
+
+    disconnect_auto_block_character(player)
+    local connections = {}
+    autoBlockCharacterConnections[player] = connections
+
+    local rootPart = character:FindFirstChild("HumanoidRootPart") or character:WaitForChild("HumanoidRootPart", 3)
+    if not rootPart then
+        return
+    end
+
+    local function handle_sound(sound)
+        if not sound:IsA("Sound") then
+            return
+        end
+
+        local info = autoBlockSounds[sound.Name]
+        if not info then
+            return
+        end
+
+        connections[#connections + 1] = sound.Played:Connect(function()
+            if not should_auto_block_ability(info.ability) then
+                return
+            end
+
+            local playerRoot = character_root()
+            if not playerRoot or not rootPart.Parent then
+                return
+            end
+
+            local distance = (playerRoot.Position - rootPart.Position).Magnitude
+            if distance > AUTO_BLOCK_DETECTION_RANGE then
+                return
+            end
+
+            if sound.Name == "OwlSlash" and not (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("AIRSLASH")) then
+                return
+            elseif sound.Name == "Shadowrush" or sound.Name == "ShadowrushCharge" then
+                if distance <= 0 then
+                    return
+                end
+                local directionToPlayer = (playerRoot.Position - rootPart.Position).Unit
+                if rootPart.CFrame.LookVector:Dot(directionToPlayer) <= -0.17 then
+                    return
+                end
+            elseif sound.Name == "PerfectCast" and not (character:FindFirstChild("Verdien") or character:FindFirstChild("New Verdien")) then
+                return
+            end
+
+            if info.requiresVisibility and not auto_block_visible(rootPart, true) then
+                return
+            end
+
+            local actualDelay = info.delay
+            if (sound.Name == "Shadowrush" or sound.Name == "ShadowrushCharge") and distance <= 9 then
+                actualDelay = 0
+            end
+            perform_auto_block(actualDelay, info.blockDuration, sound.Name == "PerfectCast")
+        end)
+    end
+
+    for _, child in ipairs(rootPart:GetChildren()) do
+        handle_sound(child)
+    end
+
+    connections[#connections + 1] = rootPart.ChildAdded:Connect(function(child)
+        if child:IsA("Sound") then
+            task.wait(0.1)
+            handle_sound(child)
+        end
+    end)
+end
+
+local function disconnect_auto_block_player(player)
+    local connections = autoBlockPlayerConnections[player]
+    if connections then
+        for _, connection in ipairs(connections) do
+            pcall(function()
+                connection:Disconnect()
+            end)
+        end
+    end
+    autoBlockPlayerConnections[player] = nil
+    disconnect_auto_block_character(player)
+end
+
+local function connect_auto_block_player(player)
+    if player == LocalPlayer then
+        return
+    end
+
+    disconnect_auto_block_player(player)
+    local connections = {}
+    autoBlockPlayerConnections[player] = connections
+
+    if player.Character then
+        task.spawn(connect_auto_block_character, player, player.Character)
+    end
+
+    connections[#connections + 1] = player.CharacterAdded:Connect(function(character)
+        if config.auto_block then
+            task.defer(connect_auto_block_character, player, character)
+        end
+    end)
+    connections[#connections + 1] = player.CharacterRemoving:Connect(function()
+        disconnect_auto_block_character(player)
+    end)
+end
+
+local function setup_auto_block_grapple(character)
+    disconnect_auto_block_local_character()
+    if not character then
+        return
+    end
+
+    auto_block_connect_local_character(character.DescendantAdded:Connect(function(child)
+        if not should_auto_block_ability("Grapple") or not (child:IsA("Attachment") and child.Name == "Attachment2") then
+            return
+        end
+
+        task.wait(0.05)
+        local enemyPlayer
+        local shouldBlock = true
+
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                local leftArm = player.Character:FindFirstChild("Left Arm")
+                local cord = leftArm and leftArm:FindFirstChild("Cord")
+                if cord and cord:IsA("Beam") and cord.Attachment1 == child then
+                    enemyPlayer = player
+                    local enemyRoot = player.Character:FindFirstChild("HumanoidRootPart")
+                    shouldBlock = not enemyRoot or auto_block_visible(enemyRoot, false)
+                    break
+                end
+            end
+        end
+
+        if not enemyPlayer or not shouldBlock then
+            return
+        end
+
+        local playerRoot = character_root()
+        local enemyRoot = enemyPlayer.Character and enemyPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if playerRoot and enemyRoot and (playerRoot.Position - enemyRoot.Position).Magnitude > 60 then
+            return
+        end
+
+        perform_auto_block(0, 0.25, true)
+    end))
+end
+
+local function setup_auto_block_viribus(thrown)
+    if not thrown then
+        return
+    end
+
+    auto_block_connect(thrown.ChildAdded:Connect(function(model)
+        if not should_auto_block_ability("Viribus") or not model:IsA("Model") then
+            return
+        end
+
+        local crater = model:FindFirstChild("Crater") or model:WaitForChild("Crater", 1)
+        if not crater then
+            return
+        end
+        if crater:IsA("Model") then
+            crater = crater.PrimaryPart or crater:FindFirstChildWhichIsA("BasePart")
+        end
+        if not crater or not crater:IsA("BasePart") then
+            return
+        end
+
+        local playerRoot = character_root()
+        if not playerRoot or model:FindFirstChild("EarthSpear" .. LocalPlayer.Name) then
+            return
+        end
+
+        if (crater.Position - playerRoot.Position).Magnitude > EARTH_PILLAR_BLOCK_DISTANCE then
+            return
+        end
+
+        local closestCaster
+        local closestDistance = math.huge
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                local casterRoot = player.Character:FindFirstChild("HumanoidRootPart")
+                if casterRoot then
+                    local distance = (casterRoot.Position - crater.Position).Magnitude
+                    if distance < 50 and distance < closestDistance then
+                        closestCaster = casterRoot
+                        closestDistance = distance
+                    end
+                end
+            end
+        end
+
+        if closestCaster then
+            if auto_block_in_fov(closestCaster) then
+                perform_auto_block(0, EARTH_PILLAR_BLOCK_DURATION, false)
+            end
+        elseif auto_block_in_fov(crater) then
+            perform_auto_block(0, EARTH_PILLAR_BLOCK_DURATION, false)
+        end
+    end))
+end
+
+local function disconnect_auto_block()
+    for _, connection in ipairs(autoBlockConnections) do
+        pcall(function()
+            connection:Disconnect()
+        end)
+    end
+    autoBlockConnections = {}
+
+    local players = {}
+    for player in pairs(autoBlockPlayerConnections) do
+        players[#players + 1] = player
+    end
+    for _, player in ipairs(players) do
+        disconnect_auto_block_player(player)
+    end
+
+    disconnect_auto_block_local_character()
+    auto_block_unbind_inputs()
+end
+
+set_auto_block = function(enabled)
+    disconnect_auto_block()
+    if not enabled then
+        return
+    end
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        connect_auto_block_player(player)
+    end
+    auto_block_connect(Players.PlayerAdded:Connect(connect_auto_block_player))
+    auto_block_connect(Players.PlayerRemoving:Connect(disconnect_auto_block_player))
+
+    if LocalPlayer.Character then
+        setup_auto_block_grapple(LocalPlayer.Character)
+    end
+    auto_block_connect(LocalPlayer.CharacterAdded:Connect(function(character)
+        if config.auto_block then
+            task.wait(0.5)
+            setup_auto_block_grapple(character)
+        end
+    end))
+
+    local thrown = workspace:FindFirstChild("Thrown")
+    if thrown then
+        setup_auto_block_viribus(thrown)
+    end
+    auto_block_connect(workspace.ChildAdded:Connect(function(child)
+        if config.auto_block and child.Name == "Thrown" then
+            setup_auto_block_viribus(child)
         end
     end))
 end
@@ -2413,6 +2924,10 @@ local function cleanup()
         fovCircle = nil
     end
 
+    if disconnect_auto_block then
+        disconnect_auto_block()
+    end
+
     set_env_value("HYDROGEN", nil)
 end
 
@@ -2429,14 +2944,20 @@ end)
 
 saveCloseButton.MouseButton1Click:Connect(save_and_close_for_session)
 saveCloseButton.MouseEnter:Connect(function()
-    saveCloseButton.BackgroundTransparency = 0.78
+    saveCloseButton.BackgroundTransparency = 0.72
     saveCloseButton.TextColor3 = theme.text
+    saveCloseStroke.Color = theme.redSoft
+    saveCloseStroke.Transparency = 0.15
     saveCloseMarker.BackgroundColor3 = theme.red
+    saveCloseArrow.TextColor3 = theme.red
 end)
 saveCloseButton.MouseLeave:Connect(function()
-    saveCloseButton.BackgroundTransparency = 1
+    saveCloseButton.BackgroundTransparency = 0.92
     saveCloseButton.TextColor3 = Color3.fromRGB(213, 205, 218)
+    saveCloseStroke.Color = theme.borderSoft
+    saveCloseStroke.Transparency = 0.45
     saveCloseMarker.BackgroundColor3 = theme.muted
+    saveCloseArrow.TextColor3 = theme.muted
 end)
 
 header.InputBegan:Connect(function(input)
@@ -2539,6 +3060,8 @@ function Hydrogen.SetConfig(key, value)
         set_healthview(config.legit_healthview == true)
     elseif key == "gate_hotkeys" then
         set_gate_hotkeys(config.gate_hotkeys == true)
+    elseif key == "auto_block" then
+        set_auto_block(config.auto_block == true)
     elseif key == "silent_aim" or key == "fov_circle" or key == "aim_fov" or key == "visible_check" or key == "target_part" then
         update_aim_loop()
     end
@@ -2568,34 +3091,8 @@ function Hydrogen.GetClosestTarget()
     return get_closest_target()
 end
 
-local blockAbilityKeys = {
-    viribus = "block_viribus",
-    owlslash = "block_owl_slash",
-    ["owl slash"] = "block_owl_slash",
-    shadowrush = "block_shadowrush",
-    shadowrushcharge = "block_shadowrush",
-    ["shadow rush"] = "block_shadowrush",
-    perfectcast = "block_perfect_cast",
-    ["perfect cast"] = "block_perfect_cast",
-}
-
-local function block_key_for_ability(abilityName)
-    local normalized = tostring(abilityName or ""):lower():gsub("_", " "):gsub("%s+", " ")
-    normalized = normalized:gsub("^%s+", ""):gsub("%s+$", "")
-    return blockAbilityKeys[normalized] or blockAbilityKeys[normalized:gsub("%s+", "")]
-end
-
 function Hydrogen.ShouldAutoBlock(abilityName)
-    if not config.auto_block then
-        return false
-    end
-
-    local blockKey = block_key_for_ability(abilityName)
-    if blockKey and config[blockKey] == false then
-        return false
-    end
-
-    return math.random(1, 100) <= clamp_number(config.auto_block_chance, 0, 100)
+    return should_auto_block_ability(abilityName)
 end
 
 function Hydrogen.ShouldBlock(abilityName)
@@ -2611,5 +3108,6 @@ rebuild_rows()
 set_legit_intent(config.legit_intent == true)
 set_healthview(config.legit_healthview == true)
 set_gate_hotkeys(config.gate_hotkeys == true)
+set_auto_block(config.auto_block == true)
 update_aim_loop()
 set_dropdown(true)
