@@ -566,10 +566,23 @@ stroke(content, theme.borderSoft, 0.25, 1)
 
 local footer = New("Frame", {
     Name = "Footer",
-    BackgroundTransparency = 1,
+    BackgroundColor3 = theme.panel,
+    BackgroundTransparency = 0.05,
+    BorderSizePixel = 0,
     Position = UDim2.fromOffset(8, TOP_BAR_HEIGHT + HEADER_HEIGHT + 16 + CONTENT_MAX_HEIGHT),
     Size = UDim2.new(1, -16, 0, FOOTER_HEIGHT),
 }, root)
+corner(footer, 2)
+stroke(footer, theme.borderSoft, 0.25, 1)
+
+New("Frame", {
+    Name = "FooterRule",
+    BackgroundColor3 = theme.red,
+    BackgroundTransparency = 0.15,
+    BorderSizePixel = 0,
+    Position = UDim2.fromOffset(8, 0),
+    Size = UDim2.new(1, -16, 0, 1),
+}, footer)
 
 local statusText = New("TextLabel", {
     Name = "Status",
@@ -579,24 +592,32 @@ local statusText = New("TextLabel", {
     TextColor3 = theme.dim,
     TextSize = 11,
     TextXAlignment = Enum.TextXAlignment.Left,
-    Position = UDim2.fromOffset(0, 1),
-    Size = UDim2.new(0.44, -6, 1, -2),
+    Position = UDim2.fromOffset(10, 2),
+    Size = UDim2.new(0.36, -10, 1, -4),
 }, footer)
 
 local saveCloseButton = New("TextButton", {
     Name = "SaveClose",
     AutoButtonColor = false,
-    BackgroundColor3 = Color3.fromRGB(42, 38, 46),
+    BackgroundColor3 = theme.rowHover,
+    BackgroundTransparency = 1,
     BorderSizePixel = 0,
-    Font = Enum.Font.GothamSemibold,
-    Text = "Save and Close For Session",
+    Font = Enum.Font.Code,
+    Text = "session lock -> save + close",
     TextColor3 = Color3.fromRGB(213, 205, 218),
     TextSize = 12,
-    Position = UDim2.new(0.44, 0, 0, 4),
-    Size = UDim2.new(0.56, 0, 1, -8),
+    TextXAlignment = Enum.TextXAlignment.Right,
+    Position = UDim2.new(0.36, 0, 0, 0),
+    Size = UDim2.new(0.64, -10, 1, 0),
 }, footer)
-corner(saveCloseButton, 5)
-stroke(saveCloseButton, theme.muted, 0.15, 1)
+
+local saveCloseMarker = New("Frame", {
+    Name = "SaveCloseMarker",
+    BackgroundColor3 = theme.muted,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0.36, 2, 0, 14),
+    Size = UDim2.fromOffset(2, 15),
+}, footer)
 
 local tooltip = New("TextLabel", {
     Name = "Tooltip",
@@ -2407,6 +2428,16 @@ collapseButton.MouseButton1Click:Connect(function()
 end)
 
 saveCloseButton.MouseButton1Click:Connect(save_and_close_for_session)
+saveCloseButton.MouseEnter:Connect(function()
+    saveCloseButton.BackgroundTransparency = 0.78
+    saveCloseButton.TextColor3 = theme.text
+    saveCloseMarker.BackgroundColor3 = theme.red
+end)
+saveCloseButton.MouseLeave:Connect(function()
+    saveCloseButton.BackgroundTransparency = 1
+    saveCloseButton.TextColor3 = Color3.fromRGB(213, 205, 218)
+    saveCloseMarker.BackgroundColor3 = theme.muted
+end)
 
 header.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 then
