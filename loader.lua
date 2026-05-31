@@ -6,6 +6,31 @@ if getgenv then
     getgenv().HYDROXIDE_REPO = repo
 end
 
+local function set_loader_stage(stage, detail)
+    if getgenv then
+        local env = getgenv()
+        env.HYDROXIDE_LOAD_STAGE = stage
+        env.HYDROXIDE_LOAD_DETAIL = detail
+    end
+end
+
+local function set_loader_error(message)
+    if getgenv then
+        local env = getgenv()
+        env.HYDROXIDE_LAST_ERROR = tostring(message)
+    end
+end
+
+local function visible_warn(message, detail)
+    if detail ~= nil then
+        warn(message, detail)
+    else
+        warn(message)
+    end
+end
+
+set_loader_stage("loader_start", "initializing")
+
 local HYDROXIDE_DEBUG_USER = "Caikunya"
 local function is_hydroxide_debug_enabled()
     local default_enabled = false
@@ -53,16 +78,37 @@ local function legit_flag_enabled()
         return false
     end
 
+    local function flag_truthy(value)
+        if value == true then
+            return true
+        end
+        if type(value) == "number" then
+            return value ~= 0
+        end
+        if type(value) ~= "string" then
+            return false
+        end
+
+        local text = value:lower():gsub("^%s+", ""):gsub("%s+$", "")
+        return text == "true" or text == "1" or text == "yes" or text == "on" or text == "legit"
+    end
+
     local env = getgenv()
-    return env.HYDROGEN_LEGIT == true or env.HYDROXIDE_LEGIT == true or env.HYDROGEN_MODE == "legit"
+    return flag_truthy(env.HYDROGEN_LEGIT) or flag_truthy(env.HYDROXIDE_LEGIT) or tostring(env.HYDROGEN_MODE or ""):lower() == "legit"
 end
 
 local function run_fetched_script(label, source, options)
     options = options or {}
     local fn, compile_err = loadstring(source)
     if not fn then
+        local message = string.format("[HYDROXIDE] %s compile failed: %s", label, tostring(compile_err))
+        set_loader_stage("loader_compile_error", label)
+        set_loader_error(message)
         if options.raise then
-            error(string.format("[HYDROXIDE] %s compile failed: %s", label, tostring(compile_err)))
+            error(message)
+        end
+        if options.visible_errors then
+            visible_warn(message)
         end
         if not options.quiet then
             debug_warn(string.format("[HYDROXIDE] %s compile failed:", label), compile_err)
@@ -73,8 +119,14 @@ local function run_fetched_script(label, source, options)
 
     local run_ok, run_err = pcall(fn)
     if not run_ok then
+        local message = string.format("[HYDROXIDE] %s runtime failed: %s", label, tostring(run_err))
+        set_loader_stage("loader_runtime_error", label)
+        set_loader_error(message)
         if options.raise then
             error(run_err)
+        end
+        if options.visible_errors then
+            visible_warn(message)
         end
         if not options.quiet then
             debug_warn(string.format("[HYDROXIDE] %s runtime failed:", label), run_err)
@@ -84,12 +136,14 @@ local function run_fetched_script(label, source, options)
         return false
     end
 
+    set_loader_stage("loader_done", label)
     return true
 end
 
 local function load_repo_script(label, path, options)
     options = options or {}
     local url = resolve_repo_file_url(path)
+    set_loader_stage("loader_fetching", label)
     if not options.quiet then
         debug_print(string.format("[HYDROXIDE] Loader fetching %s", url))
     end
@@ -99,8 +153,14 @@ local function load_repo_script(label, path, options)
     end)
 
     if not fetch_ok then
+        local message = string.format("[HYDROXIDE] Loader HttpGet failed for %s: %s", label, tostring(source_or_err))
+        set_loader_stage("loader_fetch_error", label)
+        set_loader_error(message)
         if options.raise then
-            error(string.format("[HYDROXIDE] Loader HttpGet failed for %s: %s", label, tostring(source_or_err)))
+            error(message)
+        end
+        if options.visible_errors then
+            visible_warn(message)
         end
         if not options.quiet then
             debug_warn(string.format("[HYDROXIDE] Loader HttpGet failed for %s:", label), source_or_err)
@@ -109,14 +169,23 @@ local function load_repo_script(label, path, options)
         return false
     end
 
+    set_loader_stage("loader_fetched", label)
     return run_fetched_script(label, source_or_err, options)
 end
 
 local entrypoint = getgenv and getgenv().HYDROXIDE_ENTRYPOINT
 if entrypoint and entrypoint ~= "" and entrypoint ~= "loader.lua" then
     local quiet_entrypoint = tostring(entrypoint):lower():find("hydrogen", 1, true) ~= nil
-    load_repo_script("entrypoint", entrypoint, { quiet = quiet_entrypoint, raise = quiet_entrypoint })
+    load_repo_script("entrypoint", entrypoint, { quiet = quiet_entrypoint, visible_errors = quiet_entrypoint })
     return
+end
+
+local loaded_ok, is_loaded = pcall(function()
+    return game:IsLoaded()
+end)
+if loaded_ok and not is_loaded then
+    set_loader_stage("loader_waiting_for_game", "game.Loaded")
+    game.Loaded:Wait()
 end
 
 local gameId = game.GameId
@@ -127,14 +196,24 @@ if not legit then
 end
 
 if placeId == 100010170789226 or gameId == 7359098240 then
+    set_loader_stage("loader_route_battlegrounds", tostring(placeId))
     load_repo_script("rogue_battlegrounds", "dist/rogue_battlegrounds.lua")
 elseif gameId == 1087859240 then
     if legit then
-        load_repo_script("hydrogen", "dist/hydrogen.lua", { quiet = true, raise = true })
+        set_loader_stage("loader_route_hydrogen", tostring(placeId))
+        load_repo_script("hydrogen", "dist/hydrogen.lua", { quiet = true, visible_errors = true })
     else
+        set_loader_stage("loader_route_rogue_lineage", tostring(placeId))
         load_repo_script("rogue_lineage", "dist/rogue_lineage.lua")
     end
 else
-    debug_warn(string.format("[HYDROXIDE] Loader: unsupported GameId %s", tostring(gameId)))
-    debug_print(string.format("[HYDROXIDE] Loader: unsupported GameId %s", tostring(gameId)))
+    local message = string.format("[HYDROXIDE] Loader: unsupported GameId %s PlaceId %s", tostring(gameId), tostring(placeId))
+    set_loader_stage("loader_unsupported", message)
+    set_loader_error(message)
+    if legit then
+        visible_warn(message .. " (HYDROGEN_LEGIT is enabled, but Hydrogen only routes on Rogue Lineage)")
+    else
+        debug_warn(message)
+        debug_print(message)
+    end
 end
