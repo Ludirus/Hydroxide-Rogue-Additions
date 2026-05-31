@@ -171,9 +171,9 @@ PvP-focused module inheriting Rogue Lineage's combat systems, optimized for aren
 
 ## Hydrogen
 
-Small legit-mode scaffold for Rogue Lineage. It opens with minus/keypad minus or the equals key, uses a compact draggable text dropdown with near-black purple, neon red styling, and a thin rainbow top bar, and keeps its settings in the executor workspace under `HYDROGEN/hydrogen_settings.json`.
+Small legit-mode scaffold for Rogue Lineage. It opens with minus/keypad minus or the equals key, uses one compact draggable text dropdown with near-black purple, neon red styling, and a thin animated rainbow top bar, and keeps its settings in the executor workspace under `HYDROGEN/hydrogen_settings.json`.
 
-Hydrogen has its own embedded `HYDROGEN` header, click-first dropdown controls, keybind capture, keyboard fallback controls, and a short list of legit settings: Auto Block, block chance, block delay, Silent Aim, target part, FOV, smoothness, visibility check, FOV circle, Legit Intent, Legit Healthview, Auto Pots, brew keybind, panic keybind, and unload controls.
+Hydrogen has its own embedded `HYDROGEN` header, click-first collapsible sections, keybind capture, keyboard fallback controls, and a short list of legit settings: Auto Block, block chance, block delay, things to block, Silent Aim, target part, FOV, smoothness, visibility check, FOV circle, Legit Intent, Legit Healthview, Gate Hotkeys, Auto Pots, pot queue, brew keybind, panic keybind, and unload controls.
 
 Legit settings are easy to change before the loader runs:
 
@@ -183,13 +183,14 @@ getgenv().HYDROGEN_SETTINGS = {
     auto_block = true,
     auto_block_chance = 80,
     block_delay = 55,
+    gate_hotkeys = true,
     legit_healthview = true,
     panic_key = "KeypadPlus",
     brew_health_key = "None",
 }
 ```
 
-`Legit Intent` uses the original hydroXide watched model and shows equipped tools over nearby players. `Legit Healthview` only changes your own leaderboard row while it is active, forces the local `MaxEdict` attribute, and enables humanoid health bars while active. It uses the original edict gold color from the Rogue module and restores the saved color when turned off or unloaded. `Auto Pots` brews health potions near a cauldron/alchemy station only when the account has 2 Scrooms and 1 Lava Flower. If the player steps away from the station, the queue is cleared.
+`Legit Intent` uses the original hydroXide watched model and falls back to a small local watched display if the model is unavailable. `Legit Healthview` only changes your own leaderboard row while it is active, forces the local `MaxEdict` attribute, and enables humanoid health bars while active. It uses the original edict gold color from the Rogue module and restores the saved color when turned off or unloaded. `Gate Hotkeys` watches the focused GateUI textbox and expands `f`, `t`, `d`, and `df` into Forest, Tundra, Desert, and Deepforest. `Auto Pots` brews health potions near a cauldron/alchemy station only when the account has 2 Scrooms and 1 Lava Flower. If the player steps away from the station, the queue is cleared.
 
 The default panic key is keypad plus. `Save and Close For Session` writes the current Hydrogen settings, closes the menu, and locks editing for that script execution. Re-running Hydrogen loads the saved settings and brings the menu back.
 

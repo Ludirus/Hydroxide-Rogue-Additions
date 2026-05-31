@@ -28,6 +28,10 @@ local existing = parent:FindFirstChild("Hydrogen")
 if existing then
     existing:Destroy()
 end
+local existingWatched = parent:FindFirstChild("HydrogenWatched")
+if existingWatched then
+    existingWatched:Destroy()
+end
 
 local SETTINGS_FOLDER = "HYDROGEN"
 local SETTINGS_FILE = SETTINGS_FOLDER .. "/hydrogen_settings.json"
@@ -35,7 +39,8 @@ local MENU_WIDTH = 354
 local TOP_BAR_HEIGHT = 3
 local HEADER_HEIGHT = 44
 local DROPDOWN_HEIGHT = 468
-local CONTENT_HEIGHT = 356
+local CONTENT_MAX_HEIGHT = 356
+local CONTENT_MIN_HEIGHT = 44
 local FOOTER_HEIGHT = 44
 local EDICT_GOLD = Color3.fromRGB(255, 214, 81)
 
@@ -71,6 +76,10 @@ local defaultConfig = {
     auto_block = false,
     auto_block_chance = 85,
     block_delay = 45,
+    block_viribus = true,
+    block_owl_slash = true,
+    block_shadowrush = true,
+    block_perfect_cast = true,
     silent_aim = false,
     aim_fov = 90,
     smoothness = 6,
@@ -79,29 +88,44 @@ local defaultConfig = {
     legit_intent = false,
     legit_healthview = false,
     auto_pots = false,
+    auto_pot_queue = 1,
+    gate_hotkeys = false,
     target_part = "Closest",
     panic_key = "KeypadPlus",
     brew_health_key = "None",
 }
 
 local menuItems = {
-    { section = "combat" },
+    { section = "combat", id = "combat" },
     { key = "auto_block", label = "Auto Block", type = "toggle" },
     { key = "auto_block_chance", label = "Block Chance", type = "number", min = 0, max = 100, step = 5, suffix = "%" },
     { key = "block_delay", label = "Block Delay", type = "number", min = 0, max = 250, step = 5, suffix = "ms" },
-    { section = "aim" },
+    {
+        key = "block_list",
+        label = "Things To Block",
+        type = "folder",
+        children = {
+            { key = "block_viribus", label = "Viribus", type = "toggle", child = true },
+            { key = "block_owl_slash", label = "Owl Slash", type = "toggle", child = true },
+            { key = "block_shadowrush", label = "Shadowrush", type = "toggle", child = true },
+            { key = "block_perfect_cast", label = "Perfect Cast", type = "toggle", child = true },
+        },
+    },
+    { section = "aim", id = "aim" },
     { key = "silent_aim", label = "Silent Aim", type = "toggle" },
     { key = "target_part", label = "Target Part", type = "choice", choices = { "Closest", "Head", "Torso" } },
     { key = "aim_fov", label = "Aim FOV", type = "number", min = 20, max = 240, step = 5 },
     { key = "smoothness", label = "Smoothness", type = "number", min = 1, max = 20, step = 1 },
     { key = "visible_check", label = "Visible Check", type = "toggle" },
     { key = "fov_circle", label = "FOV Circle", type = "toggle" },
-    { section = "utility" },
+    { section = "utility", id = "utility" },
     { key = "legit_intent", label = "Legit Intent", type = "toggle" },
     { key = "legit_healthview", label = "Legit Healthview", type = "toggle" },
+    { key = "gate_hotkeys", label = "Gate Hotkeys", type = "toggle" },
     { key = "auto_pots", label = "Auto Pots", type = "toggle" },
+    { key = "auto_pot_queue", label = "Pot Queue", type = "number", min = 1, max = 10, step = 1 },
     { key = "brew_health_key", label = "Brew Keybind", type = "keybind" },
-    { section = "system" },
+    { section = "system", id = "system" },
     { key = "panic_key", label = "Panic Keybind", type = "keybind" },
     { key = "save_settings", label = "Save Settings", type = "action", action = "save" },
     { key = "unload_hydrogen", label = "Unload Hydrogen", type = "action", action = "unload" },
@@ -240,11 +264,21 @@ local runtime = {
     capture = nil,
     rows = {},
     selectable = {},
+    sections = {
+        combat = true,
+        aim = true,
+        utility = true,
+        system = true,
+    },
+    folders = {
+        block_list = false,
+    },
     row_connections = {},
     brew_queue = 0,
     brew_busy = false,
     cleaned = false,
     dragging = false,
+    content_height = CONTENT_MAX_HEIGHT,
 }
 
 local function disconnect(name)
@@ -333,6 +367,7 @@ local update_rows
 local set_healthview
 local set_legit_intent
 local set_auto_pots
+local set_gate_hotkeys
 local update_aim_loop
 local unload
 local queue_health_potion
@@ -383,20 +418,23 @@ stroke(root, theme.border, 0.05, 1)
 
 local topBar = New("Frame", {
     Name = "RainbowBar",
-    BackgroundTransparency = 1,
+    BackgroundColor3 = Color3.fromRGB(255, 255, 255),
     BorderSizePixel = 0,
     Size = UDim2.new(1, 0, 0, TOP_BAR_HEIGHT),
 }, root)
 
-for index, color in ipairs(rainbowColors) do
-    New("Frame", {
-        Name = "Bar" .. tostring(index),
-        BackgroundColor3 = color,
-        BorderSizePixel = 0,
-        Position = UDim2.new((index - 1) / #rainbowColors, 0, 0, 0),
-        Size = UDim2.new(1 / #rainbowColors, 1, 1, 0),
-    }, topBar)
-end
+local rainbowGradient = New("UIGradient", {
+    Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, rainbowColors[1]),
+        ColorSequenceKeypoint.new(0.16, rainbowColors[2]),
+        ColorSequenceKeypoint.new(0.32, rainbowColors[3]),
+        ColorSequenceKeypoint.new(0.48, rainbowColors[4]),
+        ColorSequenceKeypoint.new(0.64, rainbowColors[5]),
+        ColorSequenceKeypoint.new(0.80, rainbowColors[6]),
+        ColorSequenceKeypoint.new(1, rainbowColors[7]),
+    }),
+    Offset = Vector2.new(-1, 0),
+}, topBar)
 
 local header = New("Frame", {
     Name = "Header",
@@ -460,6 +498,7 @@ local queueBadge = New("TextLabel", {
     TextSize = 11,
     Position = UDim2.new(1, -88, 0, 10),
     Size = UDim2.fromOffset(38, 24),
+    Visible = false,
 }, header)
 corner(queueBadge, 4)
 stroke(queueBadge, theme.red, 0.3, 1)
@@ -485,7 +524,7 @@ local content = New("ScrollingFrame", {
     BackgroundColor3 = theme.panel,
     BorderSizePixel = 0,
     Position = UDim2.fromOffset(8, TOP_BAR_HEIGHT + HEADER_HEIGHT + 8),
-    Size = UDim2.new(1, -16, 0, CONTENT_HEIGHT),
+    Size = UDim2.new(1, -16, 0, CONTENT_MAX_HEIGHT),
     CanvasSize = UDim2.fromOffset(0, 0),
     ScrollBarThickness = 2,
     ScrollBarImageColor3 = theme.red,
@@ -497,7 +536,7 @@ stroke(content, theme.borderSoft, 0.25, 1)
 local footer = New("Frame", {
     Name = "Footer",
     BackgroundTransparency = 1,
-    Position = UDim2.fromOffset(8, TOP_BAR_HEIGHT + HEADER_HEIGHT + 16 + CONTENT_HEIGHT),
+    Position = UDim2.fromOffset(8, TOP_BAR_HEIGHT + HEADER_HEIGHT + 16 + CONTENT_MAX_HEIGHT),
     Size = UDim2.new(1, -16, 0, FOOTER_HEIGHT),
 }, root)
 
@@ -532,8 +571,45 @@ notify = function(message)
     statusText.Text = tostring(message or "ready")
 end
 
+do
+    local offset = -1
+    track("rainbow_bar", RunService.RenderStepped:Connect(function(deltaTime)
+        offset = offset + (deltaTime * 0.42)
+        if offset > 1 then
+            offset = -1
+        end
+        rainbowGradient.Offset = Vector2.new(offset, 0)
+    end))
+end
+
 local function set_queue_badge()
-    queueBadge.Text = "Q" .. tostring(tonumber(runtime.brew_queue) or 0)
+    queueBadge.Text = ""
+end
+
+local function content_height_for(canvasHeight)
+    canvasHeight = tonumber(canvasHeight) or CONTENT_MIN_HEIGHT
+    return math.clamp(canvasHeight, CONTENT_MIN_HEIGHT, CONTENT_MAX_HEIGHT)
+end
+
+local function dropdown_height_for(contentHeight)
+    return TOP_BAR_HEIGHT + HEADER_HEIGHT + 16 + contentHeight + FOOTER_HEIGHT + 5
+end
+
+local function apply_layout(animated)
+    local contentHeight = runtime.content_height or CONTENT_MAX_HEIGHT
+    content.Size = UDim2.new(1, -16, 0, contentHeight)
+    footer.Position = UDim2.fromOffset(8, TOP_BAR_HEIGHT + HEADER_HEIGHT + 16 + contentHeight)
+
+    if Hydrogen.open then
+        local size = UDim2.fromOffset(MENU_WIDTH, dropdown_height_for(contentHeight))
+        if animated then
+            TweenService:Create(root, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                Size = size,
+            }):Play()
+        else
+            root.Size = size
+        end
+    end
 end
 
 local function value_text(item)
@@ -544,6 +620,8 @@ local function value_text(item)
         return tostring(value) .. (item.suffix or "")
     elseif item.type == "choice" then
         return tostring(value)
+    elseif item.type == "folder" then
+        return runtime.folders[item.key] and "OPEN" or "CLOSED"
     elseif item.type == "keybind" then
         return runtime.capture == item.key and "..." or format_keybind(value)
     elseif item.type == "action" then
@@ -557,7 +635,8 @@ local function row_highlight(row, active)
         return
     end
 
-    local enabled = row.item.type == "toggle" and config[row.item.key] == true
+    local enabled = (row.item.type == "toggle" and config[row.item.key] == true)
+        or (row.item.type == "folder" and runtime.folders[row.item.key] == true)
     row.holder.BackgroundColor3 = theme.rowHover
     row.holder.BackgroundTransparency = active and 0.18 or 1
     row.label.TextColor3 = active and theme.text or Color3.fromRGB(196, 184, 204)
@@ -609,10 +688,14 @@ local function run_side_effect(item)
         set_healthview(config.legit_healthview == true)
     elseif item.key == "auto_pots" and set_auto_pots then
         set_auto_pots(config.auto_pots == true)
+    elseif item.key == "gate_hotkeys" and set_gate_hotkeys then
+        set_gate_hotkeys(config.gate_hotkeys == true)
     elseif (item.key == "silent_aim" or item.key == "fov_circle" or item.key == "aim_fov" or item.key == "visible_check" or item.key == "target_part") and update_aim_loop then
         update_aim_loop()
     end
 end
+
+local rebuild_rows
 
 local function apply_item(item, direction)
     if runtime.closed_for_session or runtime.cleaned or not item then
@@ -641,6 +724,10 @@ local function apply_item(item, direction)
         config[item.key] = choices[nextIndex] or config[item.key]
         run_side_effect(item)
         save_workspace_settings()
+    elseif item.type == "folder" then
+        runtime.folders[item.key] = not runtime.folders[item.key]
+        rebuild_rows()
+        return
     elseif item.type == "keybind" then
         runtime.capture = item.key
         notify("press key")
@@ -753,7 +840,7 @@ local function build_small_button(row, item)
     return button
 end
 
-local function rebuild_rows()
+rebuild_rows = function()
     disconnect_rows()
     runtime.rows = {}
     runtime.selectable = {}
@@ -765,106 +852,141 @@ local function rebuild_rows()
     end
 
     local y = 8
+    local sectionOpen = true
+
+    local function add_section(item)
+        local sectionId = item.id or item.section
+        local open = runtime.sections[sectionId] ~= false
+        local section = New("TextButton", {
+            Name = "Section_" .. tostring(sectionId),
+            AutoButtonColor = false,
+            BackgroundColor3 = theme.rowHover,
+            BackgroundTransparency = 0.78,
+            BorderSizePixel = 0,
+            Font = Enum.Font.Code,
+            Text = (open and "[-] " or "[+] ") .. tostring(item.section),
+            TextColor3 = open and theme.red or theme.dim,
+            TextSize = 13,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Position = UDim2.fromOffset(8, y),
+            Size = UDim2.new(1, -16, 0, 20),
+        }, content)
+
+        add_row_connection(section.MouseButton1Click:Connect(function()
+            runtime.sections[sectionId] = not open
+            rebuild_rows()
+        end))
+
+        y = y + 23
+        sectionOpen = open
+    end
+
+    local function add_row(item, depth)
+        local index = #runtime.rows + 1
+        runtime.selectable[index] = item
+
+        local row = New("TextButton", {
+            Name = item.key,
+            AutoButtonColor = false,
+            BackgroundColor3 = theme.rowHover,
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Text = "",
+            Position = UDim2.fromOffset(8, y),
+            Size = UDim2.new(1, -16, 0, 24),
+        }, content)
+
+        local bar = New("Frame", {
+            Name = "Bar",
+            BackgroundColor3 = theme.red,
+            BorderSizePixel = 0,
+            Position = UDim2.fromOffset(0, 5),
+            Size = UDim2.fromOffset(2, 14),
+            Visible = false,
+        }, row)
+
+        local labelText = string.lower(item.label or "")
+        if item.type == "folder" then
+            labelText = (runtime.folders[item.key] and "[-] " or "[+] ") .. labelText
+        elseif item.type ~= "action" then
+            labelText = labelText .. " ->"
+        end
+
+        local inset = 10 + ((depth or 0) * 18)
+        local label = New("TextLabel", {
+            Name = "Label",
+            BackgroundTransparency = 1,
+            Font = Enum.Font.Code,
+            Text = "  " .. labelText,
+            TextColor3 = theme.text,
+            TextSize = 12,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Position = UDim2.fromOffset(inset, 0),
+            Size = UDim2.new(1, -inset - 104, 1, 0),
+        }, row)
+
+        local value = New("TextLabel", {
+            Name = "Value",
+            BackgroundTransparency = 1,
+            Font = Enum.Font.Code,
+            Text = value_text(item),
+            TextColor3 = theme.dim,
+            TextSize = 12,
+            TextXAlignment = Enum.TextXAlignment.Right,
+            Position = UDim2.new(1, -98, 0, 0),
+            Size = UDim2.fromOffset(90, 24),
+        }, row)
+
+        local rowData = {
+            holder = row,
+            label = label,
+            value = value,
+            bar = bar,
+            item = item,
+            index = index,
+        }
+
+        runtime.rows[index] = rowData
+
+        add_row_connection(row.MouseButton1Click:Connect(function()
+            select_row(index)
+            apply_item(item, 1)
+        end))
+
+        add_row_connection(row.MouseButton2Click:Connect(function()
+            select_row(index)
+            if item.type == "number" or item.type == "choice" then
+                apply_item(item, -1)
+            elseif item.type == "folder" then
+                apply_item(item, 1)
+            end
+        end))
+
+        add_row_connection(row.MouseEnter:Connect(function()
+            select_row(index)
+        end))
+
+        y = y + 24
+    end
+
     for _, item in ipairs(menuItems) do
         if item.section then
-            local section = New("TextLabel", {
-                Name = "Section",
-                BackgroundTransparency = 1,
-                Font = Enum.Font.Code,
-                Text = "[-] " .. item.section,
-                TextColor3 = theme.red,
-                TextSize = 13,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                Position = UDim2.fromOffset(8, y),
-                Size = UDim2.new(1, -16, 0, 18),
-            }, content)
-            y = y + 21
-        else
-            local index = #runtime.rows + 1
-            runtime.selectable[index] = item
-
-            local row = New("TextButton", {
-                Name = item.key,
-                AutoButtonColor = false,
-                BackgroundColor3 = theme.rowHover,
-                BackgroundTransparency = 1,
-                BorderSizePixel = 0,
-                Text = "",
-                Position = UDim2.fromOffset(8, y),
-                Size = UDim2.new(1, -16, 0, 25),
-            }, content)
-
-            local bar = New("Frame", {
-                Name = "Bar",
-                BackgroundColor3 = theme.red,
-                BorderSizePixel = 0,
-                Position = UDim2.fromOffset(0, 5),
-                Size = UDim2.fromOffset(2, 15),
-                Visible = false,
-            }, row)
-
-            local labelText = string.lower(item.label or "")
-            if item.type ~= "action" then
-                labelText = labelText .. " ->"
-            end
-
-            local label = New("TextLabel", {
-                Name = "Label",
-                BackgroundTransparency = 1,
-                Font = Enum.Font.Code,
-                Text = "  " .. labelText,
-                TextColor3 = theme.text,
-                TextSize = 12,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                Position = UDim2.fromOffset(10, 0),
-                Size = UDim2.new(1, -104, 1, 0),
-            }, row)
-
-            local value = New("TextLabel", {
-                Name = "Value",
-                BackgroundTransparency = 1,
-                Font = Enum.Font.Code,
-                Text = value_text(item),
-                TextColor3 = theme.dim,
-                TextSize = 12,
-                TextXAlignment = Enum.TextXAlignment.Right,
-                Position = UDim2.new(1, -98, 0, 0),
-                Size = UDim2.fromOffset(90, 25),
-            }, row)
-
-            local rowData = {
-                holder = row,
-                label = label,
-                value = value,
-                bar = bar,
-                item = item,
-                index = index,
-            }
-
-            runtime.rows[index] = rowData
-
-            add_row_connection(row.MouseButton1Click:Connect(function()
-                select_row(index)
-                apply_item(item, 1)
-            end))
-
-            add_row_connection(row.MouseButton2Click:Connect(function()
-                select_row(index)
-                if item.type == "number" or item.type == "choice" then
-                    apply_item(item, -1)
+            add_section(item)
+        elseif sectionOpen then
+            add_row(item, 0)
+            if item.type == "folder" and runtime.folders[item.key] then
+                for _, child in ipairs(item.children or {}) do
+                    add_row(child, 1)
                 end
-            end))
-
-            add_row_connection(row.MouseEnter:Connect(function()
-                select_row(index)
-            end))
-
-            y = y + 25
+            end
         end
     end
 
-    content.CanvasSize = UDim2.fromOffset(0, y + 8)
+    local canvasHeight = y + 8
+    runtime.content_height = content_height_for(canvasHeight)
+    content.CanvasSize = UDim2.fromOffset(0, canvasHeight)
     Hydrogen.selected = math.clamp(Hydrogen.selected, 1, math.max(#runtime.rows, 1))
+    apply_layout(true)
     update_rows()
 end
 
@@ -1013,7 +1135,7 @@ local watchedGuis = {}
 local intentConnections = {}
 local intentContainer = New("Folder", {
     Name = "HydrogenWatched",
-}, gui)
+}, parent)
 
 local function ensure_folder(path)
     if type(makefolder) ~= "function" then
@@ -1082,6 +1204,36 @@ local function load_intent_model_from_disk()
     return nil
 end
 
+local function create_fallback_intent_model()
+    local billboard = New("BillboardGui", {
+        Name = "Watched",
+        Active = false,
+        AlwaysOnTop = true,
+        LightInfluence = 0,
+        MaxDistance = WATCHED_RANGE,
+        Size = UDim2.fromOffset(118, 24),
+        StudsOffset = Vector3.new(0, 3.2, 0),
+    })
+
+    local display = New("TextLabel", {
+        Name = "Tool",
+        BackgroundColor3 = Color3.fromRGB(6, 3, 10),
+        BackgroundTransparency = 0.18,
+        BorderSizePixel = 0,
+        Font = Enum.Font.Code,
+        Text = "",
+        TextColor3 = theme.red,
+        TextSize = 12,
+        TextStrokeTransparency = 0.35,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        Size = UDim2.fromScale(1, 1),
+    }, billboard)
+    corner(display, 3)
+    stroke(display, theme.red, 0.22, 1)
+
+    return billboard
+end
+
 local function load_intent_model()
     if legitIntentModel then
         return legitIntentModel
@@ -1107,6 +1259,8 @@ local function load_intent_model()
     if not legitIntentModel and shouldWarn then
         warn("failed to load intent model (corrupt or unavailable watched.rbxm)")
     end
+
+    legitIntentModel = legitIntentModel or create_fallback_intent_model()
 
     return legitIntentModel
 end
@@ -1639,6 +1793,128 @@ set_healthview = function(enabled)
     end))
 end
 
+local gateHotkeyConnections = {}
+local gateHotkeyBoxes = {}
+
+local function gate_hotkey_connect(connection)
+    gateHotkeyConnections[#gateHotkeyConnections + 1] = connection
+    return connection
+end
+
+local function disconnect_gate_hotkeys()
+    for _, connection in ipairs(gateHotkeyConnections) do
+        pcall(function()
+            connection:Disconnect()
+        end)
+    end
+    gateHotkeyConnections = {}
+    gateHotkeyBoxes = {}
+end
+
+local function set_textbox_text(textBox, text)
+    if not textBox or not textBox.Parent or textBox.Text == text then
+        return
+    end
+
+    textBox.Text = text
+    pcall(function()
+        textBox.CursorPosition = #text + 1
+    end)
+end
+
+local function attach_gate_textbox(textBox)
+    if not textBox or not textBox:IsA("TextBox") or gateHotkeyBoxes[textBox] then
+        return
+    end
+
+    gateHotkeyBoxes[textBox] = true
+    local focused = false
+    pcall(function()
+        focused = textBox:IsFocused()
+    end)
+    local token = 0
+
+    local function normalized_text()
+        return tostring(textBox.Text or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+    end
+
+    local function handle_text()
+        if not config.gate_hotkeys or not focused then
+            return
+        end
+
+        token = token + 1
+        local currentToken = token
+        local value = normalized_text()
+
+        if value == "f" then
+            set_textbox_text(textBox, "Forest ")
+        elseif value == "t" then
+            set_textbox_text(textBox, "Tundra ")
+        elseif value == "d" or value == "df" then
+            task.delay(0.5, function()
+                if config.gate_hotkeys and focused and token == currentToken and normalized_text() == value then
+                    set_textbox_text(textBox, value == "df" and "Deepforest " or "Desert ")
+                end
+            end)
+        end
+    end
+
+    gate_hotkey_connect(textBox.Focused:Connect(function()
+        focused = true
+        handle_text()
+    end))
+
+    gate_hotkey_connect(textBox.FocusLost:Connect(function()
+        focused = false
+        token = token + 1
+    end))
+
+    gate_hotkey_connect(textBox:GetPropertyChangedSignal("Text"):Connect(handle_text))
+    gate_hotkey_connect(textBox.AncestryChanged:Connect(function(_, parentObject)
+        if not parentObject then
+            focused = false
+            gateHotkeyBoxes[textBox] = nil
+            token = token + 1
+        end
+    end))
+end
+
+local function attach_gate_ui(gateGui)
+    if not gateGui or gateGui.Name ~= "GateUI" then
+        return
+    end
+
+    task.spawn(function()
+        local background = gateGui:FindFirstChild("Background") or gateGui:WaitForChild("Background", 3)
+        local textBox = background and (background:FindFirstChild("TextBox") or background:WaitForChild("TextBox", 3))
+        attach_gate_textbox(textBox)
+    end)
+end
+
+set_gate_hotkeys = function(enabled)
+    disconnect_gate_hotkeys()
+
+    if not enabled then
+        return
+    end
+
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 5)
+    if not playerGui then
+        return
+    end
+
+    for _, child in ipairs(playerGui:GetChildren()) do
+        attach_gate_ui(child)
+    end
+
+    gate_hotkey_connect(playerGui.ChildAdded:Connect(function(child)
+        if config.gate_hotkeys and child.Name == "GateUI" then
+            attach_gate_ui(child)
+        end
+    end))
+end
+
 local healthRecipe = {
     ["Lava Flower"] = 1,
     Scroom = 2,
@@ -1853,7 +2129,7 @@ queue_health_potion = function(amount)
     amount = math.max(tonumber(amount) or 1, 1)
     runtime.brew_queue = math.min((tonumber(runtime.brew_queue) or 0) + amount, 25)
     set_queue_badge()
-    notify("queued")
+    notify("brewing")
 
     if runtime.brew_busy then
         return true
@@ -1908,7 +2184,7 @@ set_auto_pots = function(enabled)
         end
 
         if not runtime.brew_busy and runtime.brew_queue == 0 then
-            queue_health_potion(1)
+            queue_health_potion(config.auto_pot_queue)
         end
     end))
 end
@@ -1925,7 +2201,7 @@ set_dropdown = function(state)
         content.Visible = true
         footer.Visible = true
         TweenService:Create(root, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            Size = UDim2.fromOffset(MENU_WIDTH, DROPDOWN_HEIGHT),
+            Size = UDim2.fromOffset(MENU_WIDTH, dropdown_height_for(runtime.content_height)),
         }):Play()
     else
         content.Visible = false
@@ -1980,6 +2256,10 @@ local function cleanup()
     runtime.cleaned = true
     restore_healthview()
     clear_legit_intent()
+    if intentContainer and intentContainer.Parent then
+        intentContainer:Destroy()
+    end
+    disconnect_gate_hotkeys()
     disconnect("auto_pots")
     clear_brew_queue()
     disconnect_rows()
@@ -2063,7 +2343,7 @@ track("input", UserInputService.InputBegan:Connect(function(input, gameProcessed
         return
     end
     if key_matches(key, config.brew_health_key) then
-        queue_health_potion(1)
+        queue_health_potion(config.auto_pot_queue)
         return
     end
     if gameProcessed then
@@ -2117,6 +2397,8 @@ function Hydrogen.SetConfig(key, value)
         set_healthview(config.legit_healthview == true)
     elseif key == "auto_pots" then
         set_auto_pots(config.auto_pots == true)
+    elseif key == "gate_hotkeys" then
+        set_gate_hotkeys(config.gate_hotkeys == true)
     elseif key == "silent_aim" or key == "fov_circle" or key == "aim_fov" or key == "visible_check" or key == "target_part" then
         update_aim_loop()
     end
@@ -2146,11 +2428,38 @@ function Hydrogen.GetClosestTarget()
     return get_closest_target()
 end
 
-function Hydrogen.ShouldAutoBlock()
+local blockAbilityKeys = {
+    viribus = "block_viribus",
+    owlslash = "block_owl_slash",
+    ["owl slash"] = "block_owl_slash",
+    shadowrush = "block_shadowrush",
+    shadowrushcharge = "block_shadowrush",
+    ["shadow rush"] = "block_shadowrush",
+    perfectcast = "block_perfect_cast",
+    ["perfect cast"] = "block_perfect_cast",
+}
+
+local function block_key_for_ability(abilityName)
+    local normalized = tostring(abilityName or ""):lower():gsub("_", " "):gsub("%s+", " ")
+    normalized = normalized:gsub("^%s+", ""):gsub("%s+$", "")
+    return blockAbilityKeys[normalized] or blockAbilityKeys[normalized:gsub("%s+", "")]
+end
+
+function Hydrogen.ShouldAutoBlock(abilityName)
     if not config.auto_block then
         return false
     end
+
+    local blockKey = block_key_for_ability(abilityName)
+    if blockKey and config[blockKey] == false then
+        return false
+    end
+
     return math.random(1, 100) <= clamp_number(config.auto_block_chance, 0, 100)
+end
+
+function Hydrogen.ShouldBlock(abilityName)
+    return Hydrogen.ShouldAutoBlock(abilityName)
 end
 
 if getgenv then
@@ -2162,5 +2471,6 @@ rebuild_rows()
 set_legit_intent(config.legit_intent == true)
 set_healthview(config.legit_healthview == true)
 set_auto_pots(config.auto_pots == true)
+set_gate_hotkeys(config.gate_hotkeys == true)
 update_aim_loop()
 set_dropdown(true)
