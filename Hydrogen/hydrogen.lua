@@ -32,8 +32,9 @@ end
 local SETTINGS_FOLDER = "HYDROGEN"
 local SETTINGS_FILE = SETTINGS_FOLDER .. "/hydrogen_settings.json"
 local MENU_WIDTH = 354
+local TOP_BAR_HEIGHT = 3
 local HEADER_HEIGHT = 44
-local DROPDOWN_HEIGHT = 456
+local DROPDOWN_HEIGHT = 468
 local CONTENT_HEIGHT = 356
 local FOOTER_HEIGHT = 44
 local EDICT_GOLD = Color3.fromRGB(255, 214, 81)
@@ -54,6 +55,16 @@ local theme = {
     dim = Color3.fromRGB(158, 138, 168),
     muted = Color3.fromRGB(94, 73, 104),
     success = Color3.fromRGB(98, 255, 176),
+}
+
+local rainbowColors = {
+    Color3.fromRGB(255, 34, 50),
+    Color3.fromRGB(255, 112, 40),
+    Color3.fromRGB(255, 215, 62),
+    Color3.fromRGB(42, 235, 128),
+    Color3.fromRGB(46, 218, 255),
+    Color3.fromRGB(113, 82, 255),
+    Color3.fromRGB(216, 57, 255),
 }
 
 local defaultConfig = {
@@ -367,78 +378,76 @@ local root = New("Frame", {
     Size = UDim2.fromOffset(MENU_WIDTH, DROPDOWN_HEIGHT),
     Visible = true,
 }, gui)
-corner(root, 7)
+corner(root, 3)
 stroke(root, theme.border, 0.05, 1)
+
+local topBar = New("Frame", {
+    Name = "RainbowBar",
+    BackgroundTransparency = 1,
+    BorderSizePixel = 0,
+    Size = UDim2.new(1, 0, 0, TOP_BAR_HEIGHT),
+}, root)
+
+for index, color in ipairs(rainbowColors) do
+    New("Frame", {
+        Name = "Bar" .. tostring(index),
+        BackgroundColor3 = color,
+        BorderSizePixel = 0,
+        Position = UDim2.new((index - 1) / #rainbowColors, 0, 0, 0),
+        Size = UDim2.new(1 / #rainbowColors, 1, 1, 0),
+    }, topBar)
+end
 
 local header = New("Frame", {
     Name = "Header",
     BackgroundColor3 = theme.base,
     BorderSizePixel = 0,
+    Position = UDim2.fromOffset(0, TOP_BAR_HEIGHT),
     Size = UDim2.new(1, 0, 0, HEADER_HEIGHT),
 }, root)
 
 local headerAccent = New("Frame", {
     Name = "Accent",
-    BackgroundColor3 = theme.red,
+    BackgroundColor3 = theme.borderSoft,
     BorderSizePixel = 0,
     Position = UDim2.fromOffset(0, HEADER_HEIGHT - 2),
-    Size = UDim2.new(1, 0, 0, 2),
+    Size = UDim2.new(1, 0, 0, 1),
 }, header)
 
-local logo = New("Frame", {
+local logo = New("TextLabel", {
     Name = "Logo",
-    BackgroundColor3 = Color3.fromRGB(10, 5, 15),
-    BorderSizePixel = 0,
+    BackgroundTransparency = 1,
+    Font = Enum.Font.Code,
+    Text = "[H]",
+    TextColor3 = theme.red,
+    TextSize = 14,
+    TextXAlignment = Enum.TextXAlignment.Left,
     Position = UDim2.fromOffset(10, 8),
-    Size = UDim2.fromOffset(28, 28),
+    Size = UDim2.fromOffset(40, 28),
 }, header)
-corner(logo, 5)
-stroke(logo, theme.red, 0.1, 1)
-
-New("Frame", {
-    Name = "LeftMark",
-    BackgroundColor3 = theme.red,
-    BorderSizePixel = 0,
-    Position = UDim2.fromOffset(6, 6),
-    Size = UDim2.fromOffset(3, 16),
-}, logo)
-New("Frame", {
-    Name = "RightMark",
-    BackgroundColor3 = theme.red,
-    BorderSizePixel = 0,
-    Position = UDim2.fromOffset(19, 6),
-    Size = UDim2.fromOffset(3, 16),
-}, logo)
-New("Frame", {
-    Name = "CenterMark",
-    BackgroundColor3 = theme.text,
-    BorderSizePixel = 0,
-    Position = UDim2.fromOffset(9, 13),
-    Size = UDim2.fromOffset(10, 2),
-}, logo)
 
 local title = New("TextLabel", {
     Name = "Title",
     BackgroundTransparency = 1,
-    Font = Enum.Font.GothamBold,
+    Font = Enum.Font.Code,
     Text = "HYDROGEN",
-    TextColor3 = theme.text,
+    TextColor3 = Color3.fromRGB(226, 216, 232),
     TextSize = 14,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    Position = UDim2.fromOffset(48, 7),
-    Size = UDim2.new(1, -150, 0, 18),
+    TextXAlignment = Enum.TextXAlignment.Center,
+    Position = UDim2.fromOffset(58, 5),
+    Size = UDim2.new(1, -144, 0, 20),
 }, header)
 
 local subtitle = New("TextLabel", {
     Name = "Subtitle",
     BackgroundTransparency = 1,
     Font = Enum.Font.Code,
-    Text = "legit / dropdown",
+    Text = "legit dropdown",
     TextColor3 = theme.dim,
     TextSize = 11,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    Position = UDim2.fromOffset(49, 24),
-    Size = UDim2.new(1, -150, 0, 14),
+    TextXAlignment = Enum.TextXAlignment.Center,
+    Position = UDim2.fromOffset(58, 23),
+    Size = UDim2.new(1, -144, 0, 14),
 }, header)
 
 local queueBadge = New("TextLabel", {
@@ -467,7 +476,7 @@ local collapseButton = New("TextButton", {
     Position = UDim2.new(1, -42, 0, 10),
     Size = UDim2.fromOffset(26, 24),
 }, header)
-corner(collapseButton, 4)
+corner(collapseButton, 2)
 stroke(collapseButton, theme.borderSoft, 0.1, 1)
 
 local content = New("ScrollingFrame", {
@@ -475,20 +484,20 @@ local content = New("ScrollingFrame", {
     Active = true,
     BackgroundColor3 = theme.panel,
     BorderSizePixel = 0,
-    Position = UDim2.fromOffset(8, HEADER_HEIGHT + 8),
+    Position = UDim2.fromOffset(8, TOP_BAR_HEIGHT + HEADER_HEIGHT + 8),
     Size = UDim2.new(1, -16, 0, CONTENT_HEIGHT),
     CanvasSize = UDim2.fromOffset(0, 0),
     ScrollBarThickness = 2,
     ScrollBarImageColor3 = theme.red,
     ScrollBarImageTransparency = 0.05,
 }, root)
-corner(content, 5)
+corner(content, 2)
 stroke(content, theme.borderSoft, 0.25, 1)
 
 local footer = New("Frame", {
     Name = "Footer",
     BackgroundTransparency = 1,
-    Position = UDim2.fromOffset(8, HEADER_HEIGHT + 16 + CONTENT_HEIGHT),
+    Position = UDim2.fromOffset(8, TOP_BAR_HEIGHT + HEADER_HEIGHT + 16 + CONTENT_HEIGHT),
     Size = UDim2.new(1, -16, 0, FOOTER_HEIGHT),
 }, root)
 
@@ -538,7 +547,7 @@ local function value_text(item)
     elseif item.type == "keybind" then
         return runtime.capture == item.key and "..." or format_keybind(value)
     elseif item.type == "action" then
-        return item.action == "brew_health" and "QUEUE" or "RUN"
+        return ""
     end
     return ""
 end
@@ -549,10 +558,11 @@ local function row_highlight(row, active)
     end
 
     local enabled = row.item.type == "toggle" and config[row.item.key] == true
-    row.holder.BackgroundColor3 = active and theme.rowHover or theme.row
-    row.label.TextColor3 = active and theme.text or Color3.fromRGB(226, 216, 232)
+    row.holder.BackgroundColor3 = theme.rowHover
+    row.holder.BackgroundTransparency = active and 0.18 or 1
+    row.label.TextColor3 = active and theme.text or Color3.fromRGB(196, 184, 204)
     row.value.Text = value_text(row.item)
-    row.value.TextColor3 = enabled and theme.red or (active and theme.text or theme.dim)
+    row.value.TextColor3 = enabled and theme.red or (active and Color3.fromRGB(226, 216, 232) or theme.dim)
 
     if row.button then
         row.button.Text = value_text(row.item)
@@ -761,14 +771,14 @@ local function rebuild_rows()
                 Name = "Section",
                 BackgroundTransparency = 1,
                 Font = Enum.Font.Code,
-                Text = item.section,
+                Text = "[-] " .. item.section,
                 TextColor3 = theme.red,
-                TextSize = 11,
+                TextSize = 13,
                 TextXAlignment = Enum.TextXAlignment.Left,
-                Position = UDim2.fromOffset(11, y),
-                Size = UDim2.new(1, -22, 0, 16),
+                Position = UDim2.fromOffset(8, y),
+                Size = UDim2.new(1, -16, 0, 18),
             }, content)
-            y = y + 18
+            y = y + 21
         else
             local index = #runtime.rows + 1
             runtime.selectable[index] = item
@@ -776,34 +786,38 @@ local function rebuild_rows()
             local row = New("TextButton", {
                 Name = item.key,
                 AutoButtonColor = false,
-                BackgroundColor3 = theme.row,
+                BackgroundColor3 = theme.rowHover,
+                BackgroundTransparency = 1,
                 BorderSizePixel = 0,
                 Text = "",
                 Position = UDim2.fromOffset(8, y),
-                Size = UDim2.new(1, -16, 0, 34),
+                Size = UDim2.new(1, -16, 0, 25),
             }, content)
-            corner(row, 4)
-            stroke(row, theme.borderSoft, 0.55, 1)
 
             local bar = New("Frame", {
                 Name = "Bar",
                 BackgroundColor3 = theme.red,
                 BorderSizePixel = 0,
-                Position = UDim2.fromOffset(0, 6),
-                Size = UDim2.fromOffset(2, 22),
+                Position = UDim2.fromOffset(0, 5),
+                Size = UDim2.fromOffset(2, 15),
                 Visible = false,
             }, row)
+
+            local labelText = string.lower(item.label or "")
+            if item.type ~= "action" then
+                labelText = labelText .. " ->"
+            end
 
             local label = New("TextLabel", {
                 Name = "Label",
                 BackgroundTransparency = 1,
                 Font = Enum.Font.Code,
-                Text = item.label,
+                Text = "  " .. labelText,
                 TextColor3 = theme.text,
                 TextSize = 12,
                 TextXAlignment = Enum.TextXAlignment.Left,
                 Position = UDim2.fromOffset(10, 0),
-                Size = UDim2.new(1, -128, 1, 0),
+                Size = UDim2.new(1, -104, 1, 0),
             }, row)
 
             local value = New("TextLabel", {
@@ -814,8 +828,8 @@ local function rebuild_rows()
                 TextColor3 = theme.dim,
                 TextSize = 12,
                 TextXAlignment = Enum.TextXAlignment.Right,
-                Position = UDim2.new(1, -96, 0, 0),
-                Size = UDim2.fromOffset(86, 34),
+                Position = UDim2.new(1, -98, 0, 0),
+                Size = UDim2.fromOffset(90, 25),
             }, row)
 
             local rowData = {
@@ -827,23 +841,17 @@ local function rebuild_rows()
                 index = index,
             }
 
-            if item.type == "toggle" then
-                rowData.switch, rowData.knob = build_toggle(row)
-            elseif item.type == "number" then
-                rowData.fill = build_number(row, item)
-                value.Position = UDim2.new(1, -86, 0, 0)
-                value.Size = UDim2.fromOffset(52, 22)
-            elseif item.type == "action" or item.type == "keybind" then
-                value.Text = ""
-                rowData.button = build_small_button(row, item)
-            end
-
             runtime.rows[index] = rowData
 
             add_row_connection(row.MouseButton1Click:Connect(function()
                 select_row(index)
-                if item.type ~= "number" then
-                    apply_item(item)
+                apply_item(item, 1)
+            end))
+
+            add_row_connection(row.MouseButton2Click:Connect(function()
+                select_row(index)
+                if item.type == "number" or item.type == "choice" then
+                    apply_item(item, -1)
                 end
             end))
 
@@ -851,7 +859,7 @@ local function rebuild_rows()
                 select_row(index)
             end))
 
-            y = y + 38
+            y = y + 25
         end
     end
 
@@ -993,116 +1001,274 @@ update_aim_loop = function()
     end))
 end
 
-local intentGuis = {}
+local WATCHED_FOLDER = "HYDROXIDE"
+local WATCHED_BIN_FOLDER = WATCHED_FOLDER .. "/bin"
+local WATCHED_MODEL_PATH = WATCHED_BIN_FOLDER .. "/watched.rbxm"
+local WATCHED_MODEL_URL = "https://hydroxide.solutions/watched.rbxm"
+local WATCHED_RANGE = 100
+
+local legitIntentModel = nil
+local legitIntentLoadAttempted = false
+local watchedGuis = {}
 local intentConnections = {}
+local intentContainer = New("Folder", {
+    Name = "HydrogenWatched",
+}, gui)
 
-local function equipped_tool_name(character)
-    if not character then
-        return ""
+local function ensure_folder(path)
+    if type(makefolder) ~= "function" then
+        return false
     end
 
-    local tool = character:FindFirstChildOfClass("Tool")
-    return tool and tool.Name or ""
-end
-
-local function remove_intent_gui(character)
-    local record = intentGuis[character]
-    if record then
-        for _, connection in ipairs(record.connections or {}) do
-            pcall(function()
-                connection:Disconnect()
-            end)
+    if type(isfolder) == "function" then
+        local ok, exists = pcall(isfolder, path)
+        if ok and exists then
+            return true
         end
-        if record.gui then
-            record.gui:Destroy()
-        end
-        intentGuis[character] = nil
     end
+
+    return pcall(makefolder, path)
 end
 
-local function update_intent_gui(character)
-    local record = intentGuis[character]
-    if not record or not record.label then
+local function ensure_watched_folders()
+    ensure_folder(WATCHED_FOLDER)
+    return ensure_folder(WATCHED_BIN_FOLDER)
+end
+
+local function download_intent_model()
+    if type(writefile) ~= "function" then
+        return false
+    end
+
+    ensure_watched_folders()
+    local success, result = pcall(function()
+        return game:HttpGet(WATCHED_MODEL_URL)
+    end)
+
+    if success and type(result) == "string" and #result > 0 then
+        return pcall(writefile, WATCHED_MODEL_PATH, result)
+    end
+
+    return false
+end
+
+local function load_intent_model_from_disk()
+    if type(isfile) ~= "function" or type(getcustomasset) ~= "function" then
+        return nil
+    end
+
+    local ok, exists = pcall(isfile, WATCHED_MODEL_PATH)
+    if not ok or not exists then
+        return nil
+    end
+
+    local assetOk, asset = pcall(getcustomasset, WATCHED_MODEL_PATH)
+    if not assetOk or not asset then
+        return nil
+    end
+
+    local loadOk, model = pcall(function()
+        return game:GetObjects(asset)[1]
+    end)
+
+    if loadOk and model then
+        return model
+    end
+
+    if type(delfile) == "function" then
+        pcall(delfile, WATCHED_MODEL_PATH)
+    end
+
+    return nil
+end
+
+local function load_intent_model()
+    if legitIntentModel then
+        return legitIntentModel
+    end
+
+    local shouldWarn = not legitIntentLoadAttempted
+    legitIntentLoadAttempted = true
+    local exists = false
+    if type(isfile) == "function" then
+        local ok, result = pcall(isfile, WATCHED_MODEL_PATH)
+        exists = ok and result == true
+    end
+
+    if not exists then
+        download_intent_model()
+    end
+
+    legitIntentModel = load_intent_model_from_disk()
+    if not legitIntentModel and download_intent_model() then
+        legitIntentModel = load_intent_model_from_disk()
+    end
+
+    if not legitIntentModel and shouldWarn then
+        warn("failed to load intent model (corrupt or unavailable watched.rbxm)")
+    end
+
+    return legitIntentModel
+end
+
+local function find_first_descendant(parentObject, name)
+    if not parentObject then
+        return nil
+    end
+
+    local direct = parentObject:FindFirstChild(name)
+    if direct then
+        return direct
+    end
+
+    for _, descendant in ipairs(parentObject:GetDescendants()) do
+        if descendant.Name == name then
+            return descendant
+        end
+    end
+
+    return nil
+end
+
+local function remove_watched_gui(character, animate)
+    local watched = watchedGuis[character]
+    if not watched then
         return
     end
 
-    local text = equipped_tool_name(character)
-    record.label.Text = text
-    record.label.Visible = text ~= ""
+    for _, connection in ipairs(watched.connections or {}) do
+        pcall(function()
+            connection:Disconnect()
+        end)
+    end
+
+    watchedGuis[character] = nil
+    if not watched.gui then
+        return
+    end
+
+    if animate and watched.display then
+        pcall(function()
+            TweenService:Create(watched.display, TweenInfo.new(0.25), { TextTransparency = 1 }):Play()
+        end)
+        task.delay(0.25, function()
+            if watched.gui and watched.gui.Parent then
+                watched.gui:Destroy()
+            end
+        end)
+    else
+        watched.gui:Destroy()
+    end
 end
 
-local function create_intent_gui(character)
+local function create_watched_gui(character)
     if not config.legit_intent or not character or character == LocalPlayer.Character then
         return
     end
 
-    local rootPart = character:FindFirstChild("HumanoidRootPart") or character:WaitForChild("HumanoidRootPart", 2)
+    if watchedGuis[character] or character:FindFirstChild("Watched") then
+        return
+    end
+
+    local model = load_intent_model()
+    if not model then
+        return
+    end
+
+    local rootPart = character:FindFirstChild("HumanoidRootPart") or character:WaitForChild("HumanoidRootPart", 4)
     if not rootPart then
         return
     end
 
-    remove_intent_gui(character)
+    local eye = model:Clone()
+    local display = find_first_descendant(eye, "Tool")
+    if not display then
+        eye:Destroy()
+        return
+    end
 
-    local billboard = New("BillboardGui", {
-        Name = "HydrogenIntent",
-        Active = false,
-        Adornee = rootPart,
-        AlwaysOnTop = true,
-        LightInfluence = 0,
-        MaxDistance = 115,
-        Size = UDim2.fromOffset(118, 26),
-        StudsOffset = Vector3.new(0, 3.1, 0),
-    }, gui)
+    local tool = character:FindFirstChildOfClass("Tool")
+    display.Text = tool and tool.Name or ""
+    display.TextTransparency = display.Text == "" and 1 or 0
 
-    local label = New("TextLabel", {
-        Name = "Tool",
-        BackgroundColor3 = Color3.fromRGB(6, 3, 10),
-        BackgroundTransparency = 0.16,
-        BorderSizePixel = 0,
-        Font = Enum.Font.Code,
-        Text = "",
-        TextColor3 = theme.red,
-        TextSize = 12,
-        TextStrokeTransparency = 0.35,
-        TextTruncate = Enum.TextTruncate.AtEnd,
-        Size = UDim2.fromScale(1, 1),
-    }, billboard)
-    corner(label, 4)
-    stroke(label, theme.red, 0.2, 1)
+    eye.Name = "Watched"
+    eye.Parent = intentContainer
+    pcall(function()
+        eye.Adornee = rootPart
+        eye.Active = false
+    end)
 
-    local record = {
-        gui = billboard,
-        label = label,
+    local watched = {
+        gui = eye,
+        display = display,
         connections = {},
     }
-    intentGuis[character] = record
+    watchedGuis[character] = watched
 
-    record.connections[#record.connections + 1] = character.ChildAdded:Connect(function(child)
-        if child:IsA("Tool") then
-            update_intent_gui(character)
+    watched.connections[#watched.connections + 1] = character.ChildAdded:Connect(function(object)
+        if object:IsA("Tool") and watchedGuis[character] then
+            display.Text = object.Name
+            TweenService:Create(display, TweenInfo.new(0.18), { TextTransparency = 0 }):Play()
         end
     end)
-    record.connections[#record.connections + 1] = character.ChildRemoved:Connect(function(child)
-        if child:IsA("Tool") then
-            update_intent_gui(character)
+
+    watched.connections[#watched.connections + 1] = character.ChildRemoved:Connect(function(object)
+        if object:IsA("Tool") and watchedGuis[character] then
+            display.Text = ""
+            TweenService:Create(display, TweenInfo.new(0.18), { TextTransparency = 1 }):Play()
         end
     end)
-    update_intent_gui(character)
+
+    local heartbeatCounter = 0
+    watched.connections[#watched.connections + 1] = RunService.Heartbeat:Connect(function()
+        heartbeatCounter = heartbeatCounter + 1
+        if heartbeatCounter % 4 ~= 0 then
+            return
+        end
+
+        if not config.legit_intent or not character.Parent then
+            remove_watched_gui(character)
+            return
+        end
+
+        local hrp = character:FindFirstChild("HumanoidRootPart")
+        local camera = workspace.CurrentCamera
+        if not hrp or not camera then
+            remove_watched_gui(character)
+            return
+        end
+
+        pcall(function()
+            eye.Adornee = hrp
+        end)
+
+        local toolNow = character:FindFirstChildOfClass("Tool")
+        local shouldShow = toolNow ~= nil and (camera.CFrame.Position - hrp.Position).Magnitude < WATCHED_RANGE
+        if toolNow and display.Text ~= toolNow.Name then
+            display.Text = toolNow.Name
+        end
+
+        TweenService:Create(display, TweenInfo.new(0.25), {
+            TextTransparency = shouldShow and 0 or 1,
+        }):Play()
+    end)
 end
 
 local function disconnect_intent_player(player)
     local connections = intentConnections[player]
     if connections then
-        for _, connection in ipairs(connections) do
-            pcall(function()
-                connection:Disconnect()
-            end)
+        for _, connection in pairs(connections) do
+            if connection then
+                pcall(function()
+                    connection:Disconnect()
+                end)
+            end
         end
         intentConnections[player] = nil
     end
 
-    if player.Character then
-        remove_intent_gui(player.Character)
+    if player.Character and watchedGuis[player.Character] then
+        remove_watched_gui(player.Character, true)
     end
 end
 
@@ -1112,21 +1278,22 @@ local function connect_intent_player(player)
     end
 
     disconnect_intent_player(player)
-
-    local connections = {}
-    intentConnections[player] = connections
+    intentConnections[player] = {}
 
     if player.Character then
-        task.spawn(create_intent_gui, player.Character)
+        task.spawn(create_watched_gui, player.Character)
     end
 
-    connections[#connections + 1] = player.CharacterAdded:Connect(function(character)
+    intentConnections[player].characterAdded = player.CharacterAdded:Connect(function(character)
         if config.legit_intent then
-            task.spawn(create_intent_gui, character)
+            task.spawn(create_watched_gui, character)
         end
     end)
-    connections[#connections + 1] = player.CharacterRemoving:Connect(function(character)
-        remove_intent_gui(character)
+
+    intentConnections[player].characterRemoving = player.CharacterRemoving:Connect(function(character)
+        if watchedGuis[character] then
+            remove_watched_gui(character, true)
+        end
     end)
 end
 
@@ -1140,11 +1307,11 @@ local function clear_legit_intent()
     end
 
     local characters = {}
-    for character in pairs(intentGuis) do
+    for character in pairs(watchedGuis) do
         characters[#characters + 1] = character
     end
     for _, character in ipairs(characters) do
-        remove_intent_gui(character)
+        remove_watched_gui(character)
     end
 end
 
@@ -1154,6 +1321,10 @@ set_legit_intent = function(enabled)
     clear_legit_intent()
 
     if not enabled then
+        return
+    end
+
+    if not load_intent_model() then
         return
     end
 
@@ -1268,6 +1439,7 @@ local function set_local_max_edict_attribute(enabled)
 end
 
 local healthDisplayOriginal = {}
+local healthviewPlayerConnections = {}
 
 local function apply_humanoid_healthview(character)
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -1286,6 +1458,41 @@ local function apply_humanoid_healthview(character)
     humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOn
     humanoid.HealthDisplayDistance = 100
     humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.Subject
+end
+
+local function disconnect_healthview_player(player)
+    local connection = healthviewPlayerConnections[player]
+    if connection then
+        pcall(function()
+            connection:Disconnect()
+        end)
+        healthviewPlayerConnections[player] = nil
+    end
+end
+
+local function connect_healthview_player(player)
+    disconnect_healthview_player(player)
+
+    if player.Character then
+        apply_humanoid_healthview(player.Character)
+    end
+
+    healthviewPlayerConnections[player] = player.CharacterAdded:Connect(function(character)
+        if config.legit_healthview then
+            task.defer(apply_humanoid_healthview, character)
+        end
+    end)
+end
+
+local function disconnect_healthview_players()
+    local players = {}
+    for player in pairs(healthviewPlayerConnections) do
+        players[#players + 1] = player
+    end
+
+    for _, player in ipairs(players) do
+        disconnect_healthview_player(player)
+    end
 end
 
 local function restore_humanoid_healthview()
@@ -1307,6 +1514,7 @@ local function restore_humanoid_healthview()
 end
 
 local function restore_healthview()
+    disconnect_healthview_players()
     set_local_max_edict_attribute(false)
     restore_humanoid_healthview()
 
@@ -1390,6 +1598,9 @@ set_healthview = function(enabled)
     disconnect("healthview_gui")
     disconnect("healthview_loop")
     disconnect("healthview_character")
+    disconnect("healthview_player_added")
+    disconnect("healthview_player_removing")
+    disconnect_healthview_players()
     healthviewFrame = nil
 
     if not enabled then
@@ -1398,10 +1609,15 @@ set_healthview = function(enabled)
     end
 
     set_local_max_edict_attribute(true)
-    apply_humanoid_healthview(LocalPlayer.Character)
-    track("healthview_character", LocalPlayer.CharacterAdded:Connect(function(character)
-        task.defer(apply_humanoid_healthview, character)
+    for _, player in ipairs(Players:GetPlayers()) do
+        connect_healthview_player(player)
+    end
+    track("healthview_player_added", Players.PlayerAdded:Connect(function(player)
+        if config.legit_healthview then
+            connect_healthview_player(player)
+        end
     end))
+    track("healthview_player_removing", Players.PlayerRemoving:Connect(disconnect_healthview_player))
     refresh_healthview()
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
     if playerGui then
@@ -1715,7 +1931,7 @@ set_dropdown = function(state)
         content.Visible = false
         footer.Visible = false
         TweenService:Create(root, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            Size = UDim2.fromOffset(MENU_WIDTH, HEADER_HEIGHT),
+            Size = UDim2.fromOffset(MENU_WIDTH, TOP_BAR_HEIGHT + HEADER_HEIGHT),
         }):Play()
         if config.legit_healthview then
             task.defer(refresh_healthview)

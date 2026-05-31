@@ -171,9 +171,9 @@ PvP-focused module inheriting Rogue Lineage's combat systems, optimized for aren
 
 ## Hydrogen
 
-Small legit-mode scaffold for Rogue Lineage. It opens with minus/keypad minus or the equals key, uses a compact draggable dropdown with near-black purple and neon red styling, and keeps its settings in the executor workspace under `HYDROGEN/hydrogen_settings.json`.
+Small legit-mode scaffold for Rogue Lineage. It opens with minus/keypad minus or the equals key, uses a compact draggable text dropdown with near-black purple, neon red styling, and a thin rainbow top bar, and keeps its settings in the executor workspace under `HYDROGEN/hydrogen_settings.json`.
 
-Hydrogen has its own embedded `HYDROGEN` logo, click-first dropdown controls, keybind capture, keyboard fallback controls, and a short list of legit settings: Auto Block, block chance, block delay, Silent Aim, target part, FOV, smoothness, visibility check, FOV circle, Legit Intent, Legit Healthview, Auto Pots, brew keybind, panic keybind, and unload controls.
+Hydrogen has its own embedded `HYDROGEN` header, click-first dropdown controls, keybind capture, keyboard fallback controls, and a short list of legit settings: Auto Block, block chance, block delay, Silent Aim, target part, FOV, smoothness, visibility check, FOV circle, Legit Intent, Legit Healthview, Auto Pots, brew keybind, panic keybind, and unload controls.
 
 Legit settings are easy to change before the loader runs:
 
@@ -189,7 +189,7 @@ getgenv().HYDROGEN_SETTINGS = {
 }
 ```
 
-`Legit Intent` shows a small equipped-tool indicator over nearby players. `Legit Healthview` only changes your own leaderboard row while it is active, forces the local `MaxEdict` attribute, and enables local humanoid health bars while active. It uses the original edict gold color from the Rogue module and restores the saved color when turned off or unloaded. `Auto Pots` brews health potions near a cauldron/alchemy station only when the account has 2 Scrooms and 1 Lava Flower. If the player steps away from the station, the queue is cleared.
+`Legit Intent` uses the original hydroXide watched model and shows equipped tools over nearby players. `Legit Healthview` only changes your own leaderboard row while it is active, forces the local `MaxEdict` attribute, and enables humanoid health bars while active. It uses the original edict gold color from the Rogue module and restores the saved color when turned off or unloaded. `Auto Pots` brews health potions near a cauldron/alchemy station only when the account has 2 Scrooms and 1 Lava Flower. If the player steps away from the station, the queue is cleared.
 
 The default panic key is keypad plus. `Save and Close For Session` writes the current Hydrogen settings, closes the menu, and locks editing for that script execution. Re-running Hydrogen loads the saved settings and brings the menu back.
 
