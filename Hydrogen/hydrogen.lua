@@ -41,6 +41,7 @@ end
 
 local SETTINGS_FOLDER = "HYDROGEN"
 local SETTINGS_FILE = SETTINGS_FOLDER .. "/hydrogen_settings.json"
+local SESSION_KEY = tostring(game.PlaceId) .. ":" .. tostring(game.JobId)
 local MENU_WIDTH = 354
 local TOP_BAR_HEIGHT = 3
 local HEADER_HEIGHT = 44
@@ -151,14 +152,17 @@ local function env_table(name)
     return type(value) == "table" and value or nil
 end
 
+local function env_value(name)
+    local env = get_env()
+    return env and env[name] or nil
+end
+
 local function set_env_value(name, value)
     local env = get_env()
     if env then
         env[name] = value
     end
 end
-
-set_env_value("HYDROGEN_CLOSED_FOR_SESSION", false)
 
 local function copy_config(source)
     local copy = {}
@@ -179,6 +183,33 @@ local function safe_key_name(value)
     end
 
     return value
+end
+
+local function read_session_lock()
+    local state = env_value("HYDROGEN_SESSION_LOCK")
+    if type(state) == "table" then
+        if state.key == SESSION_KEY and state.closed == true and type(state.config) == "table" then
+            return state
+        end
+
+        if state.key ~= SESSION_KEY then
+            set_env_value("HYDROGEN_SESSION_LOCK", nil)
+            set_env_value("HYDROGEN_SESSION_CONFIG", nil)
+            set_env_value("HYDROGEN_CLOSED_FOR_SESSION", false)
+        end
+    end
+
+    local legacyConfig = env_value("HYDROGEN_SESSION_CONFIG")
+    if env_value("HYDROGEN_CLOSED_FOR_SESSION") == true and type(legacyConfig) == "table" then
+        return {
+            key = SESSION_KEY,
+            closed = true,
+            config = legacyConfig,
+        }
+    end
+
+    set_env_value("HYDROGEN_CLOSED_FOR_SESSION", false)
+    return nil
 end
 
 local function ensure_settings_folder()
@@ -248,15 +279,19 @@ local function sanitize_config(config)
     end
 end
 
+local initialSessionLock = read_session_lock()
 local config = copy_config(defaultConfig)
 apply_config(config, load_workspace_settings())
 apply_config(config, env_table("HYDROGEN_SETTINGS"))
+if initialSessionLock then
+    apply_config(config, initialSessionLock.config)
+end
 sanitize_config(config)
 
 local Hydrogen = {
     open = true,
     selected = 1,
-    closed_for_session = false,
+    closed_for_session = initialSessionLock ~= nil,
     theme = theme,
     defaults = defaultConfig,
     config = config,
@@ -265,7 +300,7 @@ local Hydrogen = {
 }
 
 local runtime = {
-    closed_for_session = false,
+    closed_for_session = initialSessionLock ~= nil,
     capture = nil,
     rows = {},
     selectable = {},
@@ -438,7 +473,7 @@ local root = New("Frame", {
     ClipsDescendants = true,
     Position = UDim2.fromOffset(18, 18),
     Size = UDim2.fromOffset(MENU_WIDTH, DROPDOWN_HEIGHT),
-    Visible = true,
+    Visible = not initialSessionLock,
 }, gui)
 corner(root, 3)
 stroke(root, theme.border, 0.05, 1)
@@ -3086,16 +3121,65 @@ set_dropdown = function(state)
     end
 end
 
-local function save_and_close_for_session()
-    save_workspace_settings()
+local function persist_session_lock()
+    sanitize_config(config)
+    local sessionConfig = copy_config(config)
+    set_env_value("HYDROGEN_SESSION_CONFIG", sessionConfig)
+    set_env_value("HYDROGEN_CLOSED_FOR_SESSION", true)
+    set_env_value("HYDROGEN_SESSION_LOCK", {
+        key = SESSION_KEY,
+        closed = true,
+        place_id = game.PlaceId,
+        job_id = tostring(game.JobId),
+        config = sessionConfig,
+    })
+end
+
+local function enforce_session_lock()
     runtime.closed_for_session = true
     Hydrogen.closed_for_session = true
-    set_env_value("HYDROGEN_SESSION_CONFIG", copy_config(config))
-    set_env_value("HYDROGEN_CLOSED_FOR_SESSION", true)
+    Hydrogen.open = false
+    runtime.capture = nil
+    tooltip.Visible = false
+    content.Visible = false
+    footer.Visible = false
+    root.Visible = false
+    collapseButton.Text = "+"
+
+    if not Hydrogen.connections.session_lock_guard then
+        local elapsed = 0
+        track("session_lock_guard", RunService.Heartbeat:Connect(function(deltaTime)
+            if runtime.cleaned or not runtime.closed_for_session then
+                return
+            end
+
+            elapsed = elapsed + deltaTime
+            if elapsed < 0.25 then
+                return
+            end
+            elapsed = 0
+
+            if Hydrogen.open or root.Visible or content.Visible or footer.Visible or tooltip.Visible then
+                Hydrogen.open = false
+                runtime.capture = nil
+                tooltip.Visible = false
+                content.Visible = false
+                footer.Visible = false
+                root.Visible = false
+                collapseButton.Text = "+"
+            end
+        end))
+    end
+end
+
+local function save_and_close_for_session()
+    save_workspace_settings()
+    persist_session_lock()
     set_dropdown(false)
+    task.defer(enforce_session_lock)
     task.delay(0.12, function()
         if runtime.closed_for_session then
-            root.Visible = false
+            enforce_session_lock()
         end
     end)
 end
@@ -3339,4 +3423,9 @@ set_gate_hotkeys(config.gate_hotkeys == true)
 set_auto_block(config.auto_block == true)
 set_run_any_direction(config.run_any_direction == true)
 update_aim_loop()
-set_dropdown(true)
+if runtime.closed_for_session then
+    persist_session_lock()
+    enforce_session_lock()
+else
+    set_dropdown(true)
+end
