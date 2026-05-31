@@ -96,7 +96,7 @@ end)
 |------|--------|-------|
 | Rogue Lineage | `ROGUE/rogue_ui.lua` | ~27,000 |
 | Rogue Lineage Battlegrounds | `ROGUE_BATTLEGROUNDS/rlb.lua` | ~14,000 |
-| Hydrogen Legit Mode | `Hydrogen/hydrogen.lua` | ~900 |
+| Hydrogen Legit Mode | `Hydrogen/hydrogen.lua` | ~1,850 |
 
 ---
 
@@ -171,9 +171,9 @@ PvP-focused module inheriting Rogue Lineage's combat systems, optimized for aren
 
 ## Hydrogen
 
-Small legit-mode scaffold for Rogue Lineage. It stays quiet when injected, opens from the top-left with minus/keypad minus or the equals key, and uses a compact dropdown menu instead of the full Hydroxide window.
+Small legit-mode scaffold for Rogue Lineage. It opens with minus/keypad minus or the equals key, uses a dark purple Opera GX-style menu, and keeps its settings in the executor workspace under `HYDROGEN/hydrogen_settings.json`.
 
-Hydrogen has its own embedded `HYDROGEN` logo, cleaner charcoal/cyan styling, keyboard navigation, and a short list of legit settings: Auto Block, block chance, block delay, Silent Aim, target part, FOV, smoothness, visibility check, FOV circle, Legit Intent, Legit Healthview, and Panic Disable.
+Hydrogen has its own embedded `HYDROGEN` logo, mouse-first tab navigation, keybind capture, keyboard fallback controls, and a short list of legit settings: Auto Block, block chance, block delay, Silent Aim, target part, FOV, smoothness, visibility check, FOV circle, Legit Intent, Legit Healthview, Auto Brew Health Pot, brew keybind, panic keybind, and unload controls.
 
 Legit settings are easy to change before the loader runs:
 
@@ -184,10 +184,14 @@ getgenv().HYDROGEN_SETTINGS = {
     auto_block_chance = 80,
     block_delay = 55,
     legit_healthview = true,
+    panic_key = "KeypadPlus",
+    brew_health_key = "None",
 }
 ```
 
-`Legit Healthview` only changes the leaderboard while it is active. It uses the original edict gold color from the Rogue module. `Save and Close For Session` stores the current Hydrogen settings in memory, closes the menu, and locks the toggle key for the rest of the current game session.
+`Legit Healthview` only changes your own leaderboard row while it is active. It uses the original edict gold color from the Rogue module and restores the saved color when turned off or unloaded. `Auto Brew Health Pot` queues one health potion near a cauldron/alchemy station, and repeated clicks or key presses add more cleanly to the queue.
+
+The default panic key is keypad plus. `Save and Close For Session` writes the current Hydrogen settings, closes the menu, and locks editing for that script execution. Re-running Hydrogen loads the saved settings and brings the menu back.
 
 It is compiled as `dist/hydrogen.lua`. The main loader only uses it when `getgenv().HYDROGEN_LEGIT = true` or `getgenv().HYDROXIDE_LEGIT = true` is set before running the loader.
 
@@ -203,7 +207,7 @@ Hydroxide/
   ROGUE_BATTLEGROUNDS/
     rlb.lua                   -- Rogue Battlegrounds script (~14,000 lines)
   Hydrogen/
-    hydrogen.lua              -- Minimal Rogue Lineage legit scaffold (~900 lines)
+    hydrogen.lua              -- Minimal Rogue Lineage legit scaffold (~1,850 lines)
   DEPENDENCIES/
     Library.lua               -- UI framework
     SaveManager.lua           -- Config save/load
