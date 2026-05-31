@@ -94,8 +94,8 @@ local defaultConfig = {
     fov_circle = false,
     legit_intent = false,
     legit_healthview = false,
-    pot_queue = false,
     gate_hotkeys = false,
+    run_any_direction = false,
     target_part = "Closest",
     panic_key = "KeypadPlus",
 }
@@ -129,7 +129,7 @@ local menuItems = {
     { key = "legit_intent", label = "Legit Intent", type = "toggle", tooltip = "Shows equipped tools over nearby players using the watched display." },
     { key = "legit_healthview", label = "Legit Healthview", type = "toggle", tooltip = "Forces humanoid health bars and keeps only your leaderboard row gold." },
     { key = "gate_hotkeys", label = "Gate Hotkeys", type = "toggle", tooltip = "When Enter is pressed in GateUI, expands compact destinations before submitting." },
-    { key = "pot_queue", label = "Pot Queue", type = "toggle", tooltip = "Allows manual health potion queue calls. Automatic potting is removed." },
+    { key = "run_any_direction", label = "Run Any Direction", type = "toggle", tooltip = "Double tap A, S, or D to force sprint movement in that direction." },
     { section = "system", id = "system" },
     { key = "panic_key", label = "Panic Keybind", type = "keybind", tooltip = "Fully unloads Hydrogen. Keypad keys match keypad input only." },
     { key = "save_settings", label = "Save Settings", type = "action", action = "save" },
@@ -394,6 +394,7 @@ local set_healthview
 local set_legit_intent
 local set_gate_hotkeys
 local set_auto_block
+local set_run_any_direction
 local update_aim_loop
 local unload
 local queue_health_potion
@@ -766,6 +767,8 @@ local function run_side_effect(item)
         set_gate_hotkeys(config.gate_hotkeys == true)
     elseif item.key == "auto_block" and set_auto_block then
         set_auto_block(config.auto_block == true)
+    elseif item.key == "run_any_direction" and set_run_any_direction then
+        set_run_any_direction(config.run_any_direction == true)
     elseif (item.key == "silent_aim" or item.key == "fov_circle" or item.key == "aim_fov" or item.key == "visible_check" or item.key == "target_part") and update_aim_loop then
         update_aim_loop()
     end
@@ -1271,11 +1274,19 @@ local function should_auto_block_ability(abilityName)
 end
 
 local function auto_block_connect(connection)
+    if not connection then
+        return nil
+    end
+
     autoBlockConnections[#autoBlockConnections + 1] = connection
     return connection
 end
 
 local function auto_block_connect_local_character(connection)
+    if not connection then
+        return nil
+    end
+
     autoBlockLocalCharacterConnections[#autoBlockLocalCharacterConnections + 1] = connection
     return connection
 end
@@ -1378,7 +1389,7 @@ end
 
 local function perform_auto_block(delaySeconds, blockDuration, useVim)
     local character = LocalPlayer.Character
-    if not config.auto_block or not character or UserInputService:GetFocusedTextBox() then
+    if not config.auto_block or not character or not character.Parent or UserInputService:GetFocusedTextBox() then
         return false
     end
 
@@ -1405,7 +1416,7 @@ local function perform_auto_block(delaySeconds, blockDuration, useVim)
     task.spawn(function()
         if adjustedDelay > 0 then
             task.wait(adjustedDelay)
-            if auto_block_on_cooldown() then
+            if not config.auto_block or not character.Parent or auto_block_on_cooldown() then
                 if not useVim then
                     auto_block_unbind_inputs()
                 end
@@ -1474,8 +1485,9 @@ local function connect_auto_block_character(player, character)
         return
     end
 
+    local seenSounds = {}
     local function handle_sound(sound)
-        if not sound:IsA("Sound") then
+        if seenSounds[sound] or not sound:IsA("Sound") then
             return
         end
 
@@ -1484,6 +1496,7 @@ local function connect_auto_block_character(player, character)
             return
         end
 
+        seenSounds[sound] = true
         connections[#connections + 1] = sound.Played:Connect(function()
             if not should_auto_block_ability(info.ability) then
                 return
@@ -2395,6 +2408,7 @@ end
 
 local gateHotkeyConnections = {}
 local gateHotkeyBoxes = {}
+local gateHotkeyGuis = {}
 local gateActionBound = false
 
 local function gate_hotkey_connect(connection)
@@ -2417,8 +2431,39 @@ local function disconnect_gate_hotkeys()
     end
     gateHotkeyConnections = {}
     gateHotkeyBoxes = {}
+    gateHotkeyGuis = {}
     runtime.gate_focused_box = nil
     runtime.gate_submitting = false
+end
+
+local function gate_ancestor(instance)
+    local current = instance
+    while current do
+        if current.Name == "GateUI" then
+            return current
+        end
+        current = current.Parent
+    end
+    return nil
+end
+
+local function is_gate_textbox(textBox)
+    return textBox and textBox:IsA("TextBox") and (gateHotkeyBoxes[textBox] == true or gate_ancestor(textBox) ~= nil)
+end
+
+local function current_gate_textbox()
+    local textBox = runtime.gate_focused_box
+    if is_gate_textbox(textBox) and textBox.Parent then
+        return textBox
+    end
+
+    local focused = UserInputService:GetFocusedTextBox()
+    if is_gate_textbox(focused) and focused.Parent then
+        runtime.gate_focused_box = focused
+        return focused
+    end
+
+    return nil
 end
 
 local function set_textbox_text(textBox, text)
@@ -2484,9 +2529,10 @@ local function submit_gate_enter(keyCode)
             end)
         end
 
-        if not submitted and runtime.gate_focused_box and runtime.gate_focused_box.Parent then
+        local textBox = current_gate_textbox()
+        if not submitted and textBox and textBox.Parent then
             pcall(function()
-                runtime.gate_focused_box:ReleaseFocus(true)
+                textBox:ReleaseFocus(true)
             end)
         end
 
@@ -2507,7 +2553,7 @@ local function bind_gate_submit_action()
             return Enum.ContextActionResult.Pass
         end
 
-        local textBox = runtime.gate_focused_box
+        local textBox = current_gate_textbox()
         if runtime.gate_submitting or not config.gate_hotkeys or not textBox or not textBox.Parent then
             return Enum.ContextActionResult.Pass
         end
@@ -2560,12 +2606,34 @@ local function attach_gate_ui(gateGui)
     if not gateGui or gateGui.Name ~= "GateUI" then
         return
     end
+    if gateHotkeyGuis[gateGui] then
+        return
+    end
+    gateHotkeyGuis[gateGui] = true
 
     task.spawn(function()
-        local background = gateGui:FindFirstChild("Background") or gateGui:WaitForChild("Background", 3)
-        local textBox = background and (background:FindFirstChild("TextBox") or background:WaitForChild("TextBox", 3))
-        attach_gate_textbox(textBox)
+        local background = gateGui:FindFirstChild("Background", true) or gateGui:WaitForChild("Background", 3)
+        local textBox = background and (background:FindFirstChild("TextBox", true) or background:WaitForChild("TextBox", 3))
+        attach_gate_textbox(textBox or gateGui:FindFirstChild("TextBox", true))
+
+        for _, descendant in ipairs(gateGui:GetDescendants()) do
+            if descendant:IsA("TextBox") then
+                attach_gate_textbox(descendant)
+            end
+        end
     end)
+
+    gate_hotkey_connect(gateGui.DescendantAdded:Connect(function(descendant)
+        if descendant:IsA("TextBox") then
+            attach_gate_textbox(descendant)
+        end
+    end))
+
+    gate_hotkey_connect(gateGui.AncestryChanged:Connect(function(_, parentObject)
+        if not parentObject then
+            gateHotkeyGuis[gateGui] = nil
+        end
+    end))
 end
 
 set_gate_hotkeys = function(enabled)
@@ -2582,15 +2650,174 @@ set_gate_hotkeys = function(enabled)
 
     bind_gate_submit_action()
 
-    for _, child in ipairs(playerGui:GetChildren()) do
+    for _, child in ipairs(playerGui:GetDescendants()) do
         attach_gate_ui(child)
     end
 
-    gate_hotkey_connect(playerGui.ChildAdded:Connect(function(child)
+    gate_hotkey_connect(playerGui.DescendantAdded:Connect(function(child)
         if config.gate_hotkeys and child.Name == "GateUI" then
             attach_gate_ui(child)
+        elseif config.gate_hotkeys and child:IsA("TextBox") then
+            local gateGui = gate_ancestor(child)
+            if gateGui then
+                attach_gate_ui(gateGui)
+                attach_gate_textbox(child)
+            end
         end
     end))
+end
+
+local RUN_ANY_TAP_WINDOW = 0.2
+local runAnyConnections = {}
+local runAnyByKey = {
+    [Enum.KeyCode.A] = "A",
+    [Enum.KeyCode.S] = "S",
+    [Enum.KeyCode.D] = "D",
+}
+local runAnyState = {
+    active = nil,
+    A = { taps = 0, pressed = false, last = 0 },
+    S = { taps = 0, pressed = false, last = 0 },
+    D = { taps = 0, pressed = false, last = 0 },
+}
+
+local function run_any_send(keyCode, isDown)
+    if not VirtualInputManager or not keyCode then
+        return false
+    end
+
+    return pcall(function()
+        VirtualInputManager:SendKeyEvent(isDown == true, keyCode, false, game)
+    end)
+end
+
+local function run_any_tap(keyCode)
+    if not run_any_send(keyCode, true) then
+        return false
+    end
+    task.wait(0.01)
+    run_any_send(keyCode, false)
+    return true
+end
+
+local function stop_run_any()
+    local active = runAnyState.active
+    if not active then
+        return
+    end
+
+    if active == "S" then
+        run_any_send(Enum.KeyCode.Down, false)
+    end
+    run_any_send(Enum.KeyCode.W, false)
+    runAnyState.active = nil
+end
+
+local function activate_run_any(direction)
+    if not config.run_any_direction or runtime.cleaned or runtime.capture or UserInputService:GetFocusedTextBox() or not VirtualInputManager then
+        return
+    end
+
+    stop_run_any()
+    runAnyState.active = direction
+
+    task.spawn(function()
+        if runAnyState.active ~= direction then
+            return
+        end
+
+        run_any_tap(Enum.KeyCode.W)
+        task.wait(0.01)
+        if runAnyState.active ~= direction then
+            return
+        end
+        run_any_send(Enum.KeyCode.W, true)
+        task.wait(0.01)
+        if runAnyState.active ~= direction then
+            return
+        end
+        run_any_tap(Enum.KeyCode.Up)
+
+        if direction == "S" and runAnyState.active == direction then
+            run_any_tap(Enum.KeyCode.Down)
+            run_any_send(Enum.KeyCode.Down, true)
+        end
+    end)
+end
+
+local function disconnect_run_any_direction()
+    stop_run_any()
+    for _, connection in ipairs(runAnyConnections) do
+        pcall(function()
+            connection:Disconnect()
+        end)
+    end
+    runAnyConnections = {}
+
+    for _, state in pairs(runAnyState) do
+        if type(state) == "table" then
+            state.taps = 0
+            state.pressed = false
+            state.last = 0
+        end
+    end
+end
+
+set_run_any_direction = function(enabled)
+    disconnect_run_any_direction()
+    if not enabled or not VirtualInputManager then
+        return
+    end
+
+    runAnyConnections[#runAnyConnections + 1] = UserInputService.InputBegan:Connect(function(input)
+        if runtime.cleaned or runtime.capture or UserInputService:GetFocusedTextBox() then
+            return
+        end
+
+        local direction = input.UserInputType == Enum.UserInputType.Keyboard and runAnyByKey[input.KeyCode]
+        if not direction then
+            return
+        end
+
+        local state = runAnyState[direction]
+        if state.pressed then
+            return
+        end
+
+        state.pressed = true
+        local now = os.clock()
+        if now - state.last <= RUN_ANY_TAP_WINDOW then
+            state.taps = state.taps + 1
+        else
+            state.taps = 1
+        end
+        state.last = now
+
+        local stamp = now
+        task.delay(RUN_ANY_TAP_WINDOW, function()
+            if state.last == stamp and not state.pressed and runAnyState.active ~= direction then
+                state.taps = 0
+            end
+        end)
+
+        if state.taps >= 2 then
+            state.taps = 0
+            activate_run_any(direction)
+        end
+    end)
+
+    runAnyConnections[#runAnyConnections + 1] = UserInputService.InputEnded:Connect(function(input)
+        local direction = input.UserInputType == Enum.UserInputType.Keyboard and runAnyByKey[input.KeyCode]
+        if not direction then
+            return
+        end
+
+        local state = runAnyState[direction]
+        state.pressed = false
+        if runAnyState.active == direction then
+            stop_run_any()
+        end
+    end)
 end
 
 local healthRecipe = {
@@ -2800,10 +3027,6 @@ local function brew_health_once()
 end
 
 queue_health_potion = function(amount)
-    if not config.pot_queue then
-        return false
-    end
-
     if not has_health_materials() or not find_alchemy_station() then
         return false
     end
@@ -2908,6 +3131,9 @@ local function cleanup()
         intentContainer:Destroy()
     end
     disconnect_gate_hotkeys()
+    if set_run_any_direction then
+        set_run_any_direction(false)
+    end
     clear_brew_queue()
     disconnect_rows()
 
@@ -3062,6 +3288,8 @@ function Hydrogen.SetConfig(key, value)
         set_gate_hotkeys(config.gate_hotkeys == true)
     elseif key == "auto_block" then
         set_auto_block(config.auto_block == true)
+    elseif key == "run_any_direction" then
+        set_run_any_direction(config.run_any_direction == true)
     elseif key == "silent_aim" or key == "fov_circle" or key == "aim_fov" or key == "visible_check" or key == "target_part" then
         update_aim_loop()
     end
@@ -3109,5 +3337,6 @@ set_legit_intent(config.legit_intent == true)
 set_healthview(config.legit_healthview == true)
 set_gate_hotkeys(config.gate_hotkeys == true)
 set_auto_block(config.auto_block == true)
+set_run_any_direction(config.run_any_direction == true)
 update_aim_loop()
 set_dropdown(true)
