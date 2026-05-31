@@ -6,8 +6,13 @@ local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
+local ContextActionService = game:GetService("ContextActionService")
 local CoreGui = game:GetService("CoreGui")
 local HttpService = game:GetService("HttpService")
+local VirtualInputManager
+pcall(function()
+    VirtualInputManager = game:GetService("VirtualInputManager")
+end)
 
 local LocalPlayer = Players.LocalPlayer
 if not LocalPlayer then
@@ -87,23 +92,22 @@ local defaultConfig = {
     fov_circle = false,
     legit_intent = false,
     legit_healthview = false,
-    auto_pots = false,
-    auto_pot_queue = 1,
+    pot_queue = false,
     gate_hotkeys = false,
     target_part = "Closest",
     panic_key = "KeypadPlus",
-    brew_health_key = "None",
 }
 
 local menuItems = {
     { section = "combat", id = "combat" },
-    { key = "auto_block", label = "Auto Block", type = "toggle" },
-    { key = "auto_block_chance", label = "Block Chance", type = "number", min = 0, max = 100, step = 5, suffix = "%" },
-    { key = "block_delay", label = "Block Delay", type = "number", min = 0, max = 250, step = 5, suffix = "ms" },
+    { key = "auto_block", label = "Auto Block", type = "toggle", tooltip = "Rolls the configured block chance before Hydrogen reports a block." },
+    { key = "auto_block_chance", label = "Block Chance", type = "number", min = 0, max = 100, step = 5, suffix = "%", tooltip = "Left click increases. Right click decreases. Keypad bindings stay keypad-only." },
+    { key = "block_delay", label = "Block Delay", type = "number", min = 0, max = 250, step = 5, suffix = "ms", tooltip = "Delay value exposed to the legit block helper." },
     {
         key = "block_list",
         label = "Things To Block",
         type = "folder",
+        tooltip = "Open this folder to choose which named attacks the block helper should accept.",
         children = {
             { key = "block_viribus", label = "Viribus", type = "toggle", child = true },
             { key = "block_owl_slash", label = "Owl Slash", type = "toggle", child = true },
@@ -112,21 +116,19 @@ local menuItems = {
         },
     },
     { section = "aim", id = "aim" },
-    { key = "silent_aim", label = "Silent Aim", type = "toggle" },
+    { key = "silent_aim", label = "Silent Aim", type = "toggle", tooltip = "Keeps a lightweight target resolver active for the configured FOV." },
     { key = "target_part", label = "Target Part", type = "choice", choices = { "Closest", "Head", "Torso" } },
-    { key = "aim_fov", label = "Aim FOV", type = "number", min = 20, max = 240, step = 5 },
-    { key = "smoothness", label = "Smoothness", type = "number", min = 1, max = 20, step = 1 },
+    { key = "aim_fov", label = "Aim FOV", type = "number", min = 20, max = 240, step = 5, tooltip = "Controls target search radius and the optional FOV circle size." },
+    { key = "smoothness", label = "Smoothness", type = "number", min = 1, max = 20, step = 1, tooltip = "Stored for legit aim behavior that wants a smoothing value." },
     { key = "visible_check", label = "Visible Check", type = "toggle" },
     { key = "fov_circle", label = "FOV Circle", type = "toggle" },
     { section = "utility", id = "utility" },
-    { key = "legit_intent", label = "Legit Intent", type = "toggle" },
-    { key = "legit_healthview", label = "Legit Healthview", type = "toggle" },
-    { key = "gate_hotkeys", label = "Gate Hotkeys", type = "toggle" },
-    { key = "auto_pots", label = "Auto Pots", type = "toggle" },
-    { key = "auto_pot_queue", label = "Pot Queue", type = "number", min = 1, max = 10, step = 1 },
-    { key = "brew_health_key", label = "Brew Keybind", type = "keybind" },
+    { key = "legit_intent", label = "Legit Intent", type = "toggle", tooltip = "Shows equipped tools over nearby players using the watched display." },
+    { key = "legit_healthview", label = "Legit Healthview", type = "toggle", tooltip = "Forces humanoid health bars and keeps only your leaderboard row gold." },
+    { key = "gate_hotkeys", label = "Gate Hotkeys", type = "toggle", tooltip = "When Enter is pressed in GateUI, expands compact destinations before submitting." },
+    { key = "pot_queue", label = "Pot Queue", type = "toggle", tooltip = "Allows manual health potion queue calls. Automatic potting is removed." },
     { section = "system", id = "system" },
-    { key = "panic_key", label = "Panic Keybind", type = "keybind" },
+    { key = "panic_key", label = "Panic Keybind", type = "keybind", tooltip = "Fully unloads Hydrogen. Keypad keys match keypad input only." },
     { key = "save_settings", label = "Save Settings", type = "action", action = "save" },
     { key = "unload_hydrogen", label = "Unload Hydrogen", type = "action", action = "unload" },
 }
@@ -279,6 +281,8 @@ local runtime = {
     cleaned = false,
     dragging = false,
     content_height = CONTENT_MAX_HEIGHT,
+    gate_focused_box = nil,
+    gate_submitting = false,
 }
 
 local function disconnect(name)
@@ -313,7 +317,16 @@ end
 
 local function key_matches(keyCode, savedName)
     savedName = safe_key_name(savedName)
-    return savedName ~= "None" and keyCode and keyCode.Name == savedName
+    if savedName == "None" or not keyCode then
+        return false
+    end
+
+    local keyName = keyCode.Name
+    if savedName:sub(1, 6) == "Keypad" and keyName:sub(1, 6) ~= "Keypad" then
+        return false
+    end
+
+    return keyName == savedName
 end
 
 local function is_menu_key(keyCode)
@@ -326,6 +339,16 @@ local function format_keybind(name)
         None = "None",
         KeypadPlus = "Keypad +",
         KeypadMinus = "Keypad -",
+        KeypadZero = "Keypad 0",
+        KeypadOne = "Keypad 1",
+        KeypadTwo = "Keypad 2",
+        KeypadThree = "Keypad 3",
+        KeypadFour = "Keypad 4",
+        KeypadFive = "Keypad 5",
+        KeypadSix = "Keypad 6",
+        KeypadSeven = "Keypad 7",
+        KeypadEight = "Keypad 8",
+        KeypadNine = "Keypad 9",
         LeftControl = "Left Ctrl",
         RightControl = "Right Ctrl",
         LeftShift = "Left Shift",
@@ -366,7 +389,6 @@ local set_dropdown
 local update_rows
 local set_healthview
 local set_legit_intent
-local set_auto_pots
 local set_gate_hotkeys
 local update_aim_loop
 local unload
@@ -456,12 +478,21 @@ local logo = New("TextLabel", {
     Name = "Logo",
     BackgroundTransparency = 1,
     Font = Enum.Font.Code,
-    Text = "[H]",
+    Text = "HX",
     TextColor3 = theme.red,
     TextSize = 14,
     TextXAlignment = Enum.TextXAlignment.Left,
     Position = UDim2.fromOffset(10, 8),
     Size = UDim2.fromOffset(40, 28),
+}, header)
+
+New("Frame", {
+    Name = "LogoCut",
+    BackgroundColor3 = theme.text,
+    BorderSizePixel = 0,
+    Position = UDim2.fromOffset(31, 13),
+    Rotation = -18,
+    Size = UDim2.fromOffset(2, 14),
 }, header)
 
 local title = New("TextLabel", {
@@ -555,17 +586,37 @@ local statusText = New("TextLabel", {
 local saveCloseButton = New("TextButton", {
     Name = "SaveClose",
     AutoButtonColor = false,
-    BackgroundColor3 = theme.redDark,
+    BackgroundColor3 = Color3.fromRGB(42, 38, 46),
     BorderSizePixel = 0,
     Font = Enum.Font.GothamSemibold,
     Text = "Save and Close For Session",
-    TextColor3 = theme.text,
+    TextColor3 = Color3.fromRGB(213, 205, 218),
     TextSize = 12,
     Position = UDim2.new(0.44, 0, 0, 4),
     Size = UDim2.new(0.56, 0, 1, -8),
 }, footer)
 corner(saveCloseButton, 5)
-stroke(saveCloseButton, theme.red, 0.12, 1)
+stroke(saveCloseButton, theme.muted, 0.15, 1)
+
+local tooltip = New("TextLabel", {
+    Name = "Tooltip",
+    BackgroundColor3 = Color3.fromRGB(7, 4, 10),
+    BackgroundTransparency = 0.05,
+    BorderSizePixel = 0,
+    Font = Enum.Font.Code,
+    Text = "",
+    TextColor3 = Color3.fromRGB(224, 213, 231),
+    TextSize = 11,
+    TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Center,
+    Visible = false,
+    ZIndex = 12,
+    Position = UDim2.fromOffset(16, TOP_BAR_HEIGHT + HEADER_HEIGHT + 10),
+    Size = UDim2.new(1, -32, 0, 34),
+}, root)
+corner(tooltip, 3)
+stroke(tooltip, theme.red, 0.35, 1)
 
 notify = function(message)
     statusText.Text = tostring(message or "ready")
@@ -686,8 +737,6 @@ local function run_side_effect(item)
         set_legit_intent(config.legit_intent == true)
     elseif item.key == "legit_healthview" and set_healthview then
         set_healthview(config.legit_healthview == true)
-    elseif item.key == "auto_pots" and set_auto_pots then
-        set_auto_pots(config.auto_pots == true)
     elseif item.key == "gate_hotkeys" and set_gate_hotkeys then
         set_gate_hotkeys(config.gate_hotkeys == true)
     elseif (item.key == "silent_aim" or item.key == "fov_circle" or item.key == "aim_fov" or item.key == "visible_check" or item.key == "target_part") and update_aim_loop then
@@ -731,6 +780,10 @@ local function apply_item(item, direction)
     elseif item.type == "keybind" then
         runtime.capture = item.key
         notify("press key")
+        if item.tooltip then
+            tooltip.Text = item.tooltip
+            tooltip.Visible = true
+        end
     elseif item.type == "action" then
         if item.action == "save" then
             notify(save_workspace_settings() and "saved" or "save failed")
@@ -844,6 +897,7 @@ rebuild_rows = function()
     disconnect_rows()
     runtime.rows = {}
     runtime.selectable = {}
+    tooltip.Visible = false
 
     for _, child in ipairs(content:GetChildren()) do
         if not child:IsA("UICorner") and not child:IsA("UIStroke") then
@@ -884,6 +938,7 @@ rebuild_rows = function()
     local function add_row(item, depth)
         local index = #runtime.rows + 1
         runtime.selectable[index] = item
+        local rowY = y
 
         local row = New("TextButton", {
             Name = item.key,
@@ -964,6 +1019,19 @@ rebuild_rows = function()
 
         add_row_connection(row.MouseEnter:Connect(function()
             select_row(index)
+            if item.tooltip then
+                tooltip.Text = item.tooltip
+                tooltip.Position = UDim2.fromOffset(16, math.min(content.Position.Y.Offset + rowY + 20, dropdown_height_for(runtime.content_height) - 44))
+                tooltip.Visible = true
+            else
+                tooltip.Visible = false
+            end
+        end))
+
+        add_row_connection(row.MouseLeave:Connect(function()
+            if tooltip.Visible and tooltip.Text == (item.tooltip or "") then
+                tooltip.Visible = false
+            end
         end))
 
         y = y + 24
@@ -1795,6 +1863,7 @@ end
 
 local gateHotkeyConnections = {}
 local gateHotkeyBoxes = {}
+local gateActionBound = false
 
 local function gate_hotkey_connect(connection)
     gateHotkeyConnections[#gateHotkeyConnections + 1] = connection
@@ -1802,6 +1871,13 @@ local function gate_hotkey_connect(connection)
 end
 
 local function disconnect_gate_hotkeys()
+    if gateActionBound then
+        pcall(function()
+            ContextActionService:UnbindAction("HydrogenGateSubmit")
+        end)
+        gateActionBound = false
+    end
+
     for _, connection in ipairs(gateHotkeyConnections) do
         pcall(function()
             connection:Disconnect()
@@ -1809,6 +1885,8 @@ local function disconnect_gate_hotkeys()
     end
     gateHotkeyConnections = {}
     gateHotkeyBoxes = {}
+    runtime.gate_focused_box = nil
+    runtime.gate_submitting = false
 end
 
 local function set_textbox_text(textBox, text)
@@ -1822,60 +1900,126 @@ local function set_textbox_text(textBox, text)
     end)
 end
 
+local function title_case_destination(prefix, number)
+    return prefix .. " " .. tostring(number)
+end
+
+local function gate_replacement(text)
+    local value = tostring(text or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+    value = value:gsub("%s+", "")
+
+    local prefix, number = value:match("^(df)(%d+)$")
+    if prefix and number then
+        return title_case_destination("DeepForest", number)
+    end
+
+    prefix, number = value:match("^([tdfs])(%d+)$")
+    if prefix and number then
+        if prefix == "t" then
+            if tostring(number) == "2" and math.random(1, 2) == 2 then
+                return "Tundra Temple"
+            end
+            return title_case_destination("Tundra", number)
+        elseif prefix == "d" then
+            return title_case_destination("Desert", number)
+        elseif prefix == "f" then
+            return title_case_destination("Forest", number)
+        elseif prefix == "s" then
+            return title_case_destination("Shore", number)
+        end
+    end
+
+    if value == "sk" or value == "sky" or value == "skyc" or value == "skyca" or value == "skycas" or value == "skycast" or value == "skycastl" or value == "skycastle" then
+        return "Skycastle"
+    elseif value == "sn" or value == "sna" or value == "snai" or value == "snail" then
+        return "Snail"
+    elseif value == "si" or value == "sig" or value == "sigi" or value == "sigil" then
+        return "Sigil"
+    end
+
+    return nil
+end
+
+local function submit_gate_enter(keyCode)
+    runtime.gate_submitting = true
+
+    task.defer(function()
+        local submitted = false
+        if VirtualInputManager then
+            submitted = pcall(function()
+                VirtualInputManager:SendKeyEvent(true, keyCode or Enum.KeyCode.Return, false, game)
+                VirtualInputManager:SendKeyEvent(false, keyCode or Enum.KeyCode.Return, false, game)
+            end)
+        end
+
+        if not submitted and runtime.gate_focused_box and runtime.gate_focused_box.Parent then
+            pcall(function()
+                runtime.gate_focused_box:ReleaseFocus(true)
+            end)
+        end
+
+        task.delay(0.05, function()
+            runtime.gate_submitting = false
+        end)
+    end)
+end
+
+local function bind_gate_submit_action()
+    if gateActionBound then
+        return
+    end
+
+    gateActionBound = true
+    ContextActionService:BindActionAtPriority("HydrogenGateSubmit", function(_, inputState, inputObject)
+        if inputState ~= Enum.UserInputState.Begin then
+            return Enum.ContextActionResult.Pass
+        end
+
+        local textBox = runtime.gate_focused_box
+        if runtime.gate_submitting or not config.gate_hotkeys or not textBox or not textBox.Parent then
+            return Enum.ContextActionResult.Pass
+        end
+
+        local replacement = gate_replacement(textBox.Text)
+        if not replacement then
+            return Enum.ContextActionResult.Pass
+        end
+
+        set_textbox_text(textBox, replacement)
+        submit_gate_enter(inputObject and inputObject.KeyCode or Enum.KeyCode.Return)
+        return Enum.ContextActionResult.Sink
+    end, false, 10000, Enum.KeyCode.Return, Enum.KeyCode.KeypadEnter)
+end
+
 local function attach_gate_textbox(textBox)
     if not textBox or not textBox:IsA("TextBox") or gateHotkeyBoxes[textBox] then
         return
     end
 
     gateHotkeyBoxes[textBox] = true
-    local focused = false
-    pcall(function()
-        focused = textBox:IsFocused()
-    end)
-    local token = 0
-
-    local function normalized_text()
-        return tostring(textBox.Text or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
-    end
-
-    local function handle_text()
-        if not config.gate_hotkeys or not focused then
-            return
-        end
-
-        token = token + 1
-        local currentToken = token
-        local value = normalized_text()
-
-        if value == "f" then
-            set_textbox_text(textBox, "Forest ")
-        elseif value == "t" then
-            set_textbox_text(textBox, "Tundra ")
-        elseif value == "d" or value == "df" then
-            task.delay(0.5, function()
-                if config.gate_hotkeys and focused and token == currentToken and normalized_text() == value then
-                    set_textbox_text(textBox, value == "df" and "Deepforest " or "Desert ")
-                end
-            end)
-        end
-    end
-
     gate_hotkey_connect(textBox.Focused:Connect(function()
-        focused = true
-        handle_text()
+        runtime.gate_focused_box = textBox
     end))
 
-    gate_hotkey_connect(textBox.FocusLost:Connect(function()
-        focused = false
-        token = token + 1
+    gate_hotkey_connect(textBox.FocusLost:Connect(function(enterPressed)
+        if runtime.gate_focused_box == textBox then
+            runtime.gate_focused_box = nil
+        end
+
+        if enterPressed and config.gate_hotkeys and not runtime.gate_submitting then
+            local replacement = gate_replacement(textBox.Text)
+            if replacement then
+                set_textbox_text(textBox, replacement)
+            end
+        end
     end))
 
-    gate_hotkey_connect(textBox:GetPropertyChangedSignal("Text"):Connect(handle_text))
     gate_hotkey_connect(textBox.AncestryChanged:Connect(function(_, parentObject)
         if not parentObject then
-            focused = false
+            if runtime.gate_focused_box == textBox then
+                runtime.gate_focused_box = nil
+            end
             gateHotkeyBoxes[textBox] = nil
-            token = token + 1
         end
     end))
 end
@@ -1903,6 +2047,8 @@ set_gate_hotkeys = function(enabled)
     if not playerGui then
         return
     end
+
+    bind_gate_submit_action()
 
     for _, child in ipairs(playerGui:GetChildren()) do
         attach_gate_ui(child)
@@ -2122,6 +2268,10 @@ local function brew_health_once()
 end
 
 queue_health_potion = function(amount)
+    if not config.pot_queue then
+        return false
+    end
+
     if not has_health_materials() or not find_alchemy_station() then
         return false
     end
@@ -2154,41 +2304,6 @@ queue_health_potion = function(amount)
     return true
 end
 
-set_auto_pots = function(enabled)
-    disconnect("auto_pots")
-    clear_brew_queue()
-
-    if not enabled then
-        notify("ready")
-        return
-    end
-
-    notify("auto pots")
-    local elapsed = 0
-    track("auto_pots", RunService.Heartbeat:Connect(function(deltaTime)
-        elapsed = elapsed + deltaTime
-        if elapsed < 0.08 then
-            return
-        end
-        elapsed = 0
-
-        local station = find_alchemy_station()
-        if not station then
-            clear_brew_queue()
-            return
-        end
-
-        if not has_health_materials() then
-            clear_brew_queue()
-            return
-        end
-
-        if not runtime.brew_busy and runtime.brew_queue == 0 then
-            queue_health_potion(config.auto_pot_queue)
-        end
-    end))
-end
-
 set_dropdown = function(state)
     if runtime.cleaned or (state and runtime.closed_for_session) then
         return
@@ -2206,6 +2321,7 @@ set_dropdown = function(state)
     else
         content.Visible = false
         footer.Visible = false
+        tooltip.Visible = false
         TweenService:Create(root, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
             Size = UDim2.fromOffset(MENU_WIDTH, TOP_BAR_HEIGHT + HEADER_HEIGHT),
         }):Play()
@@ -2260,7 +2376,6 @@ local function cleanup()
         intentContainer:Destroy()
     end
     disconnect_gate_hotkeys()
-    disconnect("auto_pots")
     clear_brew_queue()
     disconnect_rows()
 
@@ -2342,10 +2457,6 @@ track("input", UserInputService.InputBegan:Connect(function(input, gameProcessed
         unload()
         return
     end
-    if key_matches(key, config.brew_health_key) then
-        queue_health_potion(config.auto_pot_queue)
-        return
-    end
     if gameProcessed then
         return
     end
@@ -2395,8 +2506,6 @@ function Hydrogen.SetConfig(key, value)
         set_legit_intent(config.legit_intent == true)
     elseif key == "legit_healthview" then
         set_healthview(config.legit_healthview == true)
-    elseif key == "auto_pots" then
-        set_auto_pots(config.auto_pots == true)
     elseif key == "gate_hotkeys" then
         set_gate_hotkeys(config.gate_hotkeys == true)
     elseif key == "silent_aim" or key == "fov_circle" or key == "aim_fov" or key == "visible_check" or key == "target_part" then
@@ -2470,7 +2579,6 @@ set_queue_badge()
 rebuild_rows()
 set_legit_intent(config.legit_intent == true)
 set_healthview(config.legit_healthview == true)
-set_auto_pots(config.auto_pots == true)
 set_gate_hotkeys(config.gate_hotkeys == true)
 update_aim_loop()
 set_dropdown(true)
