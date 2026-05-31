@@ -1265,9 +1265,13 @@ local EARTH_PILLAR_BLOCK_DURATION = 0.45
 local autoBlockConnections = {}
 local autoBlockPlayerConnections = {}
 local autoBlockCharacterConnections = {}
+local autoBlockCharacterRoots = {}
 local autoBlockLocalCharacterConnections = {}
+local autoBlockLocalCharacter
+local autoBlockThrownContainers = {}
 local autoBlockLast = 0
 local autoBlockInputBlocked = false
+local autoBlockEnabled = false
 
 local blockAbilityKeys = {
     viribus = "block_viribus",
@@ -1333,6 +1337,7 @@ local function disconnect_auto_block_local_character()
         end)
     end
     autoBlockLocalCharacterConnections = {}
+    autoBlockLocalCharacter = nil
 end
 
 local function auto_block_bind_inputs()
@@ -1504,6 +1509,7 @@ local function disconnect_auto_block_character(player)
         end
     end
     autoBlockCharacterConnections[player] = nil
+    autoBlockCharacterRoots[player] = nil
 end
 
 local function connect_auto_block_character(player, character)
@@ -1515,10 +1521,12 @@ local function connect_auto_block_character(player, character)
     local connections = {}
     autoBlockCharacterConnections[player] = connections
 
-    local rootPart = character:FindFirstChild("HumanoidRootPart") or character:WaitForChild("HumanoidRootPart", 3)
+    local rootPart = character:FindFirstChild("HumanoidRootPart") or character:WaitForChild("HumanoidRootPart", 8)
     if not rootPart then
+        autoBlockCharacterConnections[player] = nil
         return
     end
+    autoBlockCharacterRoots[player] = rootPart
 
     local seenSounds = {}
     local function handle_sound(sound)
@@ -1626,6 +1634,7 @@ local function setup_auto_block_grapple(character)
     if not character then
         return
     end
+    autoBlockLocalCharacter = character
 
     auto_block_connect_local_character(character.DescendantAdded:Connect(function(child)
         if not should_auto_block_ability("Grapple") or not (child:IsA("Attachment") and child.Name == "Attachment2") then
@@ -1667,6 +1676,10 @@ local function setup_auto_block_viribus(thrown)
     if not thrown then
         return
     end
+    if autoBlockThrownContainers[thrown] then
+        return
+    end
+    autoBlockThrownContainers[thrown] = true
 
     auto_block_connect(thrown.ChildAdded:Connect(function(model)
         if not should_auto_block_ability("Viribus") or not model:IsA("Model") then
@@ -1716,15 +1729,82 @@ local function setup_auto_block_viribus(thrown)
             perform_auto_block(0, EARTH_PILLAR_BLOCK_DURATION, false)
         end
     end))
+
+    auto_block_connect(thrown.AncestryChanged:Connect(function(_, parentObject)
+        if not parentObject then
+            autoBlockThrownContainers[thrown] = nil
+        end
+    end))
+end
+
+local function connection_list_has_live(connections)
+    if type(connections) ~= "table" then
+        return false
+    end
+
+    for _, connection in pairs(connections) do
+        if connection then
+            local ok, connected = pcall(function()
+                return connection.Connected
+            end)
+            if not ok or connected ~= false then
+                return true
+            end
+        end
+    end
+
+    return false
+end
+
+local function ensure_auto_block_connections()
+    if not autoBlockEnabled or not config.auto_block then
+        return
+    end
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            if not connection_list_has_live(autoBlockPlayerConnections[player]) then
+                connect_auto_block_player(player)
+            end
+
+            local character = player.Character
+            local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+            local characterConnections = autoBlockCharacterConnections[player]
+            if character and rootPart and (autoBlockCharacterRoots[player] ~= rootPart or not connection_list_has_live(characterConnections)) then
+                task.spawn(connect_auto_block_character, player, character)
+            end
+        end
+    end
+
+    local watchedPlayers = {}
+    for player in pairs(autoBlockPlayerConnections) do
+        watchedPlayers[#watchedPlayers + 1] = player
+    end
+    for _, player in ipairs(watchedPlayers) do
+        if not player.Parent then
+            disconnect_auto_block_player(player)
+        end
+    end
+
+    if LocalPlayer.Character and (autoBlockLocalCharacter ~= LocalPlayer.Character or not connection_list_has_live(autoBlockLocalCharacterConnections)) then
+        setup_auto_block_grapple(LocalPlayer.Character)
+    end
+
+    local thrown = workspace:FindFirstChild("Thrown")
+    if thrown then
+        setup_auto_block_viribus(thrown)
+    end
 end
 
 local function disconnect_auto_block()
+    autoBlockEnabled = false
     for _, connection in ipairs(autoBlockConnections) do
         pcall(function()
             connection:Disconnect()
         end)
     end
     autoBlockConnections = {}
+    autoBlockThrownContainers = {}
 
     local players = {}
     for player in pairs(autoBlockPlayerConnections) do
@@ -1743,6 +1823,7 @@ set_auto_block = function(enabled)
     if not enabled then
         return
     end
+    autoBlockEnabled = true
 
     for _, player in ipairs(Players:GetPlayers()) do
         connect_auto_block_player(player)
@@ -1769,6 +1850,22 @@ set_auto_block = function(enabled)
             setup_auto_block_viribus(child)
         end
     end))
+
+    local elapsed = 0
+    auto_block_connect(RunService.Heartbeat:Connect(function(deltaTime)
+        if not config.auto_block or not autoBlockEnabled then
+            return
+        end
+
+        elapsed = elapsed + deltaTime
+        if elapsed < 1.5 then
+            return
+        end
+        elapsed = 0
+        ensure_auto_block_connections()
+    end))
+
+    ensure_auto_block_connections()
 end
 
 local WATCHED_FOLDER = "HYDROXIDE"
@@ -3135,6 +3232,40 @@ local function persist_session_lock()
     })
 end
 
+local function reassert_locked_features()
+    if config.auto_block then
+        if not autoBlockEnabled then
+            set_auto_block(true)
+        else
+            ensure_auto_block_connections()
+        end
+    end
+
+    if config.gate_hotkeys and not gateActionBound then
+        set_gate_hotkeys(true)
+    end
+
+    if config.run_any_direction and #runAnyConnections == 0 then
+        set_run_any_direction(true)
+    end
+
+    if config.legit_intent and not Hydrogen.connections.intent_player_added then
+        set_legit_intent(true)
+    end
+
+    if config.legit_healthview then
+        if not Hydrogen.connections.healthview_loop then
+            set_healthview(true)
+        else
+            refresh_healthview()
+        end
+    end
+
+    if config.silent_aim and not Hydrogen.connections.aim_loop then
+        update_aim_loop()
+    end
+end
+
 local function enforce_session_lock()
     runtime.closed_for_session = true
     Hydrogen.closed_for_session = true
@@ -3145,15 +3276,23 @@ local function enforce_session_lock()
     footer.Visible = false
     root.Visible = false
     collapseButton.Text = "+"
+    reassert_locked_features()
 
     if not Hydrogen.connections.session_lock_guard then
         local elapsed = 0
+        local featureElapsed = 0
         track("session_lock_guard", RunService.Heartbeat:Connect(function(deltaTime)
             if runtime.cleaned or not runtime.closed_for_session then
                 return
             end
 
             elapsed = elapsed + deltaTime
+            featureElapsed = featureElapsed + deltaTime
+            if featureElapsed >= 2 then
+                featureElapsed = 0
+                reassert_locked_features()
+            end
+
             if elapsed < 0.25 then
                 return
             end
