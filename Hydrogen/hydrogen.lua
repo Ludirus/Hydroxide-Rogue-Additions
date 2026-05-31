@@ -57,6 +57,7 @@ local theme = {
     panel = Color3.fromRGB(12, 7, 18),
     row = Color3.fromRGB(15, 9, 22),
     rowHover = Color3.fromRGB(23, 12, 31),
+    rowActive = Color3.fromRGB(31, 14, 38),
     control = Color3.fromRGB(18, 10, 26),
     border = Color3.fromRGB(53, 28, 67),
     borderSoft = Color3.fromRGB(34, 20, 43),
@@ -506,6 +507,15 @@ local header = New("Frame", {
     Size = UDim2.new(1, 0, 0, HEADER_HEIGHT),
 }, root)
 
+New("UIGradient", {
+    Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, theme.base),
+        ColorSequenceKeypoint.new(0.58, theme.shell),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(16, 7, 20)),
+    }),
+    Rotation = 0,
+}, header)
+
 local headerAccent = New("Frame", {
     Name = "Accent",
     BackgroundColor3 = theme.borderSoft,
@@ -514,6 +524,17 @@ local headerAccent = New("Frame", {
     Size = UDim2.new(1, 0, 0, 1),
 }, header)
 
+local logoPlate = New("Frame", {
+    Name = "LogoPlate",
+    BackgroundColor3 = theme.control,
+    BackgroundTransparency = 0.16,
+    BorderSizePixel = 0,
+    Position = UDim2.fromOffset(8, 8),
+    Size = UDim2.fromOffset(36, 28),
+}, header)
+corner(logoPlate, 2)
+stroke(logoPlate, theme.redSoft, 0.28, 1)
+
 local logo = New("TextLabel", {
     Name = "Logo",
     BackgroundTransparency = 1,
@@ -521,18 +542,18 @@ local logo = New("TextLabel", {
     Text = "HX",
     TextColor3 = theme.red,
     TextSize = 14,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    Position = UDim2.fromOffset(10, 8),
-    Size = UDim2.fromOffset(40, 28),
+    TextXAlignment = Enum.TextXAlignment.Center,
+    Position = UDim2.fromOffset(8, 8),
+    Size = UDim2.fromOffset(36, 28),
 }, header)
 
 New("Frame", {
     Name = "LogoCut",
     BackgroundColor3 = theme.text,
     BorderSizePixel = 0,
-    Position = UDim2.fromOffset(31, 13),
+    Position = UDim2.fromOffset(31, 14),
     Rotation = -18,
-    Size = UDim2.fromOffset(2, 14),
+    Size = UDim2.fromOffset(1, 12),
 }, header)
 
 local title = New("TextLabel", {
@@ -542,9 +563,9 @@ local title = New("TextLabel", {
     Text = "HYDROGEN",
     TextColor3 = Color3.fromRGB(226, 216, 232),
     TextSize = 14,
-    TextXAlignment = Enum.TextXAlignment.Center,
-    Position = UDim2.fromOffset(58, 5),
-    Size = UDim2.new(1, -144, 0, 20),
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Position = UDim2.fromOffset(54, 5),
+    Size = UDim2.new(1, -112, 0, 20),
 }, header)
 
 local subtitle = New("TextLabel", {
@@ -554,9 +575,9 @@ local subtitle = New("TextLabel", {
     Text = "legit dropdown",
     TextColor3 = theme.dim,
     TextSize = 11,
-    TextXAlignment = Enum.TextXAlignment.Center,
-    Position = UDim2.fromOffset(58, 23),
-    Size = UDim2.new(1, -144, 0, 14),
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Position = UDim2.fromOffset(54, 23),
+    Size = UDim2.new(1, -112, 0, 14),
 }, header)
 
 local queueBadge = New("TextLabel", {
@@ -587,7 +608,7 @@ local collapseButton = New("TextButton", {
     Size = UDim2.fromOffset(26, 24),
 }, header)
 corner(collapseButton, 2)
-stroke(collapseButton, theme.borderSoft, 0.1, 1)
+local collapseStroke = stroke(collapseButton, theme.borderSoft, 0.1, 1)
 
 local content = New("ScrollingFrame", {
     Name = "Dropdown",
@@ -603,6 +624,13 @@ local content = New("ScrollingFrame", {
 }, root)
 corner(content, 2)
 stroke(content, theme.borderSoft, 0.25, 1)
+New("UIGradient", {
+    Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, theme.panel),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(7, 4, 10)),
+    }),
+    Rotation = 90,
+}, content)
 
 local footer = New("Frame", {
     Name = "Footer",
@@ -614,6 +642,13 @@ local footer = New("Frame", {
 }, root)
 corner(footer, 2)
 stroke(footer, theme.borderSoft, 0.25, 1)
+New("UIGradient", {
+    Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(14, 8, 20)),
+        ColorSequenceKeypoint.new(1, theme.panel),
+    }),
+    Rotation = 90,
+}, footer)
 
 New("Frame", {
     Name = "FooterRule",
@@ -749,11 +784,16 @@ local function row_highlight(row, active)
 
     local enabled = (row.item.type == "toggle" and config[row.item.key] == true)
         or (row.item.type == "folder" and runtime.folders[row.item.key] == true)
-    row.holder.BackgroundColor3 = theme.rowHover
-    row.holder.BackgroundTransparency = active and 0.18 or 1
-    row.label.TextColor3 = active and theme.text or Color3.fromRGB(196, 184, 204)
+    row.holder.BackgroundColor3 = active and theme.rowActive or theme.rowHover
+    row.holder.BackgroundTransparency = active and 0.2 or (enabled and 0.86 or 1)
+    row.label.TextColor3 = active and theme.text or (enabled and Color3.fromRGB(218, 207, 226) or Color3.fromRGB(196, 184, 204))
     row.value.Text = value_text(row.item)
     row.value.TextColor3 = enabled and theme.red or (active and Color3.fromRGB(226, 216, 232) or theme.dim)
+
+    if row.stroke then
+        row.stroke.Color = active and theme.redSoft or (enabled and theme.borderSoft or theme.borderSoft)
+        row.stroke.Transparency = active and 0.16 or (enabled and 0.54 or 1)
+    end
 
     if row.button then
         row.button.Text = value_text(row.item)
@@ -762,10 +802,15 @@ local function row_highlight(row, active)
 
     row.bar.Visible = enabled or active
     row.bar.BackgroundColor3 = enabled and theme.red or theme.muted
+    row.bar.BackgroundTransparency = active and 0 or 0.14
 
     if row.switch then
         row.switch.BackgroundColor3 = enabled and theme.redDark or theme.control
         row.knob.BackgroundColor3 = enabled and theme.red or theme.dim
+        if row.switchStroke then
+            row.switchStroke.Color = enabled and theme.red or theme.borderSoft
+            row.switchStroke.Transparency = enabled and 0.22 or 0.45
+        end
         TweenService:Create(row.knob, TweenInfo.new(0.11, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
             Position = UDim2.fromOffset(enabled and 20 or 2, 2),
         }):Play()
@@ -870,7 +915,7 @@ local function build_toggle(row)
         Size = UDim2.fromOffset(38, 20),
     }, row)
     corner(switch, 10)
-    stroke(switch, theme.borderSoft, 0.2, 1)
+    local switchStroke = stroke(switch, theme.borderSoft, 0.45, 1)
 
     local knob = New("Frame", {
         Name = "Knob",
@@ -880,7 +925,7 @@ local function build_toggle(row)
         Size = UDim2.fromOffset(16, 16),
     }, switch)
     corner(knob, 8)
-    return switch, knob
+    return switch, knob, switchStroke
 end
 
 local function build_number(row, item)
@@ -965,12 +1010,12 @@ rebuild_rows = function()
     tooltip.Visible = false
 
     for _, child in ipairs(content:GetChildren()) do
-        if not child:IsA("UICorner") and not child:IsA("UIStroke") then
+        if not child:IsA("UICorner") and not child:IsA("UIStroke") and not child:IsA("UIGradient") then
             child:Destroy()
         end
     end
 
-    local y = 8
+    local y = 9
     local sectionOpen = true
 
     local function add_section(item)
@@ -980,23 +1025,25 @@ rebuild_rows = function()
             Name = "Section_" .. tostring(sectionId),
             AutoButtonColor = false,
             BackgroundColor3 = theme.rowHover,
-            BackgroundTransparency = 0.78,
+            BackgroundTransparency = open and 0.74 or 0.88,
             BorderSizePixel = 0,
             Font = Enum.Font.Code,
-            Text = (open and "[-] " or "[+] ") .. tostring(item.section),
+            Text = "  " .. (open and "[-] " or "[+] ") .. tostring(item.section),
             TextColor3 = open and theme.red or theme.dim,
             TextSize = 13,
             TextXAlignment = Enum.TextXAlignment.Left,
             Position = UDim2.fromOffset(8, y),
-            Size = UDim2.new(1, -16, 0, 20),
+            Size = UDim2.new(1, -16, 0, 22),
         }, content)
+        corner(section, 2)
+        stroke(section, open and theme.redSoft or theme.borderSoft, open and 0.38 or 0.72, 1)
 
         add_row_connection(section.MouseButton1Click:Connect(function()
             runtime.sections[sectionId] = not open
             rebuild_rows()
         end))
 
-        y = y + 23
+        y = y + 25
         sectionOpen = open
     end
 
@@ -1013,17 +1060,20 @@ rebuild_rows = function()
             BorderSizePixel = 0,
             Text = "",
             Position = UDim2.fromOffset(8, y),
-            Size = UDim2.new(1, -16, 0, 24),
+            Size = UDim2.new(1, -16, 0, 25),
         }, content)
+        corner(row, 2)
+        local rowStroke = stroke(row, theme.borderSoft, 1, 1)
 
         local bar = New("Frame", {
             Name = "Bar",
             BackgroundColor3 = theme.red,
             BorderSizePixel = 0,
             Position = UDim2.fromOffset(0, 5),
-            Size = UDim2.fromOffset(2, 14),
+            Size = UDim2.fromOffset(2, 15),
             Visible = false,
         }, row)
+        corner(bar, 1)
 
         local labelText = string.lower(item.label or "")
         if item.type == "folder" then
@@ -1054,11 +1104,12 @@ rebuild_rows = function()
             TextSize = 12,
             TextXAlignment = Enum.TextXAlignment.Right,
             Position = UDim2.new(1, -98, 0, 0),
-            Size = UDim2.fromOffset(90, 24),
+            Size = UDim2.fromOffset(90, 25),
         }, row)
 
         local rowData = {
             holder = row,
+            stroke = rowStroke,
             label = label,
             value = value,
             bar = bar,
@@ -1099,7 +1150,7 @@ rebuild_rows = function()
             end
         end))
 
-        y = y + 24
+        y = y + 26
     end
 
     for _, item in ipairs(menuItems) do
@@ -3389,6 +3440,16 @@ end
 
 collapseButton.MouseButton1Click:Connect(function()
     set_dropdown(not Hydrogen.open)
+end)
+collapseButton.MouseEnter:Connect(function()
+    collapseButton.BackgroundColor3 = theme.rowActive
+    collapseStroke.Color = theme.redSoft
+    collapseStroke.Transparency = 0.12
+end)
+collapseButton.MouseLeave:Connect(function()
+    collapseButton.BackgroundColor3 = theme.control
+    collapseStroke.Color = theme.borderSoft
+    collapseStroke.Transparency = 0.1
 end)
 
 saveCloseButton.MouseButton1Click:Connect(save_and_close_for_session)
