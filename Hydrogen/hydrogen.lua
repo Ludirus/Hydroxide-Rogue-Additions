@@ -41,7 +41,6 @@ end
 
 local SETTINGS_FOLDER = "HYDROGEN"
 local SETTINGS_FILE = SETTINGS_FOLDER .. "/hydrogen_settings.json"
-local SESSION_KEY = tostring(game.PlaceId) .. ":" .. tostring(game.JobId)
 local MENU_WIDTH = 354
 local TOP_BAR_HEIGHT = 3
 local HEADER_HEIGHT = 44
@@ -153,17 +152,16 @@ local function env_table(name)
     return type(value) == "table" and value or nil
 end
 
-local function env_value(name)
-    local env = get_env()
-    return env and env[name] or nil
-end
-
 local function set_env_value(name, value)
     local env = get_env()
     if env then
         env[name] = value
     end
 end
+
+set_env_value("HYDROGEN_SESSION_LOCK", nil)
+set_env_value("HYDROGEN_SESSION_CONFIG", nil)
+set_env_value("HYDROGEN_CLOSED_FOR_SESSION", false)
 
 local function copy_config(source)
     local copy = {}
@@ -184,33 +182,6 @@ local function safe_key_name(value)
     end
 
     return value
-end
-
-local function read_session_lock()
-    local state = env_value("HYDROGEN_SESSION_LOCK")
-    if type(state) == "table" then
-        if state.key == SESSION_KEY and state.closed == true and type(state.config) == "table" then
-            return state
-        end
-
-        if state.key ~= SESSION_KEY then
-            set_env_value("HYDROGEN_SESSION_LOCK", nil)
-            set_env_value("HYDROGEN_SESSION_CONFIG", nil)
-            set_env_value("HYDROGEN_CLOSED_FOR_SESSION", false)
-        end
-    end
-
-    local legacyConfig = env_value("HYDROGEN_SESSION_CONFIG")
-    if env_value("HYDROGEN_CLOSED_FOR_SESSION") == true and type(legacyConfig) == "table" then
-        return {
-            key = SESSION_KEY,
-            closed = true,
-            config = legacyConfig,
-        }
-    end
-
-    set_env_value("HYDROGEN_CLOSED_FOR_SESSION", false)
-    return nil
 end
 
 local function ensure_settings_folder()
@@ -280,19 +251,15 @@ local function sanitize_config(config)
     end
 end
 
-local initialSessionLock = read_session_lock()
 local config = copy_config(defaultConfig)
 apply_config(config, load_workspace_settings())
 apply_config(config, env_table("HYDROGEN_SETTINGS"))
-if initialSessionLock then
-    apply_config(config, initialSessionLock.config)
-end
 sanitize_config(config)
 
 local Hydrogen = {
     open = true,
     selected = 1,
-    closed_for_session = initialSessionLock ~= nil,
+    closed_for_session = false,
     theme = theme,
     defaults = defaultConfig,
     config = config,
@@ -301,7 +268,7 @@ local Hydrogen = {
 }
 
 local runtime = {
-    closed_for_session = initialSessionLock ~= nil,
+    closed_for_session = false,
     capture = nil,
     rows = {},
     selectable = {},
@@ -474,7 +441,7 @@ local root = New("Frame", {
     ClipsDescendants = true,
     Position = UDim2.fromOffset(18, 18),
     Size = UDim2.fromOffset(MENU_WIDTH, DROPDOWN_HEIGHT),
-    Visible = not initialSessionLock,
+    Visible = true,
 }, gui)
 corner(root, 3)
 stroke(root, theme.border, 0.05, 1)
@@ -3271,16 +3238,7 @@ end
 
 local function persist_session_lock()
     sanitize_config(config)
-    local sessionConfig = copy_config(config)
-    set_env_value("HYDROGEN_SESSION_CONFIG", sessionConfig)
-    set_env_value("HYDROGEN_CLOSED_FOR_SESSION", true)
-    set_env_value("HYDROGEN_SESSION_LOCK", {
-        key = SESSION_KEY,
-        closed = true,
-        place_id = game.PlaceId,
-        job_id = tostring(game.JobId),
-        config = sessionConfig,
-    })
+    runtime.locked_config = copy_config(config)
 end
 
 local function reassert_locked_features()
@@ -3623,9 +3581,4 @@ set_gate_hotkeys(config.gate_hotkeys == true)
 set_auto_block(config.auto_block == true)
 set_run_any_direction(config.run_any_direction == true)
 update_aim_loop()
-if runtime.closed_for_session then
-    persist_session_lock()
-    enforce_session_lock()
-else
-    set_dropdown(true)
-end
+set_dropdown(true)
