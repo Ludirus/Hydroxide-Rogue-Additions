@@ -401,6 +401,16 @@ local set_run_any_direction
 local update_aim_loop
 local unload
 local queue_health_potion
+local clear_brew_queue
+local disconnect_auto_block
+local ensure_auto_block_connections
+local is_auto_block_enabled
+local should_auto_block_ability
+local clear_legit_intent
+local restore_healthview
+local refresh_healthview
+local disconnect_gate_hotkeys
+local are_gate_hotkeys_bound
 
 local function New(className, properties, parentObject)
     local object = Instance.new(className)
@@ -1274,6 +1284,7 @@ update_aim_loop = function()
     end))
 end
 
+;(function()
 local AUTO_BLOCK_DETECTION_RANGE = 30
 local AUTO_BLOCK_COOLDOWN = 0.1
 local AUTO_BLOCK_FOV_ANGLE = 180
@@ -1317,7 +1328,7 @@ local function block_key_for_ability(abilityName)
     return blockAbilityKeys[normalized] or blockAbilityKeys[normalized:gsub("%s+", "")]
 end
 
-local function should_auto_block_ability(abilityName)
+should_auto_block_ability = function(abilityName)
     if not config.auto_block then
         return false
     end
@@ -1774,7 +1785,7 @@ local function connection_list_has_live(connections)
     return false
 end
 
-local function ensure_auto_block_connections()
+ensure_auto_block_connections = function()
     if not autoBlockEnabled or not config.auto_block then
         return
     end
@@ -1814,7 +1825,7 @@ local function ensure_auto_block_connections()
     end
 end
 
-local function disconnect_auto_block()
+disconnect_auto_block = function()
     autoBlockEnabled = false
     for _, connection in ipairs(autoBlockConnections) do
         pcall(function()
@@ -1886,6 +1897,12 @@ set_auto_block = function(enabled)
     ensure_auto_block_connections()
 end
 
+is_auto_block_enabled = function()
+    return autoBlockEnabled
+end
+end)()
+
+;(function()
 local WATCHED_FOLDER = "HYDROXIDE"
 local WATCHED_BIN_FOLDER = WATCHED_FOLDER .. "/bin"
 local WATCHED_MODEL_PATH = WATCHED_BIN_FOLDER .. "/watched.rbxm"
@@ -2214,7 +2231,7 @@ local function connect_intent_player(player)
     end)
 end
 
-local function clear_legit_intent()
+clear_legit_intent = function()
     local players = {}
     for player in pairs(intentConnections) do
         players[#players + 1] = player
@@ -2430,7 +2447,7 @@ local function restore_humanoid_healthview()
     end
 end
 
-local function restore_healthview()
+restore_healthview = function()
     disconnect_healthview_players()
     set_local_max_edict_attribute(false)
     restore_humanoid_healthview()
@@ -2487,7 +2504,7 @@ local function force_local_label(label)
     label.TextColor3 = EDICT_GOLD
 end
 
-local function refresh_healthview()
+refresh_healthview = function()
     if not config.legit_healthview then
         return
     end
@@ -2555,7 +2572,9 @@ set_healthview = function(enabled)
         refresh_healthview()
     end))
 end
+end)()
 
+;(function()
 local gateHotkeyConnections = {}
 local gateHotkeyBoxes = {}
 local gateHotkeyGuis = {}
@@ -2566,7 +2585,7 @@ local function gate_hotkey_connect(connection)
     return connection
 end
 
-local function disconnect_gate_hotkeys()
+disconnect_gate_hotkeys = function()
     if gateActionBound then
         pcall(function()
             ContextActionService:UnbindAction("HydrogenGateSubmit")
@@ -2584,6 +2603,10 @@ local function disconnect_gate_hotkeys()
     gateHotkeyGuis = {}
     runtime.gate_focused_box = nil
     runtime.gate_submitting = false
+end
+
+are_gate_hotkeys_bound = function()
+    return gateActionBound
 end
 
 local function gate_ancestor(instance)
@@ -2969,245 +2992,248 @@ set_run_any_direction = function(enabled)
         end
     end)
 end
+end)()
 
-local healthRecipe = {
-    ["Lava Flower"] = 1,
-    Scroom = 2,
-}
+;(function()
+    local healthRecipe = {
+        ["Lava Flower"] = 1,
+        Scroom = 2,
+    }
 
-local function find_descendant_which_is_a(parentObject, className)
-    if not parentObject then
-        return nil
-    end
-    for _, child in ipairs(parentObject:GetDescendants()) do
-        if child:IsA(className) then
-            return child
+    local function find_descendant_which_is_a(parentObject, className)
+        if not parentObject then
+            return nil
         end
-    end
-    return nil
-end
-
-local function find_station_anchor(station)
-    for _, name in ipairs({ "Timer", "Water", "Ladle", "Bucket" }) do
-        local part = station and station:FindFirstChild(name)
-        if part and part:IsA("BasePart") then
-            return part
+        for _, child in ipairs(parentObject:GetDescendants()) do
+            if child:IsA(className) then
+                return child
+            end
         end
-    end
-    return station and station:FindFirstChildWhichIsA("BasePart", true) or nil
-end
-
-local function find_alchemy_station()
-    local rootPart = character_root()
-    local stations = workspace:FindFirstChild("Stations")
-    if not rootPart or not stations then
         return nil
     end
 
-    local bestStation
-    local bestDistance = 18
-    for _, station in ipairs(stations:GetChildren()) do
-        local lowerName = station.Name:lower()
-        local valid = lowerName:find("alchemy") or lowerName:find("cauldron") or lowerName:find("brew")
-        valid = valid or (station:FindFirstChild("Water") and station:FindFirstChild("Ladle") and station:FindFirstChild("Bucket"))
-        if valid then
-            local anchor = find_station_anchor(station)
-            local distance = anchor and (anchor.Position - rootPart.Position).Magnitude or math.huge
-            if distance < bestDistance then
-                bestDistance = distance
-                bestStation = station
+    local function find_station_anchor(station)
+        for _, name in ipairs({ "Timer", "Water", "Ladle", "Bucket" }) do
+            local part = station and station:FindFirstChild(name)
+            if part and part:IsA("BasePart") then
+                return part
             end
         end
+        return station and station:FindFirstChildWhichIsA("BasePart", true) or nil
     end
-    return bestStation
-end
 
-local function backpack()
-    return LocalPlayer:FindFirstChildOfClass("Backpack") or LocalPlayer:FindFirstChild("Backpack")
-end
+    local function find_alchemy_station()
+        local rootPart = character_root()
+        local stations = workspace:FindFirstChild("Stations")
+        if not rootPart or not stations then
+            return nil
+        end
 
-local function containers_for_tools()
-    local list = {}
-    local bag = backpack()
-    if bag then
-        list[#list + 1] = bag
-    end
-    if LocalPlayer.Character then
-        list[#list + 1] = LocalPlayer.Character
-    end
-    return list
-end
-
-local function tool_quantity(tool)
-    local quantity = tool and tool:FindFirstChild("Quantity")
-    return quantity and tonumber(quantity.Value) or 1
-end
-
-local function count_materials()
-    local counts = {}
-    for _, container in ipairs(containers_for_tools()) do
-        for _, child in ipairs(container:GetChildren()) do
-            if healthRecipe[child.Name] then
-                counts[child.Name] = (counts[child.Name] or 0) + tool_quantity(child)
+        local bestStation
+        local bestDistance = 18
+        for _, station in ipairs(stations:GetChildren()) do
+            local lowerName = station.Name:lower()
+            local valid = lowerName:find("alchemy") or lowerName:find("cauldron") or lowerName:find("brew")
+            valid = valid or (station:FindFirstChild("Water") and station:FindFirstChild("Ladle") and station:FindFirstChild("Bucket"))
+            if valid then
+                local anchor = find_station_anchor(station)
+                local distance = anchor and (anchor.Position - rootPart.Position).Magnitude or math.huge
+                if distance < bestDistance then
+                    bestDistance = distance
+                    bestStation = station
+                end
             end
         end
+        return bestStation
     end
-    return counts
-end
 
-local function has_health_materials()
-    local counts = count_materials()
-    for name, required in pairs(healthRecipe) do
-        if (counts[name] or 0) < required then
-            return false
+    local function backpack()
+        return LocalPlayer:FindFirstChildOfClass("Backpack") or LocalPlayer:FindFirstChild("Backpack")
+    end
+
+    local function containers_for_tools()
+        local list = {}
+        local bag = backpack()
+        if bag then
+            list[#list + 1] = bag
         end
-    end
-    return true
-end
-
-local function clear_brew_queue()
-    runtime.brew_queue = 0
-    set_queue_badge()
-end
-
-local function find_tool(name)
-    for _, container in ipairs(containers_for_tools()) do
-        local tool = container:FindFirstChild(name)
-        if tool then
-            return tool
+        if LocalPlayer.Character then
+            list[#list + 1] = LocalPlayer.Character
         end
-    end
-    return nil
-end
-
-local function station_contents(station)
-    local contents = station and station:FindFirstChild("Contents")
-    return contents and contents.Value or nil
-end
-
-local function click_detector(detector)
-    if type(fireclickdetector) ~= "function" or not detector then
-        return false
-    end
-    return pcall(fireclickdetector, detector)
-end
-
-local function clear_station(station)
-    local bucket = station and station:FindFirstChild("Bucket")
-    local detector = bucket and bucket:FindFirstChild("ClickEmpty")
-    local attempts = 0
-    while station_contents(station) and station_contents(station) ~= "[]" and attempts < 30 do
-        attempts = attempts + 1
-        click_detector(detector)
-        task.wait(0.04)
-    end
-    return station_contents(station) == "[]"
-end
-
-local function add_tool_to_station(station, toolName)
-    local tool = find_tool(toolName)
-    local character = LocalPlayer.Character
-    local bag = backpack()
-    local water = station and station:FindFirstChild("Water")
-    if not tool or not character or not water then
-        return false
+        return list
     end
 
-    local before = station_contents(station)
-    tool.Parent = character
-    task.wait(0.03)
-
-    local remote = find_descendant_which_is_a(tool, "RemoteEvent")
-    if remote then
-        pcall(function()
-            remote:FireServer(water.CFrame, water)
-        end)
-    elseif tool:IsA("Tool") then
-        pcall(function()
-            tool:Activate()
-        end)
+    local function tool_quantity(tool)
+        local quantity = tool and tool:FindFirstChild("Quantity")
+        return quantity and tonumber(quantity.Value) or 1
     end
 
-    local started = os.clock()
-    repeat
-        task.wait(0.03)
-    until station_contents(station) ~= before or not tool.Parent or os.clock() - started > 1
-
-    if tool.Parent == character and bag then
-        tool.Parent = bag
-    end
-    return station_contents(station) ~= before
-end
-
-local function concoct_station(station)
-    local ladle = station and station:FindFirstChild("Ladle")
-    local detector = ladle and ladle:FindFirstChild("ClickConcoct")
-    local attempts = 0
-    while station_contents(station) and station_contents(station) ~= "[]" and attempts < 30 do
-        attempts = attempts + 1
-        click_detector(detector)
-        task.wait(0.04)
-    end
-    return station_contents(station) == "[]"
-end
-
-local function brew_health_once()
-    if type(fireclickdetector) ~= "function" or not has_health_materials() then
-        return false
+    local function count_materials()
+        local counts = {}
+        for _, container in ipairs(containers_for_tools()) do
+            for _, child in ipairs(container:GetChildren()) do
+                if healthRecipe[child.Name] then
+                    counts[child.Name] = (counts[child.Name] or 0) + tool_quantity(child)
+                end
+            end
+        end
+        return counts
     end
 
-    local station = find_alchemy_station()
-    if not station then
-        return false
-    end
-
-    if not clear_station(station) then
-        return false
-    end
-
-    for name, amount in pairs(healthRecipe) do
-        for _ = 1, amount do
-            if not add_tool_to_station(station, name) then
+    local function has_health_materials()
+        local counts = count_materials()
+        for name, required in pairs(healthRecipe) do
+            if (counts[name] or 0) < required then
                 return false
             end
         end
-    end
-
-    return concoct_station(station)
-end
-
-queue_health_potion = function(amount)
-    if not has_health_materials() or not find_alchemy_station() then
-        return false
-    end
-
-    amount = math.max(tonumber(amount) or 1, 1)
-    runtime.brew_queue = math.min((tonumber(runtime.brew_queue) or 0) + amount, 25)
-    set_queue_badge()
-    notify("brewing")
-
-    if runtime.brew_busy then
         return true
     end
 
-    runtime.brew_busy = true
-    task.spawn(function()
-        while runtime.brew_queue > 0 and not runtime.cleaned do
-            if not brew_health_once() then
-                runtime.brew_queue = 0
-                break
-            end
-            runtime.brew_queue = math.max((tonumber(runtime.brew_queue) or 1) - 1, 0)
-            set_queue_badge()
-            task.wait(0.08)
-        end
-        runtime.brew_busy = false
+    clear_brew_queue = function()
+        runtime.brew_queue = 0
         set_queue_badge()
-        notify("ready")
-    end)
+    end
 
-    return true
-end
+    local function find_tool(name)
+        for _, container in ipairs(containers_for_tools()) do
+            local tool = container:FindFirstChild(name)
+            if tool then
+                return tool
+            end
+        end
+        return nil
+    end
+
+    local function station_contents(station)
+        local contents = station and station:FindFirstChild("Contents")
+        return contents and contents.Value or nil
+    end
+
+    local function click_detector(detector)
+        if type(fireclickdetector) ~= "function" or not detector then
+            return false
+        end
+        return pcall(fireclickdetector, detector)
+    end
+
+    local function clear_station(station)
+        local bucket = station and station:FindFirstChild("Bucket")
+        local detector = bucket and bucket:FindFirstChild("ClickEmpty")
+        local attempts = 0
+        while station_contents(station) and station_contents(station) ~= "[]" and attempts < 30 do
+            attempts = attempts + 1
+            click_detector(detector)
+            task.wait(0.04)
+        end
+        return station_contents(station) == "[]"
+    end
+
+    local function add_tool_to_station(station, toolName)
+        local tool = find_tool(toolName)
+        local character = LocalPlayer.Character
+        local bag = backpack()
+        local water = station and station:FindFirstChild("Water")
+        if not tool or not character or not water then
+            return false
+        end
+
+        local before = station_contents(station)
+        tool.Parent = character
+        task.wait(0.03)
+
+        local remote = find_descendant_which_is_a(tool, "RemoteEvent")
+        if remote then
+            pcall(function()
+                remote:FireServer(water.CFrame, water)
+            end)
+        elseif tool:IsA("Tool") then
+            pcall(function()
+                tool:Activate()
+            end)
+        end
+
+        local started = os.clock()
+        repeat
+            task.wait(0.03)
+        until station_contents(station) ~= before or not tool.Parent or os.clock() - started > 1
+
+        if tool.Parent == character and bag then
+            tool.Parent = bag
+        end
+        return station_contents(station) ~= before
+    end
+
+    local function concoct_station(station)
+        local ladle = station and station:FindFirstChild("Ladle")
+        local detector = ladle and ladle:FindFirstChild("ClickConcoct")
+        local attempts = 0
+        while station_contents(station) and station_contents(station) ~= "[]" and attempts < 30 do
+            attempts = attempts + 1
+            click_detector(detector)
+            task.wait(0.04)
+        end
+        return station_contents(station) == "[]"
+    end
+
+    local function brew_health_once()
+        if type(fireclickdetector) ~= "function" or not has_health_materials() then
+            return false
+        end
+
+        local station = find_alchemy_station()
+        if not station then
+            return false
+        end
+
+        if not clear_station(station) then
+            return false
+        end
+
+        for name, amount in pairs(healthRecipe) do
+            for _ = 1, amount do
+                if not add_tool_to_station(station, name) then
+                    return false
+                end
+            end
+        end
+
+        return concoct_station(station)
+    end
+
+    queue_health_potion = function(amount)
+        if not has_health_materials() or not find_alchemy_station() then
+            return false
+        end
+
+        amount = math.max(tonumber(amount) or 1, 1)
+        runtime.brew_queue = math.min((tonumber(runtime.brew_queue) or 0) + amount, 25)
+        set_queue_badge()
+        notify("brewing")
+
+        if runtime.brew_busy then
+            return true
+        end
+
+        runtime.brew_busy = true
+        task.spawn(function()
+            while runtime.brew_queue > 0 and not runtime.cleaned do
+                if not brew_health_once() then
+                    runtime.brew_queue = 0
+                    break
+                end
+                runtime.brew_queue = math.max((tonumber(runtime.brew_queue) or 1) - 1, 0)
+                set_queue_badge()
+                task.wait(0.08)
+            end
+            runtime.brew_busy = false
+            set_queue_badge()
+            notify("ready")
+        end)
+
+        return true
+    end
+end)()
 
 set_dropdown = function(state)
     if runtime.cleaned or (state and runtime.closed_for_session) then
@@ -3243,14 +3269,14 @@ end
 
 local function reassert_locked_features()
     if config.auto_block then
-        if not autoBlockEnabled then
+        if not is_auto_block_enabled or not is_auto_block_enabled() then
             set_auto_block(true)
         else
             ensure_auto_block_connections()
         end
     end
 
-    if config.gate_hotkeys and not gateActionBound then
+    if config.gate_hotkeys and (not are_gate_hotkeys_bound or not are_gate_hotkeys_bound()) then
         set_gate_hotkeys(true)
     end
 
