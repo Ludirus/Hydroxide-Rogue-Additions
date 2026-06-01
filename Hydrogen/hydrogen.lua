@@ -103,14 +103,13 @@ local defaultConfig = {
 
 local menuItems = {
     { section = "combat", id = "combat" },
-    { key = "auto_block", label = "Auto Block", type = "toggle", tooltip = "Rolls the configured block chance before Hydrogen reports a block." },
-    { key = "auto_block_chance", label = "Block Chance", type = "number", min = 0, max = 100, step = 5, suffix = "%", tooltip = "Left click increases. Right click decreases. Keypad bindings stay keypad-only." },
-    { key = "block_delay", label = "Block Delay", type = "number", min = 0, max = 250, step = 5, suffix = "ms", tooltip = "Extra delay added after ping adjustment. Keep at 0 for hydroXide-style timing." },
+    { key = "auto_block", label = "Auto Block", type = "toggle" },
+    { key = "auto_block_chance", label = "Block Chance", type = "number", min = 0, max = 100, step = 5, suffix = "%" },
+    { key = "block_delay", label = "Block Delay", type = "number", min = 0, max = 250, step = 5, suffix = "ms" },
     {
         key = "block_list",
         label = "Things To Block",
         type = "folder",
-        tooltip = "Open this folder to choose which named attacks the block helper should accept.",
         children = {
             { key = "block_viribus", label = "Viribus", type = "toggle", child = true },
             { key = "block_owl_slash", label = "Owl Slash", type = "toggle", child = true },
@@ -120,19 +119,19 @@ local menuItems = {
         },
     },
     { section = "aim", id = "aim" },
-    { key = "silent_aim", label = "Silent Aim", type = "toggle", tooltip = "Keeps a lightweight target resolver active for the configured FOV." },
+    { key = "silent_aim", label = "Silent Aim", type = "toggle" },
     { key = "target_part", label = "Target Part", type = "choice", choices = { "Closest", "Head", "Torso" } },
-    { key = "aim_fov", label = "Aim FOV", type = "number", min = 20, max = 240, step = 5, tooltip = "Controls target search radius and the optional FOV circle size." },
-    { key = "smoothness", label = "Smoothness", type = "number", min = 1, max = 20, step = 1, tooltip = "Stored for legit aim behavior that wants a smoothing value." },
+    { key = "aim_fov", label = "Aim FOV", type = "number", min = 20, max = 240, step = 5 },
+    { key = "smoothness", label = "Smoothness", type = "number", min = 1, max = 20, step = 1 },
     { key = "visible_check", label = "Visible Check", type = "toggle" },
     { key = "fov_circle", label = "FOV Circle", type = "toggle" },
     { section = "utility", id = "utility" },
-    { key = "legit_intent", label = "Legit Intent", type = "toggle", tooltip = "Shows equipped tools over nearby players using the watched display." },
-    { key = "legit_healthview", label = "Legit Healthview", type = "toggle", tooltip = "Forces humanoid health bars and keeps only your leaderboard row gold." },
-    { key = "gate_hotkeys", label = "Gate Hotkeys", type = "toggle", tooltip = "When Enter is pressed in GateUI, expands compact destinations before submitting." },
-    { key = "run_any_direction", label = "Run Any Direction", type = "toggle", tooltip = "Double tap A, S, or D to force sprint movement in that direction." },
+    { key = "legit_intent", label = "Legit Intent", type = "toggle" },
+    { key = "legit_healthview", label = "Legit Healthview", type = "toggle" },
+    { key = "gate_hotkeys", label = "Gate Hotkeys", type = "toggle" },
+    { key = "run_any_direction", label = "Run Any Direction", type = "toggle" },
     { section = "system", id = "system" },
-    { key = "panic_key", label = "Panic Keybind", type = "keybind", tooltip = "Fully unloads Hydrogen. Keypad keys match keypad input only." },
+    { key = "panic_key", label = "Panic Keybind", type = "keybind" },
     { key = "save_settings", label = "Save Settings", type = "action", action = "save" },
     { key = "unload_hydrogen", label = "Unload Hydrogen", type = "action", action = "unload" },
 }
@@ -409,8 +408,10 @@ local should_auto_block_ability
 local clear_legit_intent
 local restore_healthview
 local refresh_healthview
+local destroy_intent_container
 local disconnect_gate_hotkeys
 local are_gate_hotkeys_bound
+local is_run_any_direction_active
 
 local function New(className, properties, parentObject)
     local object = Instance.new(className)
@@ -504,10 +505,10 @@ local headerAccent = New("Frame", {
 local logoPlate = New("Frame", {
     Name = "LogoPlate",
     BackgroundColor3 = theme.control,
-    BackgroundTransparency = 0.16,
+    BackgroundTransparency = 0.08,
     BorderSizePixel = 0,
-    Position = UDim2.fromOffset(8, 8),
-    Size = UDim2.fromOffset(36, 28),
+    Position = UDim2.fromOffset(9, 9),
+    Size = UDim2.fromOffset(32, 26),
 }, header)
 corner(logoPlate, 2)
 stroke(logoPlate, theme.redSoft, 0.28, 1)
@@ -516,22 +517,23 @@ local logo = New("TextLabel", {
     Name = "Logo",
     BackgroundTransparency = 1,
     Font = Enum.Font.Code,
-    Text = "HX",
+    Text = "H/",
     TextColor3 = theme.red,
-    TextSize = 14,
+    TextSize = 13,
     TextXAlignment = Enum.TextXAlignment.Center,
-    Position = UDim2.fromOffset(8, 8),
-    Size = UDim2.fromOffset(36, 28),
-}, header)
+    Position = UDim2.fromOffset(0, 0),
+    Size = UDim2.fromScale(1, 1),
+}, logoPlate)
 
 New("Frame", {
     Name = "LogoCut",
     BackgroundColor3 = theme.text,
+    BackgroundTransparency = 0.12,
     BorderSizePixel = 0,
-    Position = UDim2.fromOffset(31, 14),
+    Position = UDim2.fromOffset(21, 7),
     Rotation = -18,
-    Size = UDim2.fromOffset(1, 12),
-}, header)
+    Size = UDim2.fromOffset(1, 11),
+}, logoPlate)
 
 local title = New("TextLabel", {
     Name = "Title",
@@ -541,8 +543,8 @@ local title = New("TextLabel", {
     TextColor3 = Color3.fromRGB(226, 216, 232),
     TextSize = 14,
     TextXAlignment = Enum.TextXAlignment.Left,
-    Position = UDim2.fromOffset(54, 5),
-    Size = UDim2.new(1, -112, 0, 20),
+    Position = UDim2.fromOffset(51, 5),
+    Size = UDim2.new(1, -106, 0, 20),
 }, header)
 
 local subtitle = New("TextLabel", {
@@ -553,8 +555,8 @@ local subtitle = New("TextLabel", {
     TextColor3 = theme.dim,
     TextSize = 11,
     TextXAlignment = Enum.TextXAlignment.Left,
-    Position = UDim2.fromOffset(54, 23),
-    Size = UDim2.new(1, -112, 0, 14),
+    Position = UDim2.fromOffset(51, 23),
+    Size = UDim2.new(1, -106, 0, 14),
 }, header)
 
 local queueBadge = New("TextLabel", {
@@ -673,25 +675,11 @@ local saveCloseArrow = New("TextLabel", {
     Size = UDim2.fromOffset(16, FOOTER_HEIGHT),
 }, footer)
 
-local tooltip = New("TextLabel", {
-    Name = "Tooltip",
-    BackgroundColor3 = Color3.fromRGB(7, 4, 10),
-    BackgroundTransparency = 0.05,
-    BorderSizePixel = 0,
-    Font = Enum.Font.Code,
+local tooltip = {
     Text = "",
-    TextColor3 = Color3.fromRGB(224, 213, 231),
-    TextSize = 11,
-    TextWrapped = true,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    TextYAlignment = Enum.TextYAlignment.Center,
     Visible = false,
-    ZIndex = 12,
-    Position = UDim2.fromOffset(16, TOP_BAR_HEIGHT + HEADER_HEIGHT + 10),
-    Size = UDim2.new(1, -32, 0, 34),
-}, root)
-corner(tooltip, 3)
-stroke(tooltip, theme.red, 0.35, 1)
+    Position = UDim2.fromOffset(0, 0),
+}
 
 notify = function() end
 
@@ -867,10 +855,6 @@ local function apply_item(item, direction)
     elseif item.type == "keybind" then
         runtime.capture = item.key
         notify("press key")
-        if item.tooltip then
-            tooltip.Text = item.tooltip
-            tooltip.Visible = true
-        end
     elseif item.type == "action" then
         if item.action == "save" then
             notify(save_workspace_settings() and "saved" or "save failed")
@@ -1027,7 +1011,6 @@ rebuild_rows = function()
     local function add_row(item, depth)
         local index = #runtime.rows + 1
         runtime.selectable[index] = item
-        local rowY = y
 
         local row = New("TextButton", {
             Name = item.key,
@@ -1112,19 +1095,6 @@ rebuild_rows = function()
 
         add_row_connection(row.MouseEnter:Connect(function()
             select_row(index)
-            if item.tooltip then
-                tooltip.Text = item.tooltip
-                tooltip.Position = UDim2.fromOffset(16, math.min(content.Position.Y.Offset + rowY + 20, dropdown_height_for(runtime.content_height) - 44))
-                tooltip.Visible = true
-            else
-                tooltip.Visible = false
-            end
-        end))
-
-        add_row_connection(row.MouseLeave:Connect(function()
-            if tooltip.Visible and tooltip.Text == (item.tooltip or "") then
-                tooltip.Visible = false
-            end
         end))
 
         y = y + 26
@@ -1906,7 +1876,6 @@ end)()
 local WATCHED_FOLDER = "HYDROXIDE"
 local WATCHED_BIN_FOLDER = WATCHED_FOLDER .. "/bin"
 local WATCHED_MODEL_PATH = WATCHED_BIN_FOLDER .. "/watched.rbxm"
-local WATCHED_MODEL_URL = "https://hydroxide.solutions/watched.rbxm"
 local WATCHED_RANGE = 100
 
 local legitIntentModel = nil
@@ -1916,43 +1885,6 @@ local intentConnections = {}
 local intentContainer = New("Folder", {
     Name = "HydrogenWatched",
 }, parent)
-
-local function ensure_folder(path)
-    if type(makefolder) ~= "function" then
-        return false
-    end
-
-    if type(isfolder) == "function" then
-        local ok, exists = pcall(isfolder, path)
-        if ok and exists then
-            return true
-        end
-    end
-
-    return pcall(makefolder, path)
-end
-
-local function ensure_watched_folders()
-    ensure_folder(WATCHED_FOLDER)
-    return ensure_folder(WATCHED_BIN_FOLDER)
-end
-
-local function download_intent_model()
-    if type(writefile) ~= "function" then
-        return false
-    end
-
-    ensure_watched_folders()
-    local success, result = pcall(function()
-        return game:HttpGet(WATCHED_MODEL_URL)
-    end)
-
-    if success and type(result) == "string" and #result > 0 then
-        return pcall(writefile, WATCHED_MODEL_PATH, result)
-    end
-
-    return false
-end
 
 local function load_intent_model_from_disk()
     if type(isfile) ~= "function" or type(getcustomasset) ~= "function" then
@@ -1974,7 +1906,20 @@ local function load_intent_model_from_disk()
     end)
 
     if loadOk and model then
-        return model
+        if not model:IsA("BillboardGui") then
+            local billboard = model:FindFirstChildWhichIsA("BillboardGui", true)
+            if billboard then
+                local extracted = billboard:Clone()
+                model:Destroy()
+                model = extracted
+            end
+        end
+
+        if model:IsA("BillboardGui") and model:FindFirstChild("Tool", true) then
+            return model
+        end
+
+        model:Destroy()
     end
 
     if type(delfile) == "function" then
@@ -2019,29 +1964,13 @@ local function load_intent_model()
         return legitIntentModel
     end
 
-    local shouldWarn = not legitIntentLoadAttempted
-    legitIntentLoadAttempted = true
-    local exists = false
-    if type(isfile) == "function" then
-        local ok, result = pcall(isfile, WATCHED_MODEL_PATH)
-        exists = ok and result == true
-    end
-
-    if not exists then
-        download_intent_model()
-    end
-
-    legitIntentModel = load_intent_model_from_disk()
-    if not legitIntentModel and download_intent_model() then
+    if not legitIntentLoadAttempted then
+        legitIntentLoadAttempted = true
         legitIntentModel = load_intent_model_from_disk()
     end
 
-    if not legitIntentModel and shouldWarn then
-        warn("failed to load intent model (corrupt or unavailable watched.rbxm)")
-    end
-
+    -- The generated fallback is intentionally the reliable default; the cached model is only a cosmetic upgrade.
     legitIntentModel = legitIntentModel or create_fallback_intent_model()
-
     return legitIntentModel
 end
 
@@ -2272,6 +2201,12 @@ set_legit_intent = function(enabled)
         end
     end))
     track("intent_player_removing", Players.PlayerRemoving:Connect(disconnect_intent_player))
+end
+
+destroy_intent_container = function()
+    if intentContainer and intentContainer.Parent then
+        intentContainer:Destroy()
+    end
 end
 
 local healthviewOriginal = {}
@@ -2992,6 +2927,10 @@ set_run_any_direction = function(enabled)
         end
     end)
 end
+
+is_run_any_direction_active = function()
+    return #runAnyConnections > 0
+end
 end)()
 
 ;(function()
@@ -3280,7 +3219,7 @@ local function reassert_locked_features()
         set_gate_hotkeys(true)
     end
 
-    if config.run_any_direction and #runAnyConnections == 0 then
+    if config.run_any_direction and (not is_run_any_direction_active or not is_run_any_direction_active()) then
         set_run_any_direction(true)
     end
 
@@ -3385,8 +3324,8 @@ local function cleanup()
     runtime.cleaned = true
     restore_healthview()
     clear_legit_intent()
-    if intentContainer and intentContainer.Parent then
-        intentContainer:Destroy()
+    if destroy_intent_container then
+        destroy_intent_container()
     end
     disconnect_gate_hotkeys()
     if set_run_any_direction then
