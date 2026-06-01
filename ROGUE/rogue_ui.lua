@@ -14395,7 +14395,7 @@ if is_hydroxide_supported_place() then
                 return false
             end
 
-            local function try_walk_out_of_forcefield(character, max_seconds)
+            local function try_walk_out_of_forcefield(character, max_seconds, should_abort)
                 if not character or not FindFirstChild(character, "HumanoidRootPart") then
                     return false
                 end
@@ -14420,8 +14420,31 @@ if is_hydroxide_supported_place() then
                     return success
                 end
 
+                local function get_abort_reason()
+                    if type(should_abort) ~= "function" then
+                        return nil
+                    end
+
+                    local ok, reason = pcall(should_abort)
+                    if ok and reason then
+                        return tostring(reason)
+                    end
+
+                    return nil
+                end
+
+                local abort_reason = get_abort_reason()
+                if abort_reason then
+                    return finish_walk(false), abort_reason
+                end
+
                 if not is_character_grounded(character) then
                     task.wait(0.35)
+                    abort_reason = get_abort_reason()
+                    if abort_reason then
+                        return finish_walk(false), abort_reason
+                    end
+
                     if not is_character_grounded(character) then
                         return finish_walk(false)
                     end
@@ -14444,6 +14467,11 @@ if is_hydroxide_supported_place() then
                     return finish_walk(false)
                 end
 
+                abort_reason = get_abort_reason()
+                if abort_reason then
+                    return finish_walk(false), abort_reason
+                end
+
                 pcall(function()
                     humanoid:MoveTo(walk_target)
                 end)
@@ -14456,6 +14484,14 @@ if is_hydroxide_supported_place() then
 
                     if not FindFirstChildOfClass(character, "ForceField") then
                         return finish_walk(true)
+                    end
+
+                    abort_reason = get_abort_reason()
+                    if abort_reason then
+                        pcall(function()
+                            humanoid:MoveTo(hrp.Position)
+                        end)
+                        return finish_walk(false), abort_reason
                     end
 
                     if (Vector3.new(hrp.Position.X, 0, hrp.Position.Z) - Vector3.new(walk_target.X, 0, walk_target.Z)).Magnitude <= 3 then
@@ -14614,6 +14650,54 @@ if is_hydroxide_supported_place() then
                     and (not require_grounded or wait_for_character_grounded(character, 2))
             end
 
+            local function get_critical_player_near_character(character)
+                if not character or not FindFirstChild(character, "HumanoidRootPart") then
+                    return nil
+                end
+
+                local critical_distance = get_effective_critical_distance(0)
+                if critical_distance <= 0 then
+                    return nil
+                end
+
+                local root_position = character.HumanoidRootPart.Position
+                local nearest_name = nil
+                local nearest_distance = math.huge
+
+                for _, other_player in next, plrs:GetPlayers() do
+                    if other_player ~= plr
+                        and other_player.Character
+                        and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                        local distance = (other_player.Character.HumanoidRootPart.Position - root_position).Magnitude
+                        if distance <= critical_distance and distance < nearest_distance then
+                            nearest_name = other_player.Name
+                            nearest_distance = distance
+                        end
+                    end
+                end
+
+                if nearest_name then
+                    return nearest_name, nearest_distance, critical_distance
+                end
+
+                return nil
+            end
+
+            local function get_forcefield_critical_block_reason(character, context_label)
+                local blocker_name, blocker_distance, critical_distance = get_critical_player_near_character(character)
+                if not blocker_name then
+                    return nil
+                end
+
+                return string.format(
+                    "%s: Player %s within critical distance (%.0f studs, limit %d) while spawn ForceField is active",
+                    context_label or "ForceField exit blocked",
+                    blocker_name,
+                    blocker_distance,
+                    math.floor(critical_distance)
+                )
+            end
+
             local function build_forcefield_escape_positions(character, prefer_direction)
                 local positions = {}
                 local seen = {}
@@ -14684,6 +14768,13 @@ if is_hydroxide_supported_place() then
                     return false
                 end
 
+                local blocked_reason = get_forcefield_critical_block_reason(character, "ForceField exit blocked")
+                if blocked_reason then
+                    forcefield_exit_in_progress = false
+                    library:Notify(blocked_reason)
+                    return false, blocked_reason
+                end
+
                 local jump_stop = start_forcefield_jump_loop(character)
                 local was_path_running = trinket_bot.path_running
                 local function finish(result)
@@ -14699,6 +14790,15 @@ if is_hydroxide_supported_place() then
                     return result
                 end
 
+                local function current_critical_block_reason()
+                    return get_forcefield_critical_block_reason(character, "ForceField exit blocked")
+                end
+
+                local function finish_blocked(reason)
+                    library:Notify(reason)
+                    return finish(false), reason
+                end
+
                 if not FindFirstChildOfClass(character, "ForceField") then
                     return finish(trinket_bot.wait_for_forcefield_clear(character, 3, true))
                 end
@@ -14707,12 +14807,20 @@ if is_hydroxide_supported_place() then
                     trinket_bot.path_running = true
                 end
 
-                if try_walk_out_of_forcefield(character, 10) then
+                local walk_ok, walk_reason = try_walk_out_of_forcefield(character, 10, current_critical_block_reason)
+                if walk_ok then
                     return finish(trinket_bot.wait_for_forcefield_clear(character, 4, true))
+                elseif walk_reason then
+                    return finish_blocked(walk_reason)
                 end
 
                 if not FindFirstChildOfClass(character, "ForceField") then
                     return finish(trinket_bot.wait_for_forcefield_clear(character, 3, true))
+                end
+
+                local active_block_reason = current_critical_block_reason()
+                if active_block_reason then
+                    return finish_blocked(active_block_reason)
                 end
 
                 local escape_positions = build_forcefield_escape_positions(character, prefer_direction)
@@ -14725,6 +14833,11 @@ if is_hydroxide_supported_place() then
 
                     if not is_valid_vector3(safe_position) then
                         continue
+                    end
+
+                    active_block_reason = current_critical_block_reason()
+                    if active_block_reason then
+                        return finish_blocked(active_block_reason)
                     end
 
                     local platform_ray_params = make_character_raycast_params(character, { platform })
@@ -14748,6 +14861,11 @@ if is_hydroxide_supported_place() then
                         continue
                     end
 
+                    active_block_reason = current_critical_block_reason()
+                    if active_block_reason then
+                        return finish_blocked(active_block_reason)
+                    end
+
                     SmoothTeleport(safe_position, false, true)
                     task.wait(0.5)
                     recover_character_from_underground(character)
@@ -14759,8 +14877,21 @@ if is_hydroxide_supported_place() then
                     task.wait(0.25)
                 end
 
-                if try_walk_out_of_forcefield(character, 6) then
+                active_block_reason = current_critical_block_reason()
+                if active_block_reason then
+                    return finish_blocked(active_block_reason)
+                end
+
+                walk_ok, walk_reason = try_walk_out_of_forcefield(character, 6, current_critical_block_reason)
+                if walk_ok then
                     return finish(trinket_bot.wait_for_forcefield_clear(character, 4, true))
+                elseif walk_reason then
+                    return finish_blocked(walk_reason)
+                end
+
+                active_block_reason = current_critical_block_reason()
+                if active_block_reason then
+                    return finish_blocked(active_block_reason)
                 end
 
                 return finish(trinket_bot.wait_for_forcefield_clear(character, 15, true))
@@ -14775,7 +14906,6 @@ if is_hydroxide_supported_place() then
                 context_label = context_label or "spawn"
                 currently_dropping = false
                 auto_drop_busy_since = nil
-                library:Notify(string.format("Exiting spawn ForceField (%s)...", context_label))
 
                 local ok_result = false
                 for attempt = 1, 3 do
@@ -14785,8 +14915,19 @@ if is_hydroxide_supported_place() then
                         break
                     end
 
+                    local blocked_reason = get_forcefield_critical_block_reason(character, context_label)
+                    if blocked_reason then
+                        library:Notify(blocked_reason)
+                        destroy_forcefield_escape_platform()
+                        return false, blocked_reason
+                    end
+
+                    if attempt == 1 then
+                        library:Notify(string.format("Exiting spawn ForceField (%s)...", context_label))
+                    end
+
                     trinket_bot.path_running = true
-                    local ok, result = pcall(function()
+                    local ok, result, result_reason = pcall(function()
                         return clear_spawn_forcefield_for_restart(nil)
                     end)
 
@@ -14797,6 +14938,8 @@ if is_hydroxide_supported_place() then
                     elseif result then
                         ok_result = true
                         break
+                    elseif result_reason and tostring(result_reason):find("critical distance", 1, true) then
+                        return false, result_reason
                     end
 
                     if not FindFirstChildOfClass(character, "ForceField") then
@@ -16159,9 +16302,10 @@ if is_hydroxide_supported_place() then
 
                     library:Notify("Restart after hop: gating to Deepforest 5 for uploaded path")
 
-                    if not ensure_spawn_forcefield_cleared("Deepforest restart") then
+                    local deepforest_forcefield_ok, deepforest_forcefield_reason = ensure_spawn_forcefield_cleared("Deepforest restart")
+                    if not deepforest_forcefield_ok then
                         trinket_bot.path_running = false
-                        return false, "could not clear ForceField before Deepforest restart"
+                        return false, deepforest_forcefield_reason or "could not clear ForceField before Deepforest restart"
                     end
 
                     if not wait_for_character_grounded(character, 4) then
@@ -16207,9 +16351,10 @@ if is_hydroxide_supported_place() then
                         nearest_destination_distance
                     ))
 
-                    if not ensure_spawn_forcefield_cleared("restart gate") then
+                    local restart_forcefield_ok, restart_forcefield_reason = ensure_spawn_forcefield_cleared("restart gate")
+                    if not restart_forcefield_ok then
                         trinket_bot.path_running = false
-                        return false, "could not clear ForceField before restart gate"
+                        return false, restart_forcefield_reason or "could not clear ForceField before restart gate"
                     end
 
                     if not wait_for_character_grounded(character, 4) then
@@ -16401,7 +16546,19 @@ if is_hydroxide_supported_place() then
                     library:Notify("Spawned character from StartMenu")
                 end
 
-                if not ensure_spawn_forcefield_cleared("path start") then
+                local forcefield_clear_ok, forcefield_clear_reason = ensure_spawn_forcefield_cleared("path start")
+                if not forcefield_clear_ok then
+                    if not test_mode
+                        and forcefield_clear_reason
+                        and tostring(forcefield_clear_reason):find("critical distance", 1, true) then
+                        trinket_bot.path_running = false
+                        stage_trinket_bot_session_for_hop()
+                        library:Notify("Critical player near spawn ForceField - serverhopping before exiting")
+                        TrinketBotServerhop(tostring(forcefield_clear_reason))
+                        release_trinket_execute_lock()
+                        return
+                    end
+
                     abort_execute_path_start("Could not exit spawn ForceField. Step out manually or retry Start Path.")
                     return
                 end
@@ -17398,7 +17555,18 @@ if is_hydroxide_supported_place() then
                     end
                 end
 
-                if not ensure_spawn_forcefield_cleared("path loop") then
+                local path_loop_forcefield_ok, path_loop_forcefield_reason = ensure_spawn_forcefield_cleared("path loop")
+                if not path_loop_forcefield_ok then
+                    if not test_mode
+                        and path_loop_forcefield_reason
+                        and tostring(path_loop_forcefield_reason):find("critical distance", 1, true) then
+                        stage_trinket_bot_session_for_hop()
+                        library:Notify("Critical player near spawn ForceField - serverhopping before path loop")
+                        TrinketBotServerhop(tostring(path_loop_forcefield_reason))
+                        release_trinket_execute_lock()
+                        return
+                    end
+
                     abort_execute_path_start("Could not exit spawn ForceField before path loop. Step out manually or retry.")
                     return
                 end
@@ -20032,11 +20200,13 @@ if is_hydroxide_supported_place() then
                         return
                     end
 
-                    if not ensure_spawn_forcefield_cleared("auto-resume") then
-                        trinket_bot_debug_log("AUTO_RESUME_PREP_FAIL", "could not clear spawn ForceField after hop")
-                        utility:plain_webhook("@here Auto-resume failed: could not exit spawn ForceField - serverhopping")
+                    local auto_resume_forcefield_ok, auto_resume_forcefield_reason = ensure_spawn_forcefield_cleared("auto-resume")
+                    if not auto_resume_forcefield_ok then
+                        local forcefield_failure_reason = auto_resume_forcefield_reason or "could not clear spawn ForceField after hop"
+                        trinket_bot_debug_log("AUTO_RESUME_PREP_FAIL", tostring(forcefield_failure_reason))
+                        utility:plain_webhook("@here Auto-resume failed: " .. tostring(forcefield_failure_reason) .. " - serverhopping")
                         library:Notify("Could not exit spawn ForceField - serverhopping...")
-                        TrinketBotServerhop("Auto-resume ForceField escape failed")
+                        TrinketBotServerhop("Auto-resume ForceField escape failed: " .. tostring(forcefield_failure_reason))
                         return
                     end
 
@@ -20145,9 +20315,11 @@ if is_hydroxide_supported_place() then
 
                         if should_prepare_restart then
                             local restart_success, restart_message = prepare_restart_from_point_one()
+                            local restart_message_text = tostring(restart_message or "")
                             if not restart_success
                                 and restart_message
-                                and (tostring(restart_message):find("ForceField", 1, true) or tostring(restart_message):find("grounded", 1, true)) then
+                                and not restart_message_text:find("within critical distance", 1, true)
+                                and (restart_message_text:find("ForceField", 1, true) or restart_message_text:find("grounded", 1, true)) then
                                 trinket_bot_debug_log("AUTO_RESUME_RESTART_RETRY", tostring(restart_message))
                                 task.wait(2)
                                 restart_success, restart_message = prepare_restart_from_point_one()
@@ -21250,16 +21422,19 @@ if is_hydroxide_supported_place() then
 
             do
             if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 then
-                local lives_table = {
-                    ["Azael"] = 2,
-                    ["Kasparan"] = 4,
-                    ["Cameo"] = 9
-                }
-
                 local phoenix_down_pop_in_progress = false
                 local last_one_life_pd_attempt = 0
                 local last_one_life_caution_webhook = 0
                 local zero_life_wipe_handled = false
+
+                local function get_phoenix_down_max_lives(race)
+                    race = tostring(race or ""):lower()
+                    if race:find("azael", 1, true) then
+                        return 2
+                    end
+
+                    return 3
+                end
 
                 local function trinket_bot_running_for_pd()
                     if trinket_bot.path_running then
@@ -21284,14 +21459,12 @@ if is_hydroxide_supported_place() then
                     lives = tonumber(lives)
                     if not lives then return false, "lives_unavailable" end
 
-                    local race = Get("Race")
-                    if not race then return false, "race_unavailable" end
-
                     local days_survived = Get("DaysSurvived")
                     if not days_survived then return false, "days_unavailable" end
                     local days_survived_key = tostring(days_survived)
 
-                    local max_lives = lives_table[race] or 3
+                    local race = Get("Race")
+                    local max_lives = get_phoenix_down_max_lives(race)
 
                     if lives >= max_lives then
                         return false, "max_lives"
@@ -21379,7 +21552,7 @@ if is_hydroxide_supported_place() then
                     pcall(function()
                         if utility and utility.plain_webhook then
                             utility:plain_webhook(string.format(
-                                "@here Account is 1 life and Phoenix Down cannot be used (%s). Continuing trinket path in cautious mode. Server: %s (%s) | Path: %s | Job: %s",
+                                "@here Account is below safe life cap and Phoenix Down cannot be used (%s). Continuing trinket path in cautious mode. Server: %s (%s) | Path: %s | Job: %s",
                                 tostring(reason or "unknown"),
                                 server_name ~= "" and server_name or "Unknown",
                                 server_region ~= "" and server_region or "Unknown",
@@ -21393,7 +21566,7 @@ if is_hydroxide_supported_place() then
                 local function enter_one_life_cautious_mode(reason)
                     reason = tostring(reason or "Phoenix Down unavailable")
                     if not trinket_bot.one_life_cautious then
-                        library:Notify("One-life cautious mode enabled: " .. reason)
+                        library:Notify("Low-life cautious mode enabled: " .. reason)
                     end
 
                     trinket_bot.one_life_cautious = true
@@ -21404,7 +21577,7 @@ if is_hydroxide_supported_place() then
 
                 local function clear_one_life_cautious_mode()
                     if trinket_bot.one_life_cautious then
-                        library:Notify("One-life cautious mode cleared")
+                        library:Notify("Low-life cautious mode cleared")
                     end
 
                     trinket_bot.one_life_cautious = false
@@ -21563,10 +21736,13 @@ if is_hydroxide_supported_place() then
                                 break
                             end
 
-                            if lives and lives > 1 then
+                            local race = Get("Race")
+                            local max_safe_lives = get_phoenix_down_max_lives(race)
+
+                            if lives and lives >= max_safe_lives then
                                 clear_one_life_cautious_mode()
                             elseif lives
-                                and lives <= 1
+                                and lives < max_safe_lives
                                 and Toggles.AutoPopPDs
                                 and Toggles.AutoPopPDs.Value
                                 and not phoenix_down_pop_in_progress
@@ -21574,7 +21750,7 @@ if is_hydroxide_supported_place() then
                                 last_one_life_pd_attempt = tick()
 
                                 local ok, popped, status, final_lives = pcall(function()
-                                    return try_pop_pd("one_life_emergency")
+                                    return try_pop_pd("low_lives_emergency")
                                 end)
 
                                 if not ok then
@@ -21582,15 +21758,15 @@ if is_hydroxide_supported_place() then
                                     enter_one_life_cautious_mode("Phoenix Down error: " .. error_message)
                                     pcall(function()
                                         if utility and utility.plain_webhook then
-                                            utility:plain_webhook("@here One-life Phoenix Down emergency errored: " .. error_message)
+                                            utility:plain_webhook("@here Low-life Phoenix Down emergency errored: " .. error_message)
                                         end
                                     end)
                                 elseif popped then
                                     local recovered_lives = tonumber(final_lives)
-                                    if recovered_lives and recovered_lives > 1 then
+                                    if recovered_lives and recovered_lives >= max_safe_lives then
                                         clear_one_life_cautious_mode()
                                     else
-                                        enter_one_life_cautious_mode("Phoenix Down used but lives still 1")
+                                        enter_one_life_cautious_mode("Phoenix Down used but lives still below safe cap")
                                     end
                                 elseif status == "already_used_today" then
                                     enter_one_life_cautious_mode("Phoenix Down already used today")
