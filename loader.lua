@@ -73,24 +73,36 @@ local function resolve_repo_file_url(path)
     return repo .. path
 end
 
-local function legit_flag_enabled()
-    if not getgenv then
+local function flag_truthy(value)
+    if value == true then
+        return true
+    end
+    if type(value) == "number" then
+        return value ~= 0
+    end
+    if type(value) ~= "string" then
         return false
     end
 
-    local function flag_truthy(value)
-        if value == true then
-            return true
-        end
-        if type(value) == "number" then
-            return value ~= 0
-        end
-        if type(value) ~= "string" then
-            return false
-        end
+    local text = value:lower():gsub("^%s+", ""):gsub("%s+$", "")
+    return text == "true" or text == "1" or text == "yes" or text == "on" or text == "legit"
+end
 
-        local text = value:lower():gsub("^%s+", ""):gsub("%s+$", "")
-        return text == "true" or text == "1" or text == "yes" or text == "on" or text == "legit"
+local function normalize_loader_flags()
+    if not getgenv then
+        return
+    end
+
+    local env = getgenv()
+    if flag_truthy(env.Silent_Aim) or flag_truthy(env.SILENT_AIM) or flag_truthy(env.HYDROXIDE_SILENT_AIM) then
+        env.HYDROXIDE_SILENT_AIM = true
+        env.Silent_Aim = true
+    end
+end
+
+local function legit_flag_enabled()
+    if not getgenv then
+        return false
     end
 
     local env = getgenv()
@@ -190,6 +202,7 @@ end
 
 local gameId = game.GameId
 local placeId = game.PlaceId
+normalize_loader_flags()
 local legit = legit_flag_enabled()
 if not legit then
     debug_print(string.format("[HYDROXIDE] Loader (place=%s game=%s)", tostring(placeId), tostring(gameId)))

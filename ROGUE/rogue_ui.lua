@@ -43,6 +43,36 @@ local function debug_warn(...)
     end
 end
 
+local function hydroxide_flag_truthy(value)
+    if value == true then
+        return true
+    end
+    if type(value) == "number" then
+        return value ~= 0
+    end
+    if type(value) ~= "string" then
+        return false
+    end
+
+    local text = value:lower():gsub("^%s+", ""):gsub("%s+$", "")
+    return text == "true" or text == "1" or text == "yes" or text == "on"
+end
+
+local function hidden_grapple_silent_aim_enabled()
+    if not getgenv then
+        return false
+    end
+
+    local env = getgenv()
+    if hydroxide_flag_truthy(env.Silent_Aim) or hydroxide_flag_truthy(env.SILENT_AIM) or hydroxide_flag_truthy(env.HYDROXIDE_SILENT_AIM) then
+        env.HYDROXIDE_SILENT_AIM = true
+        env.Silent_Aim = true
+        return true
+    end
+
+    return false
+end
+
 local function set_hydroxide_load_stage(stage, detail)
     if not getgenv then
         return
@@ -1126,6 +1156,8 @@ if is_hydroxide_supported_place() then
             auto_restart_after_hop = true,
             deepforest_restart_for_uploaded_path = true,
             death_lives_check = true,
+            kick_on_one_life = false,
+            trinket_debug_ping_user_id = "",
 
 
             temperature_lock = false,
@@ -3902,8 +3934,9 @@ if is_hydroxide_supported_place() then
         local has_entrypoint = entrypoint ~= nil and tostring(entrypoint) ~= ""
         local loader_url = resolve_repo_file_url(has_entrypoint and entrypoint or "loader.lua")
         local entrypoint_assignment = has_entrypoint and (" getgenv().HYDROXIDE_ENTRYPOINT=" .. lua_string_literal(entrypoint)) or " getgenv().HYDROXIDE_ENTRYPOINT=nil"
+        local silent_aim_assignment = hidden_grapple_silent_aim_enabled() and " getgenv().HYDROXIDE_SILENT_AIM=true getgenv().Silent_Aim=true" or ""
         local queue_debug_setup = [[ local hxd_debug=false pcall(function() local lp=game:GetService("Players").LocalPlayer if getgenv and getgenv().HYDROXIDE_DEBUG~=nil then hxd_debug=getgenv().HYDROXIDE_DEBUG==true elseif lp and lp.Name==]] .. lua_string_literal(HYDROXIDE_DEBUG_USER) .. [[ then hxd_debug=true if getgenv then getgenv().HYDROXIDE_DEBUG=true end elseif getgenv then getgenv().HYDROXIDE_DEBUG=false end end) ]]
-        return resume_prefix .. [[if getgenv then getgenv().HYDROXIDE_REPO=]] .. lua_string_literal(repo_url) .. entrypoint_assignment .. [[ end if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1)]] .. queue_debug_setup .. [[local loaderUrl=]] .. lua_string_literal(loader_url) .. [[ local sep=loaderUrl:find("?",1,true) and "&" or "?" loaderUrl=loaderUrl..sep.."hxd_t="..tostring(os.time()) local s,code=pcall(function() return game:HttpGet(loaderUrl,true) end) if not s then if hxd_debug then print("[QUEUE ERROR] HttpGet failed:",code) end return end local fn,compileErr=loadstring(code) if not fn then if hxd_debug then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) end return end local ok,runErr=pcall(fn) if not ok and hxd_debug then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
+        return resume_prefix .. [[if getgenv then getgenv().HYDROXIDE_REPO=]] .. lua_string_literal(repo_url) .. entrypoint_assignment .. silent_aim_assignment .. [[ end if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1)]] .. queue_debug_setup .. [[local loaderUrl=]] .. lua_string_literal(loader_url) .. [[ local sep=loaderUrl:find("?",1,true) and "&" or "?" loaderUrl=loaderUrl..sep.."hxd_t="..tostring(os.time()) local s,code=pcall(function() return game:HttpGet(loaderUrl,true) end) if not s then if hxd_debug then print("[QUEUE ERROR] HttpGet failed:",code) end return end local fn,compileErr=loadstring(code) if not fn then if hxd_debug then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) end return end local ok,runErr=pcall(fn) if not ok and hxd_debug then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
     end
 
     local function queue_hydroxide_loader_for_teleport(resume_payload)
@@ -8502,7 +8535,7 @@ if is_hydroxide_supported_place() then
                         cheat_client.start_silent_aim_rendering()
                     end
                 else
-                    if cheat_client.stop_silent_aim_rendering then
+                    if not hidden_grapple_silent_aim_enabled() and cheat_client.stop_silent_aim_rendering then
                         cheat_client.stop_silent_aim_rendering()
                     end
                 end
@@ -13103,6 +13136,53 @@ if is_hydroxide_supported_place() then
                 uploaded_deepforest_restart_path_keys[normalize_trinket_path_name(uploaded_path_name)] = true
             end
 
+            local function normalize_trinket_debug_ping_user_id(value)
+                local digits = tostring(value or ""):match("%d+")
+                return digits or ""
+            end
+
+            local function get_trinket_debug_ping_user_id()
+                local from_option = Options and Options.TrinketDebugPingUserId and Options.TrinketDebugPingUserId.Value
+                local user_id = normalize_trinket_debug_ping_user_id(from_option)
+                if user_id ~= "" then
+                    return user_id
+                end
+
+                return normalize_trinket_debug_ping_user_id(cheat_client.config.trinket_debug_ping_user_id)
+            end
+
+            local function get_trinket_alert_ping(default_ping)
+                local user_id = get_trinket_debug_ping_user_id()
+                if user_id ~= "" then
+                    return "<@" .. user_id .. ">"
+                end
+
+                return default_ping or "@here"
+            end
+
+            local function strip_discord_ping_prefix(message)
+                message = tostring(message or "")
+                message = message:gsub("^%s*@everyone%s*", "")
+                message = message:gsub("^%s*@here%s*", "")
+                return message
+            end
+
+            local function trinket_alert_text(default_ping, message)
+                local body = strip_discord_ping_prefix(message)
+                local ping = get_trinket_alert_ping(default_ping)
+                if body == "" then
+                    return ping
+                end
+
+                return ping .. " " .. body
+            end
+
+            local function trinket_plain_webhook(default_ping, message)
+                if utility and utility.plain_webhook then
+                    utility:plain_webhook(trinket_alert_text(default_ping, message))
+                end
+            end
+
             local function path_uses_deepforest_restart(settings)
                 local enabled
                 if settings and settings.deepforest_restart_for_uploaded_path ~= nil then
@@ -15541,6 +15621,8 @@ if is_hydroxide_supported_place() then
                     auto_restart_after_hop = Toggles.AutoRestartAfterHop == nil and true or Toggles.AutoRestartAfterHop.Value,
                     deepforest_restart_for_uploaded_path = Toggles.DeepforestRestartForUploadedPath == nil and true or Toggles.DeepforestRestartForUploadedPath.Value,
                     death_lives_check = Toggles.DeathLivesCheck == nil and true or Toggles.DeathLivesCheck.Value,
+                    kick_on_one_life = Toggles.KickOnOneLife and Toggles.KickOnOneLife.Value or false,
+                    trinket_debug_ping_user_id = normalize_trinket_debug_ping_user_id(Options.TrinketDebugPingUserId and Options.TrinketDebugPingUserId.Value or cheat_client.config.trinket_debug_ping_user_id),
                     time_between_looting = Options.TimeBetweenLooting and Options.TimeBetweenLooting.Value or 5,
                     proximity_check = Options.ProximityCheck and Options.ProximityCheck.Value or 0,
                     critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 60,
@@ -16699,8 +16781,8 @@ if is_hydroxide_supported_place() then
                             path_name = mem:HasItem("trinket_bot_path") and mem:GetItem("trinket_bot_path") or "unknown"
                         end
 
-                        utility:plain_webhook(string.format(
-                            "@here bot died (%s) | lives before death: %s | AutoPopPDs=%s | DeathLivesCheck=%s | path=%s",
+                        trinket_plain_webhook("@here", string.format(
+                            "bot died (%s) | lives before death: %s | AutoPopPDs=%s | DeathLivesCheck=%s | path=%s",
                             tostring(context or "trinket bot"),
                             lives_text,
                             tostring(auto_pop_enabled),
@@ -16737,10 +16819,10 @@ if is_hydroxide_supported_place() then
                                 pcall(function() library:Notify("You died (test mode - not kicking)") end)
                             elseif stay_in_server then
                                 pcall(function() library:Notify("You died (stay in server - not kicking)") end)
-                                pcall(function() utility:plain_webhook("@here bot died (stay in server mode)") end)
+                                pcall(function() trinket_plain_webhook("@here", "bot died (stay in server mode)") end)
                             else
                                 task.spawn(function()
-                                    pcall(function() utility:plain_webhook("@everyone bot died - kicking") end)
+                                    pcall(function() trinket_plain_webhook("@everyone", "bot died - kicking") end)
                                     task.wait(0.3)
                                     plr:Kick("bot died")
                                 end)
@@ -16750,7 +16832,7 @@ if is_hydroxide_supported_place() then
                         local kick_message = nil
                         if not test_mode and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
                             pcall(function()
-                                utility:plain_webhook("@everyone CRITICAL: Humanoid not found in ExecutePath - kicking for safety")
+                                trinket_plain_webhook("@everyone", "CRITICAL: Humanoid not found in ExecutePath - kicking for safety")
                             end)
                             kick_message = "Humanoid not found - cannot set up death protection"
                         end
@@ -16761,7 +16843,7 @@ if is_hydroxide_supported_place() then
                     local kick_message = nil
                     if not test_mode and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
                         pcall(function()
-                            utility:plain_webhook("@everyone CRITICAL: Character not found in ExecutePath - kicking for safety")
+                            trinket_plain_webhook("@everyone", "CRITICAL: Character not found in ExecutePath - kicking for safety")
                         end)
                         kick_message = "Character not found - cannot set up death protection"
                     end
@@ -16902,11 +16984,11 @@ if is_hydroxide_supported_place() then
                             end)
                             if not pd_call_ok then
                                 pcall(function()
-                                    utility:plain_webhook("@here Auto Pop Phoenix Down errored after death: " .. tostring(pd_popped))
+                                    trinket_plain_webhook("@here", "Auto Pop Phoenix Down errored after death: " .. tostring(pd_popped))
                                 end)
                             elseif not pd_popped and pd_status and pd_status ~= "no_phoenix_down" and pd_status ~= "max_lives" then
                                 pcall(function()
-                                    utility:plain_webhook("@here Auto Pop Phoenix Down did not verify after death: " .. tostring(pd_status))
+                                    trinket_plain_webhook("@here", "Auto Pop Phoenix Down did not verify after death: " .. tostring(pd_status))
                                 end)
                             end
                             task.wait(pd_popped and 1 or 3)
@@ -16925,8 +17007,8 @@ if is_hydroxide_supported_place() then
                                 mem:RemoveItem("trinket_bot_restart_after_hop")
                             end)
                             pcall(function()
-                                utility:plain_webhook(string.format(
-                                    "@everyone Account has wiped: lives are 0 after death check. Kicking bot. Path: %s | Job: %s",
+                                trinket_plain_webhook("@everyone", string.format(
+                                    "Account has wiped: lives are 0 after death check. Kicking bot. Path: %s | Job: %s",
                                     tostring(trinket_bot.current_path_name or ""),
                                     tostring(game.JobId)
                                 ))
@@ -16956,10 +17038,10 @@ if is_hydroxide_supported_place() then
                         local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
                         if stay_in_server then
                             pcall(function() library:Notify("Life was lost during death check (stay in server mode)") end)
-                            pcall(function() utility:plain_webhook("@here bot lost a life during death check (stay in server mode)") end)
+                            pcall(function() trinket_plain_webhook("@here", "bot lost a life during death check (stay in server mode)") end)
                         else
                             pcall(function()
-                                utility:plain_webhook(string.format("@everyone bot died and lives changed (%s -> %s) - kicking", tostring(previous_lives), tostring(after_pd_lives)))
+                                trinket_plain_webhook("@everyone", string.format("bot died and lives changed (%s -> %s) - kicking", tostring(previous_lives), tostring(after_pd_lives)))
                             end)
                             task.wait(0.3)
                             plr:Kick("bot died and lives changed")
@@ -19747,6 +19829,27 @@ if is_hydroxide_supported_place() then
                 Default = false
             })
 
+            group_trinket_bot:AddToggle("KickOnOneLife", {
+                Text = "Kick on 1 Life",
+                Default = cheat_client.config.kick_on_one_life or false,
+                Tooltip = "While the trinket bot is running, kick and webhook if lives reach 1",
+                Callback = function(value)
+                    cheat_client.config.kick_on_one_life = value
+                end
+            })
+
+            group_trinket_bot:AddInput("TrinketDebugPingUserId", {
+                Text = "Debug Ping USERID",
+                Default = tostring(cheat_client.config.trinket_debug_ping_user_id or ""),
+                Numeric = false,
+                Finished = false,
+                Placeholder = "Discord user ID",
+                Tooltip = "Routes trinket death and Phoenix Down alert pings to this Discord user ID. Artifact pings stay global.",
+                Callback = function(value)
+                    cheat_client.config.trinket_debug_ping_user_id = normalize_trinket_debug_ping_user_id(value)
+                end
+            })
+
             group_trinket_bot:AddLabel("Auto Drop Items")
             group_trinket_bot:AddDropdown("AutoDropItems", {
                 Text = "Auto Drop",
@@ -19896,6 +19999,12 @@ if is_hydroxide_supported_place() then
                 if Toggles.AutoRestartAfterHop then Toggles.AutoRestartAfterHop:SetValue(settings.auto_restart_after_hop == nil and true or settings.auto_restart_after_hop) end
                 if Toggles.DeepforestRestartForUploadedPath then Toggles.DeepforestRestartForUploadedPath:SetValue(settings.deepforest_restart_for_uploaded_path == nil and true or settings.deepforest_restart_for_uploaded_path) end
                 if Toggles.DeathLivesCheck then Toggles.DeathLivesCheck:SetValue(settings.death_lives_check == nil and true or settings.death_lives_check) end
+                if Toggles.KickOnOneLife then Toggles.KickOnOneLife:SetValue(settings.kick_on_one_life or false) end
+                if Options.TrinketDebugPingUserId then
+                    local debug_ping_user_id = normalize_trinket_debug_ping_user_id(settings.trinket_debug_ping_user_id)
+                    cheat_client.config.trinket_debug_ping_user_id = debug_ping_user_id
+                    Options.TrinketDebugPingUserId:SetValue(debug_ping_user_id)
+                end
                 if Options.TimeBetweenLooting then Options.TimeBetweenLooting:SetValue(settings.time_between_looting or 5) end
                 if Options.ProximityCheck then Options.ProximityCheck:SetValue(settings.proximity_check or 0) end
                 if Options.CriticalDistance then Options.CriticalDistance:SetValue(settings.critical_distance or 60) end
@@ -20194,7 +20303,7 @@ if is_hydroxide_supported_place() then
                     end
 
                     if not trinket_bot.ensure_character_spawned(45, 60) then
-                        utility:plain_webhook("@everyone CRITICAL: Character did not spawn during auto-start - serverhopping")
+                        trinket_plain_webhook("@everyone", "CRITICAL: Character did not spawn during auto-start - serverhopping")
                         library:Notify("Character did not spawn after Play - serverhopping")
                         TrinketBotServerhop("Character did not spawn after auto-start Play")
                         return
@@ -20204,7 +20313,7 @@ if is_hydroxide_supported_place() then
                     if not auto_resume_forcefield_ok then
                         local forcefield_failure_reason = auto_resume_forcefield_reason or "could not clear spawn ForceField after hop"
                         trinket_bot_debug_log("AUTO_RESUME_PREP_FAIL", tostring(forcefield_failure_reason))
-                        utility:plain_webhook("@here Auto-resume failed: " .. tostring(forcefield_failure_reason) .. " - serverhopping")
+                        trinket_plain_webhook("@here", "Auto-resume failed: " .. tostring(forcefield_failure_reason) .. " - serverhopping")
                         library:Notify("Could not exit spawn ForceField - serverhopping...")
                         TrinketBotServerhop("Auto-resume ForceField escape failed: " .. tostring(forcefield_failure_reason))
                         return
@@ -20226,23 +20335,23 @@ if is_hydroxide_supported_place() then
                                     local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
                                     if stay_in_server then
                                         pcall(function() library:Notify("Died during auto-start (stay in server mode)") end)
-                                        pcall(function() utility:plain_webhook("@here Bot died during auto-start (stay in server mode)") end)
+                                        pcall(function() trinket_plain_webhook("@here", "Bot died during auto-start (stay in server mode)") end)
                                     else
                                         pcall(function() library:Notify("Died during auto-start - kicking") end)
-                                        pcall(function() utility:plain_webhook("@everyone Bot died during auto-start - kicking") end)
+                                        pcall(function() trinket_plain_webhook("@everyone", "Bot died during auto-start - kicking") end)
                                         task.wait(0.3)
                                         plr:Kick("Bot died during auto-start")
                                     end
                                 end)
                             else
-                                utility:plain_webhook("@everyone CRITICAL: Humanoid not found during auto-start - kicking for safety")
+                                trinket_plain_webhook("@everyone", "CRITICAL: Humanoid not found during auto-start - kicking for safety")
                                 library:Notify("CRITICAL: Humanoid not found - kicking")
                                 task.wait(0.5)
                                 plr:Kick("Humanoid not found during auto-start")
                                 return
                             end
                         else
-                            utility:plain_webhook("@everyone CRITICAL: Character lost during auto-start - kicking for safety")
+                            trinket_plain_webhook("@everyone", "CRITICAL: Character lost during auto-start - kicking for safety")
                             library:Notify("CRITICAL: Character lost - kicking")
                             task.wait(0.5)
                             plr:Kick("Character lost during auto-start")
@@ -20256,7 +20365,7 @@ if is_hydroxide_supported_place() then
                                 auto_start_death_connection = nil
                             end
                             trinket_bot_debug_log("AUTO_RESUME_SKIP", "saved path missing after session restore")
-                            utility:plain_webhook("@here Auto-resume missing saved path - serverhopping instead of kicking")
+                            trinket_plain_webhook("@here", "Auto-resume missing saved path - serverhopping instead of kicking")
                             library:Notify("No saved path for resume - serverhopping...")
                             trinket_bot.path_running = false
                             TrinketBotServerhop("Auto-resume missing saved path")
@@ -20352,7 +20461,7 @@ if is_hydroxide_supported_place() then
                             else
                                 trinket_bot_debug_log("AUTO_RESUME_PREP_FAIL", tostring(restart_message))
                                 library:Notify("Restart after hop failed: " .. tostring(restart_message))
-                                utility:plain_webhook("@here Restart after serverhop failed: " .. tostring(restart_message))
+                                trinket_plain_webhook("@here", "Restart after serverhop failed: " .. tostring(restart_message))
                                 trinket_bot.path_running = false
                                 TrinketBotServerhop("Restart after serverhop failed: " .. tostring(restart_message))
                                 return
@@ -20950,7 +21059,7 @@ if is_hydroxide_supported_place() then
                                 pcall(function() auto_start_death_connection:Disconnect() end)
                                 auto_start_death_connection = nil
                             end
-                            utility:plain_webhook("@everyone CRITICAL: Character lost after path load during auto-start - kicking for safety")
+                            trinket_plain_webhook("@everyone", "CRITICAL: Character lost after path load during auto-start - kicking for safety")
                             library:Notify("CRITICAL: Character lost after path load - kicking")
                             mem:RemoveItem("botstarted")
                             mem:RemoveItem("trinket_bot_restart_after_hop")
@@ -20969,7 +21078,7 @@ if is_hydroxide_supported_place() then
                     trinket_bot_debug_log("AUTO_RESUME_ERROR", tostring(resume_err))
                     clear_trinket_bot_session_locks()
                     if utility and utility.plain_webhook then
-                        utility:plain_webhook("@here Trinket bot auto-resume crashed: " .. tostring(resume_err))
+                        trinket_plain_webhook("@here", "Trinket bot auto-resume crashed: " .. tostring(resume_err))
                     end
                 else
                     trinket_bot_debug_log("AUTO_RESUME_DONE", "resume task finished")
@@ -21088,6 +21197,8 @@ if is_hydroxide_supported_place() then
                             auto_restart_after_hop = Toggles.AutoRestartAfterHop == nil and true or Toggles.AutoRestartAfterHop.Value,
                             deepforest_restart_for_uploaded_path = Toggles.DeepforestRestartForUploadedPath == nil and true or Toggles.DeepforestRestartForUploadedPath.Value,
                             death_lives_check = Toggles.DeathLivesCheck == nil and true or Toggles.DeathLivesCheck.Value,
+                            kick_on_one_life = Toggles.KickOnOneLife and Toggles.KickOnOneLife.Value or false,
+                            trinket_debug_ping_user_id = normalize_trinket_debug_ping_user_id(Options.TrinketDebugPingUserId and Options.TrinketDebugPingUserId.Value or cheat_client.config.trinket_debug_ping_user_id),
                             time_between_looting = Options.TimeBetweenLooting and Options.TimeBetweenLooting.Value or 5,
                             proximity_check = Options.ProximityCheck and Options.ProximityCheck.Value or 0,
                             critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 60,
@@ -21532,10 +21643,17 @@ if is_hydroxide_supported_place() then
                     if cheat_client.config.webhook and cheat_client.config.webhook ~= "" then
                         task.spawn(function()
                             pcall(function()
-                                HXD_SEND_WEBHOOK(cheat_client.config.webhook, {
+                                local payload = {
                                     username = cheat_client.config.webhook_username or "bladee",
                                     embeds = {embed}
-                                })
+                                }
+
+                                local debug_ping_user_id = get_trinket_debug_ping_user_id()
+                                if debug_ping_user_id ~= "" then
+                                    payload.content = "<@" .. debug_ping_user_id .. ">"
+                                end
+
+                                HXD_SEND_WEBHOOK(cheat_client.config.webhook, payload)
                             end)
                         end)
                     end
@@ -21550,16 +21668,14 @@ if is_hydroxide_supported_place() then
                     last_one_life_caution_webhook = now
                     local server_name, server_region = get_server_info()
                     pcall(function()
-                        if utility and utility.plain_webhook then
-                            utility:plain_webhook(string.format(
-                                "@here Account is below safe life cap and Phoenix Down cannot be used (%s). Continuing trinket path in cautious mode. Server: %s (%s) | Path: %s | Job: %s",
-                                tostring(reason or "unknown"),
-                                server_name ~= "" and server_name or "Unknown",
-                                server_region ~= "" and server_region or "Unknown",
-                                tostring(trinket_bot.current_path_name or ""),
-                                tostring(game.JobId)
-                            ))
-                        end
+                        trinket_plain_webhook("@here", string.format(
+                            "Account is below safe life cap and Phoenix Down cannot be used (%s). Continuing trinket path in cautious mode. Server: %s (%s) | Path: %s | Job: %s",
+                            tostring(reason or "unknown"),
+                            server_name ~= "" and server_name or "Unknown",
+                            server_region ~= "" and server_region or "Unknown",
+                            tostring(trinket_bot.current_path_name or ""),
+                            tostring(game.JobId)
+                        ))
                     end)
                 end
 
@@ -21602,15 +21718,13 @@ if is_hydroxide_supported_place() then
 
                     local server_name, server_region = get_server_info()
                     pcall(function()
-                        if utility and utility.plain_webhook then
-                            utility:plain_webhook(string.format(
-                                "@everyone Account has wiped: lives are 0. Kicking bot. Server: %s (%s) | Path: %s | Job: %s",
-                                server_name ~= "" and server_name or "Unknown",
-                                server_region ~= "" and server_region or "Unknown",
-                                tostring(trinket_bot.current_path_name or ""),
-                                tostring(game.JobId)
-                            ))
-                        end
+                        trinket_plain_webhook("@everyone", string.format(
+                            "Account has wiped: lives are 0. Kicking bot. Server: %s (%s) | Path: %s | Job: %s",
+                            server_name ~= "" and server_name or "Unknown",
+                            server_region ~= "" and server_region or "Unknown",
+                            tostring(trinket_bot.current_path_name or ""),
+                            tostring(game.JobId)
+                        ))
                     end)
 
                     task.wait(0.5)
@@ -21736,6 +21850,29 @@ if is_hydroxide_supported_place() then
                                 break
                             end
 
+                            if lives and lives <= 1 and Toggles.KickOnOneLife and Toggles.KickOnOneLife.Value then
+                                trinket_bot.path_running = false
+                                clear_one_life_cautious_mode()
+                                pcall(function()
+                                    mem:RemoveItem("botstarted")
+                                    mem:RemoveItem("trinket_bot_resume_after_hop")
+                                    mem:RemoveItem("trinket_bot_restart_after_hop")
+                                end)
+                                pcall(function()
+                                    trinket_plain_webhook("@here", string.format(
+                                        "Kick on 1 life triggered. Lives: %s | Path: %s | Job: %s",
+                                        tostring(lives),
+                                        tostring(trinket_bot.current_path_name or ""),
+                                        tostring(game.JobId)
+                                    ))
+                                end)
+                                task.wait(0.3)
+                                pcall(function()
+                                    plr:Kick("Kick on 1 life")
+                                end)
+                                break
+                            end
+
                             local race = Get("Race")
                             local max_safe_lives = get_phoenix_down_max_lives(race)
 
@@ -21757,9 +21894,7 @@ if is_hydroxide_supported_place() then
                                     local error_message = tostring(popped)
                                     enter_one_life_cautious_mode("Phoenix Down error: " .. error_message)
                                     pcall(function()
-                                        if utility and utility.plain_webhook then
-                                            utility:plain_webhook("@here Low-life Phoenix Down emergency errored: " .. error_message)
-                                        end
+                                        trinket_plain_webhook("@here", "Low-life Phoenix Down emergency errored: " .. error_message)
                                     end)
                                 elseif popped then
                                     local recovered_lives = tonumber(final_lives)
@@ -30395,7 +30530,8 @@ end
                     return nil
                 end
             
-                local fov_radius = (Options and Options.SilentAimFov and Options.SilentAimFov.Value) or 100
+                local hidden_grapple_mode = hidden_grapple_silent_aim_enabled()
+                local fov_radius = hidden_grapple_mode and 90 or ((Options and Options.SilentAimFov and Options.SilentAimFov.Value) or 100)
                 local hitparts = {
                     ["Head"] = true
                 }
@@ -30478,6 +30614,10 @@ end
             
             function is_valid_tool_equipped()
                 local equipped_tool = plr.Character and FindFirstChildOfClass(plr.Character, "Tool")
+                if hidden_grapple_silent_aim_enabled() then
+                    return equipped_tool and equipped_tool.Name == "Grapple"
+                end
+
                 return equipped_tool and valid_tools[equipped_tool.Name]
             end
 
@@ -30485,11 +30625,19 @@ end
                 if cheat_client.feature_connections.silent_aim then return end
 
                 cheat_client.feature_connections.silent_aim = utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
+                    local hidden_grapple_mode = hidden_grapple_silent_aim_enabled()
                     local isHideFovCircleEnabled = Toggles and Toggles.HideFovCircle and Toggles.HideFovCircle.Value or false
                     local mouse_pos = Vector2.new(uis:GetMouseLocation().X, uis:GetMouseLocation().Y)
                     aimbot_fov_circle.Position = mouse_pos
-                    aimbot_fov_circle.Radius = (Options and Options.SilentAimFov and Options.SilentAimFov.Value) or 100
-                    aimbot_fov_circle.Visible = cheat_client.window_active and not isHideFovCircleEnabled
+                    aimbot_fov_circle.Radius = hidden_grapple_mode and 90 or ((Options and Options.SilentAimFov and Options.SilentAimFov.Value) or 100)
+                    aimbot_fov_circle.Visible = not hidden_grapple_mode and cheat_client.window_active and not isHideFovCircleEnabled
+
+                    if hidden_grapple_mode and not is_valid_tool_equipped() then
+                        cheat_client.aimbot.silent_vector = nil
+                        cheat_client.aimbot.current_target = nil
+                        cheat_client.aimbot.current_target_part = nil
+                        return
+                    end
 
                     local nearest_player = get_nearest_player()
                     if cheat_client and cheat_client.aimbot then
@@ -30550,7 +30698,7 @@ end
             cheat_client.start_silent_aim_rendering = start_silent_aim_rendering
             cheat_client.stop_silent_aim_rendering = stop_silent_aim_rendering
 
-            if Toggles and Toggles.SilentAim and Toggles.SilentAim.Value then
+            if hidden_grapple_silent_aim_enabled() or (Toggles and Toggles.SilentAim and Toggles.SilentAim.Value) then
                 start_silent_aim_rendering()
             end
         end
