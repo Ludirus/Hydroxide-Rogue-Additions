@@ -1219,6 +1219,8 @@ if is_hydroxide_supported_place() then
             status_frame_position = nil,
 
             webhook = "",
+            trinket_general_webhook = "",
+            trinket_artifact_webhook = "",
             webhook_username = "bladee",
             dayfarm_webhook = "",
             show_in_artifact_stream = false,
@@ -13107,6 +13109,87 @@ if is_hydroxide_supported_place() then
             })
         end
 
+        local function normalize_trinket_webhook_url(value)
+            return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        end
+
+        local function is_valid_discord_webhook_url(value)
+            value = normalize_trinket_webhook_url(value)
+            return value == "" or value:match("^https://discord%.com/api/webhooks/%d+/%S+$") ~= nil or value:match("^https://discordapp%.com/api/webhooks/%d+/%S+$") ~= nil
+        end
+
+        local function read_hydroxide_mem_json(key)
+            if not mem:HasItem(key) then
+                return nil
+            end
+
+            local httpService = Services.HttpService
+            local success, decoded = pcall(function()
+                return httpService:JSONDecode(mem:GetItem(key))
+            end)
+
+            if success and type(decoded) == "table" then
+                return decoded
+            end
+
+            return nil
+        end
+
+        local function update_hydroxide_shared_settings(callback)
+            local httpService = Services.HttpService
+            pcall(function()
+                local shared_settings = read_hydroxide_mem_json("shared_settings") or {}
+                callback(shared_settings)
+                mem:SetItem("shared_settings", httpService:JSONEncode(shared_settings))
+            end)
+        end
+
+        local function set_trinket_general_webhook(value)
+            local webhook = normalize_trinket_webhook_url(value)
+            cheat_client.config.trinket_general_webhook = webhook
+            cheat_client.config.webhook = webhook
+
+            update_hydroxide_shared_settings(function(shared_settings)
+                shared_settings.webhook = webhook
+                shared_settings.trinket_general_webhook = webhook
+            end)
+
+            return webhook
+        end
+
+        local function set_trinket_artifact_webhook(value)
+            local webhook = normalize_trinket_webhook_url(value)
+            cheat_client.config.trinket_artifact_webhook = webhook
+
+            update_hydroxide_shared_settings(function(shared_settings)
+                shared_settings.trinket_artifact_webhook = webhook
+            end)
+
+            return webhook
+        end
+
+        local function get_trinket_artifact_webhook()
+            local option_value = Options and Options.TrinketArtifactWebhook and Options.TrinketArtifactWebhook.Value
+            local webhook = normalize_trinket_webhook_url(option_value)
+            if webhook ~= "" then
+                return webhook
+            end
+
+            webhook = normalize_trinket_webhook_url(cheat_client.config.trinket_artifact_webhook)
+            if webhook ~= "" then
+                return webhook
+            end
+
+            local bot_settings = read_hydroxide_mem_json("trinket_bot_settings")
+            webhook = normalize_trinket_webhook_url(bot_settings and (bot_settings.trinket_artifact_webhook or bot_settings.artifact_webhook))
+            if webhook ~= "" then
+                return webhook
+            end
+
+            local shared_settings = read_hydroxide_mem_json("shared_settings")
+            return normalize_trinket_webhook_url(shared_settings and shared_settings.trinket_artifact_webhook)
+        end
+
         local function hydroxide_setup_trinket_bot()
             local trinket_bot = {
                 path_points = {},
@@ -15640,6 +15723,8 @@ if is_hydroxide_supported_place() then
                     death_lives_check = Toggles.DeathLivesCheck == nil and true or Toggles.DeathLivesCheck.Value,
                     kick_on_one_life = Toggles.KickOnOneLife and Toggles.KickOnOneLife.Value or false,
                     trinket_debug_ping_user_id = normalize_trinket_debug_ping_user_id(Options.TrinketDebugPingUserId and Options.TrinketDebugPingUserId.Value or cheat_client.config.trinket_debug_ping_user_id),
+                    trinket_general_webhook = normalize_trinket_webhook_url(Options.TrinketGeneralWebhook and Options.TrinketGeneralWebhook.Value or ((cheat_client.config.trinket_general_webhook and cheat_client.config.trinket_general_webhook ~= "") and cheat_client.config.trinket_general_webhook or cheat_client.config.webhook)),
+                    trinket_artifact_webhook = normalize_trinket_webhook_url(Options.TrinketArtifactWebhook and Options.TrinketArtifactWebhook.Value or cheat_client.config.trinket_artifact_webhook),
                     time_between_looting = Options.TimeBetweenLooting and Options.TimeBetweenLooting.Value or 5,
                     proximity_check = Options.ProximityCheck and Options.ProximityCheck.Value or 0,
                     critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 60,
@@ -20068,6 +20153,45 @@ if is_hydroxide_supported_place() then
                 end
             })
 
+            group_trinket_bot:AddInput("TrinketGeneralWebhook", {
+                Text = "General Webhook",
+                Default = normalize_trinket_webhook_url((cheat_client.config.trinket_general_webhook and cheat_client.config.trinket_general_webhook ~= "") and cheat_client.config.trinket_general_webhook or cheat_client.config.webhook),
+                Numeric = false,
+                Finished = false,
+                Placeholder = "https://discord.com/api/webhooks/...",
+                Tooltip = "Trinket bot status, death, Phoenix Down, and serverhop alerts. Mirrors the global webhook.",
+                Callback = function(value)
+                    local webhook = normalize_trinket_webhook_url(value)
+                    if not is_valid_discord_webhook_url(webhook) then
+                        library:Notify("Invalid general webhook URL format!")
+                        return
+                    end
+
+                    webhook = set_trinket_general_webhook(webhook)
+                    if Options.webhook_url and Options.webhook_url.Value ~= webhook then
+                        Options.webhook_url:SetValue(webhook)
+                    end
+                end
+            })
+
+            group_trinket_bot:AddInput("TrinketArtifactWebhook", {
+                Text = "Artifact Webhook",
+                Default = normalize_trinket_webhook_url(cheat_client.config.trinket_artifact_webhook),
+                Numeric = false,
+                Finished = false,
+                Placeholder = "https://discord.com/api/webhooks/...",
+                Tooltip = "Overrides the artifact stream destination for trinket bot artifact logs.",
+                Callback = function(value)
+                    local webhook = normalize_trinket_webhook_url(value)
+                    if not is_valid_discord_webhook_url(webhook) then
+                        library:Notify("Invalid artifact webhook URL format!")
+                        return
+                    end
+
+                    set_trinket_artifact_webhook(webhook)
+                end
+            })
+
             group_trinket_bot:AddLabel("Auto Drop Items")
             group_trinket_bot:AddDropdown("AutoDropItems", {
                 Text = "Auto Drop",
@@ -20242,6 +20366,22 @@ if is_hydroxide_supported_place() then
                                 Options.webhook_url:SetValue(shared_settings.webhook)
                             end
                         end
+                        local shared_general_webhook = shared_settings.trinket_general_webhook
+                        if shared_general_webhook == nil then
+                            shared_general_webhook = shared_settings.webhook
+                        end
+                        if shared_general_webhook ~= nil then
+                            cheat_client.config.trinket_general_webhook = normalize_trinket_webhook_url(shared_general_webhook)
+                            if Options.TrinketGeneralWebhook then
+                                Options.TrinketGeneralWebhook:SetValue(cheat_client.config.trinket_general_webhook)
+                            end
+                        end
+                        if shared_settings.trinket_artifact_webhook ~= nil then
+                            cheat_client.config.trinket_artifact_webhook = normalize_trinket_webhook_url(shared_settings.trinket_artifact_webhook)
+                            if Options.TrinketArtifactWebhook then
+                                Options.TrinketArtifactWebhook:SetValue(cheat_client.config.trinket_artifact_webhook)
+                            end
+                        end
                         if shared_settings.webhook_username then
                             cheat_client.config.webhook_username = shared_settings.webhook_username
                             if Options.webhook_username then
@@ -20255,6 +20395,27 @@ if is_hydroxide_supported_place() then
                             end
                         end
                     end
+                end
+
+                if settings.trinket_general_webhook ~= nil or settings.general_webhook ~= nil then
+                    local webhook = set_trinket_general_webhook(settings.trinket_general_webhook or settings.general_webhook)
+                    if Options.TrinketGeneralWebhook then
+                        Options.TrinketGeneralWebhook:SetValue(webhook)
+                    end
+                    if Options.webhook_url then
+                        Options.webhook_url:SetValue(webhook)
+                    end
+                elseif Options.TrinketGeneralWebhook then
+                    Options.TrinketGeneralWebhook:SetValue(normalize_trinket_webhook_url((cheat_client.config.trinket_general_webhook and cheat_client.config.trinket_general_webhook ~= "") and cheat_client.config.trinket_general_webhook or cheat_client.config.webhook))
+                end
+
+                if settings.trinket_artifact_webhook ~= nil or settings.artifact_webhook ~= nil then
+                    local webhook = set_trinket_artifact_webhook(settings.trinket_artifact_webhook or settings.artifact_webhook)
+                    if Options.TrinketArtifactWebhook then
+                        Options.TrinketArtifactWebhook:SetValue(webhook)
+                    end
+                elseif Options.TrinketArtifactWebhook then
+                    Options.TrinketArtifactWebhook:SetValue(get_trinket_artifact_webhook())
                 end
             end
 
@@ -21417,6 +21578,8 @@ if is_hydroxide_supported_place() then
                             death_lives_check = Toggles.DeathLivesCheck == nil and true or Toggles.DeathLivesCheck.Value,
                             kick_on_one_life = Toggles.KickOnOneLife and Toggles.KickOnOneLife.Value or false,
                             trinket_debug_ping_user_id = normalize_trinket_debug_ping_user_id(Options.TrinketDebugPingUserId and Options.TrinketDebugPingUserId.Value or cheat_client.config.trinket_debug_ping_user_id),
+                            trinket_general_webhook = normalize_trinket_webhook_url(Options.TrinketGeneralWebhook and Options.TrinketGeneralWebhook.Value or ((cheat_client.config.trinket_general_webhook and cheat_client.config.trinket_general_webhook ~= "") and cheat_client.config.trinket_general_webhook or cheat_client.config.webhook)),
+                            trinket_artifact_webhook = normalize_trinket_webhook_url(Options.TrinketArtifactWebhook and Options.TrinketArtifactWebhook.Value or cheat_client.config.trinket_artifact_webhook),
                             time_between_looting = Options.TimeBetweenLooting and Options.TimeBetweenLooting.Value or 5,
                             proximity_check = Options.ProximityCheck and Options.ProximityCheck.Value or 0,
                             critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 60,
@@ -24105,9 +24268,14 @@ if is_hydroxide_supported_place() then
                 Tooltip = "Enter your Discord webhook URL for notifications (persists across serverhops)",
                 Placeholder = "https://discord.com/api/webhooks/...",
                 Callback = function(value)
+                    value = normalize_trinket_webhook_url(value)
                     if value and value ~= "" then
-                        if value:match("^https://discord.com/api/webhooks/%d+/%S+$") then
+                        if is_valid_discord_webhook_url(value) then
                             cheat_client.config.webhook = value
+                            cheat_client.config.trinket_general_webhook = value
+                            if Options.TrinketGeneralWebhook and Options.TrinketGeneralWebhook.Value ~= value then
+                                Options.TrinketGeneralWebhook:SetValue(value)
+                            end
 
                             local httpService = Services.HttpService
                             pcall(function()
@@ -24121,6 +24289,7 @@ if is_hydroxide_supported_place() then
                                     end
                                 end
                                 shared_settings.webhook = value
+                                shared_settings.trinket_general_webhook = value
                                 mem:SetItem("shared_settings", httpService:JSONEncode(shared_settings))
                             end)
                         else
@@ -24128,6 +24297,10 @@ if is_hydroxide_supported_place() then
                         end
                     else
                         cheat_client.config.webhook = ""
+                        cheat_client.config.trinket_general_webhook = ""
+                        if Options.TrinketGeneralWebhook and Options.TrinketGeneralWebhook.Value ~= "" then
+                            Options.TrinketGeneralWebhook:SetValue("")
+                        end
 
                         local httpService = Services.HttpService
                         pcall(function()
@@ -24141,6 +24314,7 @@ if is_hydroxide_supported_place() then
                                 end
                             end
                             shared_settings.webhook = ""
+                            shared_settings.trinket_general_webhook = ""
                             mem:SetItem("shared_settings", httpService:JSONEncode(shared_settings))
                         end)
                     end
@@ -29553,7 +29727,10 @@ end
                                 end)
                             end
 
-                            local secondary_webhook_url = "WEBHOOK_URL_HERE"
+                            local configured_artifact_webhook = get_trinket_artifact_webhook()
+                            local artifact_webhook_url = configured_artifact_webhook ~= "" and configured_artifact_webhook or "WEBHOOK_URL_HERE"
+                            local artifact_webhook_username = configured_artifact_webhook ~= "" and (cheat_client.config.webhook_username or "bladee") or "Jew"
+                            local secondary_webhook_url = artifact_webhook_url
                             local should_send_secondary = cheat_client.config.webhook ~= secondary_webhook_url
 
                             local player_has_artifact = #unpicked_artifact_names == 0
@@ -29583,6 +29760,10 @@ end
                                 should_show_in_stream = true
                             end
 
+                            if configured_artifact_webhook ~= "" then
+                                should_show_in_stream = true
+                            end
+
                             if not player_has_artifact and should_show_in_stream and not (Toggles.StayInServer and Toggles.StayInServer.Value) then
                                 local unpicked_list = table.concat(unpicked_artifact_names, ", ")
                                 local stream_embed = {
@@ -29600,8 +29781,8 @@ end
 
                                 if cheat_client.trinket_bot and cheat_client.trinket_bot.pending_artifact_logs then
                                     table.insert(cheat_client.trinket_bot.pending_artifact_logs, {
-                                        webhook_url = "WEBHOOK_URL_HERE",
-                                        username = "Jew",
+                                        webhook_url = artifact_webhook_url,
+                                        username = artifact_webhook_username,
                                         embed = stream_embed,
                                         artifact_names = unpicked_artifact_names,
                                         artifact_ids = unpicked_artifact_ids
@@ -29630,7 +29811,7 @@ end
                                     }
 
                                     HXD_SEND_WEBHOOK(secondary_webhook_url, {
-                                        username = "Jew",
+                                        username = artifact_webhook_username,
                                         content = "<@&1454862161015734455>",
                                         embeds = {log_embed}
                                     })
