@@ -1221,7 +1221,7 @@ if is_hydroxide_supported_place() then
             webhook = "",
             trinket_general_webhook = "",
             trinket_artifact_webhook = "",
-            webhook_username = "bladee",
+            webhook_username = "LudSploit",
             dayfarm_webhook = "",
             show_in_artifact_stream = false,
 
@@ -4580,7 +4580,7 @@ if is_hydroxide_supported_place() then
 
                 pcall(function()
                     send_webhook(cheat_client.config.webhook, {
-                        username = cheat_client.config.webhook_username or "bladee",
+                        username = cheat_client.config.webhook_username or "LudSploit",
                         content = content
                     })
                 end)
@@ -13494,7 +13494,7 @@ if is_hydroxide_supported_place() then
                 elseif cheat_client and cheat_client.config and cheat_client.config.webhook and cheat_client.config.webhook ~= "" then
                     pcall(function()
                         HXD_SEND_WEBHOOK(cheat_client.config.webhook, {
-                            username = cheat_client.config.webhook_username or "bladee",
+                            username = cheat_client.config.webhook_username or "LudSploit",
                             content = message,
                         })
                     end)
@@ -13836,6 +13836,8 @@ if is_hydroxide_supported_place() then
             local loot_tracking_connection = nil
             local quantity_connections = {}
             local initial_quantities = {}
+            local logged_pickup_ids = {}
+            local recent_logged_pickup_names = {}
             local pd_char_connection = nil
             local auto_drop_char_connection = nil
             local auto_drop_backpack_connection = nil
@@ -13848,8 +13850,74 @@ if is_hydroxide_supported_place() then
                 initial_quantities = {}
             end)
 
-            local function log_pickup(item_name, quantity)
+            local function normalize_session_loot_name(item_name)
+                item_name = tostring(item_name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                if item_name == "" then
+                    return "Unknown Item"
+                end
+
+                if item_name == "Lannis Amulet" then
+                    return "Lannis's Amulet"
+                end
+
+                return item_name
+            end
+
+            local function cleanup_recent_logged_pickups()
+                local now = tick()
+                for key, expires_at in pairs(recent_logged_pickup_names) do
+                    if expires_at <= now then
+                        recent_logged_pickup_names[key] = nil
+                    end
+                end
+            end
+
+            local function session_loot_key(item_name)
+                local key = string.lower(normalize_session_loot_name(item_name):gsub("%s+", " "))
+                if key:find("scroll", 1, true) then
+                    return "scroll"
+                end
+                return key
+            end
+
+            local function was_recently_logged_by_world_pickup(item_name)
+                cleanup_recent_logged_pickups()
+                return recent_logged_pickup_names[session_loot_key(item_name)] ~= nil
+            end
+
+            local function remember_world_pickup_name(item_name)
+                recent_logged_pickup_names[session_loot_key(item_name)] = tick() + 4
+            end
+
+            local function remove_pending_pickup_id(pickup_id)
+                if not pickup_id or pickup_id == "" then
+                    return
+                end
+
+                for i = #pending_pickup_ids, 1, -1 do
+                    if pending_pickup_ids[i] == pickup_id then
+                        table.remove(pending_pickup_ids, i)
+                        return
+                    end
+                end
+            end
+
+            local function log_pickup(item_name, quantity, pickup_id)
+                item_name = normalize_session_loot_name(item_name)
                 quantity = quantity or 1
+                if quantity <= 0 then
+                    return
+                end
+
+                if pickup_id and pickup_id ~= "" then
+                    if logged_pickup_ids[pickup_id] then
+                        return
+                    end
+                    logged_pickup_ids[pickup_id] = true
+                    remove_pending_pickup_id(pickup_id)
+                    remember_world_pickup_name(item_name)
+                end
+
                 if trinket_bot.session_loot[item_name] then
                     trinket_bot.session_loot[item_name] = trinket_bot.session_loot[item_name] + quantity
                 else
@@ -13857,7 +13925,7 @@ if is_hydroxide_supported_place() then
                 end
 
                 if trinket_bot.pending_artifact_logs and #trinket_bot.pending_artifact_logs > 0 then
-                    local pickup_id = table.remove(pending_pickup_ids, 1)
+                    pickup_id = pickup_id or table.remove(pending_pickup_ids, 1)
 
                     if pickup_id and pickup_id ~= "" then
                         local removed = false
@@ -13905,10 +13973,27 @@ if is_hydroxide_supported_place() then
                 end
             end
 
+            local function record_world_trinket_pickup(object, item_name, trinket_id_value)
+                if not (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true") then
+                    return
+                end
+
+                item_name = normalize_session_loot_name(item_name)
+                trinket_id_value = tostring(trinket_id_value or "")
+                if trinket_id_value ~= "" and logged_pickup_ids[trinket_id_value] then
+                    return
+                end
+
+                log_pickup(item_name, 1, trinket_id_value ~= "" and trinket_id_value or nil)
+            end
+            trinket_bot.record_world_pickup = record_world_trinket_pickup
+
             local function start_loot_tracking()
                 trinket_bot.session_loot = {}
                 trinket_bot.session_start_time = os.clock()
                 initial_quantities = {}
+                logged_pickup_ids = {}
+                recent_logged_pickup_names = {}
 
                 if loot_tracking_connection then
                     loot_tracking_connection:Disconnect()
@@ -13960,7 +14045,9 @@ if is_hydroxide_supported_place() then
                             initial_quantities[tool_name] = 0
                         end
 
-                        log_pickup(tool_name)
+                        if not was_recently_logged_by_world_pickup(tool_name) then
+                            log_pickup(tool_name)
+                        end
                         task.wait(1)
 
                         local quantity_value = FindFirstChild(child, "Quantity")
@@ -14000,32 +14087,158 @@ if is_hydroxide_supported_place() then
                 return inventory_value
             end
 
-            local function format_loot_summary()
-                local elapsed_time = os.clock() - trinket_bot.session_start_time
+            local function get_inventory_tool_quantity(target_name)
+                local target_key = tostring(target_name or ""):lower():gsub("%s+", "")
+                local total = 0
+                local containers = {plr.Backpack, plr.Character}
+
+                for _, container in ipairs(containers) do
+                    if container then
+                        for _, item in ipairs(container:GetChildren()) do
+                            if item:IsA("Tool") then
+                                local item_key = item.Name:lower():gsub("%s+", "")
+                                if item_key == target_key or (target_key == "idolofwar" and item_key == "idolofwars") then
+                                    local quantity = FindFirstChild(item, "Quantity")
+                                    if quantity and quantity:IsA("IntValue") then
+                                        total = total + math.max(0, quantity.Value)
+                                    else
+                                        total = total + 1
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+
+                return total
+            end
+
+            local function get_session_duration_parts()
+                local elapsed_time = math.max(0, os.clock() - (trinket_bot.session_start_time or os.clock()))
                 local hours = math.floor(elapsed_time / 3600)
                 local minutes = math.floor((elapsed_time % 3600) / 60)
                 local seconds = math.floor(elapsed_time % 60)
+                return hours, minutes, seconds
+            end
 
-                local summary = string.format("**Inventory Value**: %d\n**Session: %dh %dm %ds**\n", get_inventory_value(), hours, minutes, seconds)
+            local function format_items_collected_text()
                 if not trinket_bot.session_loot or not next(trinket_bot.session_loot) then
-                    summary = summary .. "No items collected"
-                    return summary
+                    return "No items collected this run"
                 end
 
                 local items = {}
                 for item_name, count in pairs(trinket_bot.session_loot) do
-                    table.insert(items, {name = item_name, count = count})
+                    table.insert(items, {
+                        name = normalize_session_loot_name(item_name),
+                        count = tonumber(count) or 0
+                    })
                 end
 
                 table.sort(items, function(a, b)
+                    if a.count == b.count then
+                        return a.name < b.name
+                    end
                     return a.count > b.count
                 end)
 
+                local lines = {}
                 for _, item in ipairs(items) do
-                    summary = summary .. string.format("%dx %s\n", item.count, item.name)
+                    if item.count > 0 then
+                        table.insert(lines, string.format("%dx %s", item.count, item.name))
+                    end
                 end
 
-                return summary
+                local text = #lines > 0 and table.concat(lines, "\n") or "No items collected this run"
+                if #text > 950 then
+                    text = text:sub(1, 947) .. "..."
+                end
+
+                return text
+            end
+
+            local function format_duration_text(hours, minutes, seconds)
+                return string.format("%dh %dm %ds", hours, minutes, seconds)
+            end
+
+            local function build_trinket_session_embed(title, reason, color)
+                local serverName, serverRegion = get_server_info()
+                local hours, minutes, seconds = get_session_duration_parts()
+                local player_count = #plrs:GetPlayers()
+                local idol_count = get_inventory_tool_quantity("Idol of War")
+                local war_min = idol_count * 3
+                local war_max = idol_count * 6
+                local war_average = idol_count * 4.6
+                local path_name = trinket_bot.current_path_name and trinket_bot.current_path_name ~= "" and trinket_bot.current_path_name or "None"
+
+                local footer_text
+                if cheat_client.config.webhook_show_username ~= false then
+                    footer_text = string.format("LudSploit • Players: %d/23 • %s • Job: %s", player_count, plr.Name, game.JobId)
+                else
+                    footer_text = string.format("LudSploit • Players: %d/23 • Job: %s", player_count, game.JobId)
+                end
+
+                return {
+                    title = title,
+                    description = string.format("**%s**\n%s", tostring(reason or "Trinket bot update"), "Clean session report from LudSploit."),
+                    color = color or 0xFF365E,
+                    fields = {
+                        {
+                            name = "Run Details",
+                            value = string.format(
+                                "**Server:** `%s (%s)`\n**Path:** `%s`\n**Session:** `%s`",
+                                serverName ~= "" and serverName or "Unknown",
+                                serverRegion ~= "" and serverRegion or "Unknown",
+                                path_name,
+                                format_duration_text(hours, minutes, seconds)
+                            ),
+                            inline = false
+                        },
+                        {
+                            name = "Inventory",
+                            value = string.format(
+                                "**Value:** `%d`\n**Idol of War:** `%d`",
+                                get_inventory_value(),
+                                idol_count
+                            ),
+                            inline = true
+                        },
+                        {
+                            name = "War Points",
+                            value = string.format(
+                                "**Range:** `%d - %d`\n**Average:** `%.1f`",
+                                war_min,
+                                war_max,
+                                war_average
+                            ),
+                            inline = true
+                        },
+                        {
+                            name = "Items Collected",
+                            value = string.format("```\n%s```", format_items_collected_text()),
+                            inline = false
+                        }
+                    },
+                    footer = {
+                        text = footer_text
+                    },
+                    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                }
+            end
+
+            local function format_loot_summary()
+                local hours, minutes, seconds = get_session_duration_parts()
+                local idol_count = get_inventory_tool_quantity("Idol of War")
+
+                return string.format(
+                    "**Inventory Value:** %d\n**Idol of War:** %d\n**War Points:** %d-%d (avg %.1f)\n**Session:** %s\n%s",
+                    get_inventory_value(),
+                    idol_count,
+                    idol_count * 3,
+                    idol_count * 6,
+                    idol_count * 4.6,
+                    format_duration_text(hours, minutes, seconds),
+                    format_items_collected_text()
+                )
             end
 
             local function is_valid_vector3(position)
@@ -15529,10 +15742,14 @@ if is_hydroxide_supported_place() then
 
                         local click_detector = FindFirstChild(trinketData.object, "ClickDetector", true)
                         if click_detector then
+                            local picked_trinket_name = cheat_client:identify_trinket(trinketData.object)
+                            local picked_trinket_id = nil
                             if trinket_id and trinket_id:IsA("StringValue") then
-                                queue_pending_pickup(trinket_id.Value)
+                                picked_trinket_id = trinket_id.Value
+                                queue_pending_pickup(picked_trinket_id)
                             end
                             fireclickdetector(click_detector)
+                            record_world_trinket_pickup(trinketData.object, picked_trinket_name, picked_trinket_id)
                             task.wait(0.18)
 
                             if trinket_id and trinket_id:IsA("StringValue") then
@@ -15742,64 +15959,17 @@ if is_hydroxide_supported_place() then
                     if boiii then
                         utility:plain_webhook(reason)
                     else
-                        local serverName, serverRegion = get_server_info()
-                        local elapsed_time = os.clock() - trinket_bot.session_start_time
-                        local hours = math.floor(elapsed_time / 3600)
-                        local minutes = math.floor((elapsed_time % 3600) / 60)
-                        local seconds = math.floor(elapsed_time % 60)
-
-                        local items_text = ""
-                        if trinket_bot.session_loot and next(trinket_bot.session_loot) then
-                            local items = {}
-                            for item_name, count in pairs(trinket_bot.session_loot) do
-                                table.insert(items, {name = item_name, count = count})
-                            end
-                            table.sort(items, function(a, b) return a.count > b.count end)
-                            for _, item in ipairs(items) do
-                                items_text = items_text .. string.format("%dx %s\n", item.count, item.name)
-                            end
-                        else
-                            items_text = "No items collected"
-                        end
-
-                        local player_count = #plrs:GetPlayers()
-                        local footer_text
-                        if cheat_client.config.webhook_show_username ~= false then
-                            footer_text = string.format("Players: %d/23 | %s | Job: %s", player_count, plr.Name, game.JobId)
-                        else
-                            footer_text = string.format("Players: %d/23 | Job: %s", player_count, game.JobId)
-                        end
-
-                        local description = string.format(
-                            "**Server:** `%s (%s)`\n**Inventory Value:** %d\n**Session:** %dh %dm %ds",
-                            serverName ~= "" and serverName or "Unknown",
-                            serverRegion ~= "" and serverRegion or "Unknown",
-                            get_inventory_value(),
-                            hours, minutes, seconds
+                        local embed = build_trinket_session_embed(
+                            string.format("LudSploit | Serverhop #%d", current_count + 1),
+                            reason,
+                            0xFF365E
                         )
-
-                        local embed = {
-                            title = string.format("Serverhop #%d | %s", current_count + 1, reason),
-                            description = description,
-                            color = 0x36ff79,
-                            fields = {
-                                {
-                                    name = "Items Collected",
-                                    value = string.format("```\n%s```", items_text),
-                                    inline = false
-                                }
-                            },
-                            footer = {
-                                text = footer_text
-                            },
-                            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
-                        }
 
                         if cheat_client.config.webhook and cheat_client.config.webhook ~= "" then
                             task.spawn(function()
                                 pcall(function()
                                     HXD_SEND_WEBHOOK(cheat_client.config.webhook, {
-                                        username = cheat_client.config.webhook_username or "bladee",
+                                        username = cheat_client.config.webhook_username or "LudSploit",
                                         embeds = {embed}
                                     })
                                 end)
@@ -17885,10 +18055,13 @@ if is_hydroxide_supported_place() then
 
                             if click_detector and distance > 0 and distance < dist then
                                 local trinket_id = FindFirstChild(object, "ID")
+                                local picked_trinket_id = nil
                                 if trinket_id and trinket_id:IsA("StringValue") then
-                                    queue_pending_pickup(trinket_id.Value)
+                                    picked_trinket_id = trinket_id.Value
+                                    queue_pending_pickup(picked_trinket_id)
                                 end
                                 fireclickdetector(click_detector)
+                                record_world_trinket_pickup(object, trinket_name, picked_trinket_id)
                             end
                         end
                     end
@@ -18638,10 +18811,13 @@ if is_hydroxide_supported_place() then
 
                                             local click_detector = FindFirstChild(object, "ClickDetector", true)
                                             if click_detector then
+                                                local picked_trinket_id = nil
                                                 if trinket_id_obj and trinket_id_obj:IsA("StringValue") then
-                                                    queue_pending_pickup(trinket_id_obj.Value)
+                                                    picked_trinket_id = trinket_id_obj.Value
+                                                    queue_pending_pickup(picked_trinket_id)
                                                 end
                                                 fireclickdetector(click_detector)
+                                                record_world_trinket_pickup(object, trinket_name, picked_trinket_id)
                                                 task.wait(0.18)
                                             end
 
@@ -19635,64 +19811,17 @@ if is_hydroxide_supported_place() then
                         local run_number = (mem:HasItem("stay_in_server_runs") and tonumber(mem:GetItem("stay_in_server_runs")) or 0) + 1
                         mem:SetItem("stay_in_server_runs", tostring(run_number))
 
-                        local serverName, serverRegion = get_server_info()
-                        local elapsed_time = os.clock() - trinket_bot.session_start_time
-                        local hours = math.floor(elapsed_time / 3600)
-                        local minutes = math.floor((elapsed_time % 3600) / 60)
-                        local seconds = math.floor(elapsed_time % 60)
-
-                        local items_text = ""
-                        if trinket_bot.session_loot and next(trinket_bot.session_loot) then
-                            local items = {}
-                            for item_name, count in pairs(trinket_bot.session_loot) do
-                                table.insert(items, {name = item_name, count = count})
-                            end
-                            table.sort(items, function(a, b) return a.count > b.count end)
-                            for _, item in ipairs(items) do
-                                items_text = items_text .. string.format("%dx %s\n", item.count, item.name)
-                            end
-                        else
-                            items_text = "No items collected"
-                        end
-
-                        local player_count = #plrs:GetPlayers()
-                        local footer_text
-                        if cheat_client.config.webhook_show_username ~= false then
-                            footer_text = string.format("Players: %d/23 | %s | Job: %s", player_count, plr.Name, game.JobId)
-                        else
-                            footer_text = string.format("Players: %d/23 | Job: %s", player_count, game.JobId)
-                        end
-
-                        local description = string.format(
-                            "**Server:** `%s (%s)`\n**Inventory Value:** %d\n**Session:** %dh %dm %ds",
-                            serverName ~= "" and serverName or "Unknown",
-                            serverRegion ~= "" and serverRegion or "Unknown",
-                            get_inventory_value(),
-                            hours, minutes, seconds
+                        local embed = build_trinket_session_embed(
+                            string.format("LudSploit | Stay In Server #%d", run_number),
+                            "Path completed; staying in server before restarting.",
+                            0xC026D3
                         )
-
-                        local embed = {
-                            title = string.format("Stay In Server - Run #%d", run_number),
-                            description = description,
-                            color = 0x5865F2,
-                            fields = {
-                                {
-                                    name = "Items Collected",
-                                    value = string.format("```\n%s```", items_text),
-                                    inline = false
-                                }
-                            },
-                            footer = {
-                                text = footer_text
-                            },
-                            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
-                        }
 
                         if cheat_client.config.webhook and cheat_client.config.webhook ~= "" then
                             task.spawn(function()
                                 pcall(function()
                                     HXD_SEND_WEBHOOK(cheat_client.config.webhook, {
-                                        username = cheat_client.config.webhook_username or "bladee",
+                                        username = cheat_client.config.webhook_username or "LudSploit",
                                         embeds = {embed}
                                     })
                                 end)
@@ -19744,64 +19873,17 @@ if is_hydroxide_supported_place() then
                     trinket_bot.path_running = false
                     library:Notify("Test path completed!")
 
-                    local serverName, serverRegion = get_server_info()
-                    local elapsed_time = os.clock() - trinket_bot.session_start_time
-                    local hours = math.floor(elapsed_time / 3600)
-                    local minutes = math.floor((elapsed_time % 3600) / 60)
-                    local seconds = math.floor(elapsed_time % 60)
-
-                    local items_text = ""
-                    if trinket_bot.session_loot and next(trinket_bot.session_loot) then
-                        local items = {}
-                        for item_name, count in pairs(trinket_bot.session_loot) do
-                            table.insert(items, {name = item_name, count = count})
-                        end
-                        table.sort(items, function(a, b) return a.count > b.count end)
-                        for _, item in ipairs(items) do
-                            items_text = items_text .. string.format("%dx %s\n", item.count, item.name)
-                        end
-                    else
-                        items_text = "No items collected"
-                    end
-
-                    local player_count = #plrs:GetPlayers()
-                    local footer_text
-                    if cheat_client.config.webhook_show_username ~= false then
-                        footer_text = string.format("Players: %d/23 | %s | Job: %s", player_count, plr.Name, game.JobId)
-                    else
-                        footer_text = string.format("Players: %d/23 | Job: %s", player_count, game.JobId)
-                    end
-
-                    local description = string.format(
-                        "**Server:** `%s (%s)`\n**Inventory Value:** %d\n**Session:** %dh %dm %ds",
-                        serverName ~= "" and serverName or "Unknown",
-                        serverRegion ~= "" and serverRegion or "Unknown",
-                        get_inventory_value(),
-                        hours, minutes, seconds
+                    local embed = build_trinket_session_embed(
+                        "LudSploit | Test Run Complete",
+                        "Test path completed.",
+                        0x22C55E
                     )
-
-                    local embed = {
-                        title = "Test Run Completed",
-                        description = description,
-                        color = 0x00FF00,
-                        fields = {
-                            {
-                                name = "Items Collected",
-                                value = string.format("```\n%s```", items_text),
-                                inline = false
-                            }
-                        },
-                        footer = {
-                            text = footer_text
-                        },
-                        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
-                    }
 
                     if cheat_client.config.webhook and cheat_client.config.webhook ~= "" then
                         task.spawn(function()
                             pcall(function()
                                 HXD_SEND_WEBHOOK(cheat_client.config.webhook, {
-                                    username = cheat_client.config.webhook_username or "bladee",
+                                    username = cheat_client.config.webhook_username or "LudSploit",
                                     embeds = {embed}
                                 })
                             end)
@@ -21999,13 +22081,13 @@ if is_hydroxide_supported_place() then
                     local player_count = #plrs:GetPlayers()
                     local footer_text
                     if cheat_client.config.webhook_show_username ~= false then
-                        footer_text = string.format("Players: %d/23 | %s | Job: %s", player_count, plr.Name, game.JobId)
+                        footer_text = string.format("LudSploit • Players: %d/23 • %s • Job: %s", player_count, plr.Name, game.JobId)
                     else
-                        footer_text = string.format("Players: %d/23 | Job: %s", player_count, game.JobId)
+                        footer_text = string.format("LudSploit • Players: %d/23 • Job: %s", player_count, game.JobId)
                     end
 
                     local embed = {
-                        title = "Auto Popped Phoenix Down",
+                        title = "LudSploit | Auto Popped Phoenix Down",
                         description = string.format(
                             "**Server:** `%s (%s)`\n**Lives:** `%s -> %s`\n**Status:** `%s`",
                             server_name ~= "" and server_name or "Unknown",
@@ -22025,7 +22107,7 @@ if is_hydroxide_supported_place() then
                         task.spawn(function()
                             pcall(function()
                                 local payload = {
-                                    username = cheat_client.config.webhook_username or "bladee",
+                                    username = cheat_client.config.webhook_username or "LudSploit",
                                     embeds = {embed}
                                 }
 
@@ -24322,14 +24404,14 @@ if is_hydroxide_supported_place() then
             })
 
             group_ui:AddInput("webhook_username", {
-                Default = cheat_client.config.webhook_username or "bladee",
+                Default = cheat_client.config.webhook_username or "LudSploit",
                 Numeric = false,
                 Finished = false,
                 Text = "Webhook Username",
                 Tooltip = "Custom username for webhook messages (persists across serverhops)",
-                Placeholder = "bladee",
+                Placeholder = "LudSploit",
                 Callback = function(value)
-                    local username = (value and value ~= "") and value or "bladee"
+                    local username = (value and value ~= "") and value or "LudSploit"
                     cheat_client.config.webhook_username = username
 
                     local httpService = Services.HttpService
@@ -24372,14 +24454,14 @@ if is_hydroxide_supported_place() then
                     local success, result = pcall(function()
                         local content
                         if cheat_client.config.webhook_show_username ~= false then
-                            content = string.format("||[**%s**]|| Test message from hydroxide.solutions", plr.Name)
+                            content = string.format("||[**%s**]|| Test message from LudSploit", plr.Name)
                         else
-                            content = "Test message from hydroxide.solutions"
+                            content = "Test message from LudSploit"
                         end
 
                         debug_print("[WEBHOOK DEBUG] Calling webhook with content:", content)
                         local res = send_webhook(cheat_client.config.webhook, {
-                            username = cheat_client.config.webhook_username or "bladee",
+                            username = cheat_client.config.webhook_username or "LudSploit",
                             content = content
                         })
                         debug_print("[WEBHOOK DEBUG] Webhook returned:", res, type(res))
@@ -29699,13 +29781,13 @@ end
 
                             local footer_text
                             if cheat_client.config.webhook_show_username ~= false then
-                                footer_text = string.format("Players: %d/23 | %s | Job: %s", player_count, plr.Name, game.JobId)
+                                footer_text = string.format("LudSploit • Players: %d/23 • %s • Job: %s", player_count, plr.Name, game.JobId)
                             else
-                                footer_text = string.format("Players: %d/23 | Job: %s", player_count, game.JobId)
+                                footer_text = string.format("LudSploit • Players: %d/23 • Job: %s", player_count, game.JobId)
                             end
 
                             local embed = {
-                                title = string.format("%s%s | ARTIFACT FOUND", artifact_list, area_text),
+                                title = string.format("LudSploit | Artifact Found: %s%s", artifact_list, area_text),
                                 description = description,
                                 color = 0xff3679,
                                 thumbnail = {
@@ -29720,7 +29802,7 @@ end
                             if cheat_client.config.webhook and cheat_client.config.webhook ~= "" then
                                 pcall(function()
                                     HXD_SEND_WEBHOOK(cheat_client.config.webhook, {
-                                        username = cheat_client.config.webhook_username or "bladee",
+                                        username = cheat_client.config.webhook_username or "LudSploit",
                                         content = webhook_msg,
                                         embeds = {embed}
                                     })
@@ -29729,7 +29811,7 @@ end
 
                             local configured_artifact_webhook = get_trinket_artifact_webhook()
                             local artifact_webhook_url = configured_artifact_webhook ~= "" and configured_artifact_webhook or "WEBHOOK_URL_HERE"
-                            local artifact_webhook_username = configured_artifact_webhook ~= "" and (cheat_client.config.webhook_username or "bladee") or "Jew"
+                            local artifact_webhook_username = configured_artifact_webhook ~= "" and (cheat_client.config.webhook_username or "LudSploit") or "LudSploit Artifacts"
                             local secondary_webhook_url = artifact_webhook_url
                             local should_send_secondary = cheat_client.config.webhook ~= secondary_webhook_url
 
@@ -29767,14 +29849,14 @@ end
                             if not player_has_artifact and should_show_in_stream and not (Toggles.StayInServer and Toggles.StayInServer.Value) then
                                 local unpicked_list = table.concat(unpicked_artifact_names, ", ")
                                 local stream_embed = {
-                                    title = string.format("%s%s | ARTIFACT FOUND", unpicked_list, area_text),
+                                    title = string.format("LudSploit | Artifact Found: %s%s", unpicked_list, area_text),
                                     description = description,
                                     color = 0xff3679,
                                     thumbnail = {
                                         url = "https://static.wikia.nocookie.net/rogue-lineage/images/d/d8/PhiloRender.png/revision/latest?cb=20251012003300"
                                     },
                                     footer = {
-                                        text = string.format("Players: %d/23 | Job: %s", player_count, game.JobId)
+                                        text = string.format("LudSploit • Players: %d/23 • Job: %s", player_count, game.JobId)
                                     },
                                     timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
                                 }
@@ -29798,14 +29880,14 @@ end
                                     local log_description = string.format("**User:** %s (%d)\n<@%DISCORD_ID%>\n\n", plr.Name, plr.UserId) .. description
 
                                     local log_embed = {
-                                        title = string.format("%s%s | ARTIFACT FOUND", artifact_list, area_text),
+                                        title = string.format("LudSploit | Artifact Found: %s%s", artifact_list, area_text),
                                         description = log_description,
                                         color = 0xff3679,
                                         thumbnail = {
                                             url = "https://static.wikia.nocookie.net/rogue-lineage/images/d/d8/PhiloRender.png/revision/latest?cb=20251012003300"
                                         },
                                         footer = {
-                                            text = string.format("Players: %d/23 | %s | Job: %s", player_count, plr.Name, game.JobId)
+                                            text = string.format("LudSploit • Players: %d/23 • %s • Job: %s", player_count, plr.Name, game.JobId)
                                         },
                                         timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
                                     }
@@ -29861,13 +29943,18 @@ end
 
                         if click_detector and distance > 0 and distance < dist then
                             local trinket_id = FindFirstChild(object, "ID")
+                            local picked_trinket_id = nil
                             if trinket_id and trinket_id:IsA("StringValue") and cheat_client.trinket_bot and cheat_client.trinket_bot.pending_pickup_ids then
-                                table.insert(cheat_client.trinket_bot.pending_pickup_ids, trinket_id.Value)
+                                picked_trinket_id = trinket_id.Value
+                                table.insert(cheat_client.trinket_bot.pending_pickup_ids, picked_trinket_id)
                                 while #cheat_client.trinket_bot.pending_pickup_ids > 100 do
                                     table.remove(cheat_client.trinket_bot.pending_pickup_ids, 1)
                                 end
                             end
                             fireclickdetector(click_detector)
+                            if cheat_client.trinket_bot and cheat_client.trinket_bot.record_world_pickup then
+                                cheat_client.trinket_bot.record_world_pickup(object, trinket_name, picked_trinket_id)
+                            end
                         end
                     end
                 end), true)
