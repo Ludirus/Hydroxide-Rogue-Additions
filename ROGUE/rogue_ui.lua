@@ -750,6 +750,87 @@ if is_hydroxide_supported_place() then
         warn(string.format("[TELEPORT FAILED] %s - Retrying serverhop...", teleport_fail_reason))
     end)
 
+    local function confirmed_join_public_server(jobId, maxRetries, options)
+        options = options or {}
+        jobId = tostring(jobId or "")
+        if jobId == "" or jobId == tostring(game.JobId or "") then
+            return false
+        end
+
+        local label = tostring(options.label or "SERVERHOP")
+        local wait_seconds = tonumber(options.wait_seconds) or 10
+        local start_job_id = options.start_job_id or game.JobId
+        local resume_after_hop = options.resume_after_hop
+        if resume_after_hop == nil then
+            resume_after_hop = mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true"
+        end
+
+        local join_remote = get_join_public_server_remote(3)
+        if not join_remote then
+            warn(string.format("[%s] JoinPublicServer remote unavailable; refusing direct TeleportService fallback", label))
+            return false
+        end
+
+        maxRetries = math.max(1, math.min(tonumber(maxRetries) or 1, 3))
+
+        for attempt = 1, maxRetries do
+            teleport_failed = false
+            teleport_fail_reason = ""
+
+            join_remote = get_join_public_server_remote(3)
+            if not join_remote then
+                warn(string.format("[%s] JoinPublicServer remote disappeared during attempt", label))
+                return false
+            end
+
+            local fire_ok, fire_err = pcall(function()
+                join_remote:FireServer(jobId)
+            end)
+            if not fire_ok then
+                warn(string.format("[%s] JoinPublicServer FireServer failed: %s", label, tostring(fire_err)))
+                teleport_fail_reason = tostring(fire_err)
+                break
+            end
+
+            local deadline = tick() + wait_seconds
+            while tick() < deadline do
+                if game.JobId ~= start_job_id then
+                    print(string.format("[%s] Job changed %s -> %s", label, tostring(start_job_id), tostring(game.JobId)))
+                    if resume_after_hop then
+                        mem:SetItem("trinket_bot_resume_after_hop", "true")
+                    end
+                    return true
+                end
+
+                if teleport_failed then
+                    break
+                end
+
+                task.wait(0.1)
+            end
+
+            if game.JobId ~= start_job_id then
+                if resume_after_hop then
+                    mem:SetItem("trinket_bot_resume_after_hop", "true")
+                end
+                return true
+            end
+
+            warn(string.format(
+                "[%s] Attempt %d/%d to %s failed (reason=%s, still on %s)",
+                label,
+                attempt,
+                maxRetries,
+                tostring(jobId),
+                teleport_fail_reason ~= "" and teleport_fail_reason or "timeout",
+                tostring(game.JobId)
+            ))
+            task.wait(0.2 + (attempt * 0.15))
+        end
+
+        return false
+    end
+
     local is_gaia = game.PlaceId == 5208655184;
     local is_khei = game.PlaceId == 3541987450 or game.PlaceId == 14341521240;
 
@@ -3567,6 +3648,41 @@ if is_hydroxide_supported_place() then
                 return playerCount < 23 and playerCount >= (min_players or 0)
             end
 
+            function utility:get_serverhop_min_player_count()
+                local min_player_count = 0
+                if mem:HasItem("botstarted") and mem:HasItem("trinket_bot_settings") then
+                    local success, settings = pcall(function()
+                        return httpService:JSONDecode(mem:GetItem("trinket_bot_settings"))
+                    end)
+                    if success and settings then
+                        min_player_count = tonumber(settings.min_player_count) or 0
+                    end
+                end
+
+                return min_player_count
+            end
+
+            function utility:get_serverhop_candidates(min_players, ignore_history)
+                local serverInfo = FindFirstChild(rps, "ServerInfo")
+                if not serverInfo then
+                    return {}
+                end
+
+                local history = ignore_history and {} or get_server_history()
+                local candidates = {}
+                for _, server in ipairs(serverInfo:GetChildren()) do
+                    if is_public_server_folder_joinable(server, min_players or 0, history) then
+                        table.insert(candidates, server.Name)
+                    end
+                end
+
+                return candidates
+            end
+
+            function utility:confirmed_join_public_server(jobId, maxRetries, options)
+                return confirmed_join_public_server(jobId, maxRetries, options)
+            end
+
             function utility:get_largest_server()
                 local placeId = game.PlaceId
                 local currentJobId = game.JobId
@@ -3735,70 +3851,10 @@ if is_hydroxide_supported_place() then
             end
 
             local function attemptTeleport(jobId, maxRetries)
-                local join_remote = get_join_public_server_remote(3)
-                if not join_remote then
-                    warn("[SERVERHOP] JoinPublicServer remote unavailable; refusing direct TeleportService fallback")
-                    return false
-                end
-
-                maxRetries = math.min(maxRetries or 1, 3)
-                local start_job_id = game.JobId
-
-                for attempt = 1, maxRetries do
-                    teleport_failed = false
-                    teleport_fail_reason = ""
-
-                    join_remote = get_join_public_server_remote(3)
-                    if not join_remote then
-                        warn("[SERVERHOP] JoinPublicServer remote disappeared during attempt")
-                        return false
-                    end
-
-                    local fire_ok, fire_err = pcall(function()
-                        join_remote:FireServer(jobId)
-                    end)
-                    if not fire_ok then
-                        warn("[SERVERHOP] JoinPublicServer FireServer failed: " .. tostring(fire_err))
-                        teleport_fail_reason = tostring(fire_err)
-                        break
-                    end
-
-                    local deadline = tick() + 10
-                    while tick() < deadline do
-                        if game.JobId ~= start_job_id then
-                            print(string.format("[SERVERHOP] Job changed %s -> %s", start_job_id, game.JobId))
-                            if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
-                                mem:SetItem("trinket_bot_resume_after_hop", "true")
-                            end
-                            return true
-                        end
-
-                        if teleport_failed then
-                            break
-                        end
-
-                        task.wait(0.1)
-                    end
-
-                    if game.JobId ~= start_job_id then
-                        if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
-                            mem:SetItem("trinket_bot_resume_after_hop", "true")
-                        end
-                        return true
-                    end
-
-                    warn(string.format(
-                        "[SERVERHOP] Attempt %d/%d to %s failed (reason=%s, still on %s)",
-                        attempt,
-                        maxRetries,
-                        tostring(jobId),
-                        teleport_fail_reason ~= "" and teleport_fail_reason or "timeout",
-                        game.JobId
-                    ))
-                    task.wait(0.2 + (attempt * 0.15))
-                end
-
-                return false
+                return utility:confirmed_join_public_server(jobId, maxRetries, {
+                    label = "SERVERHOP",
+                    wait_seconds = 10,
+                })
             end
 
             local function unblockAll()
@@ -16729,6 +16785,59 @@ if is_hydroxide_supported_place() then
                     queue_hydroxide_loader_for_teleport((getgenv and getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD) or build_trinket_resume_payload_from_mem())
                 end
 
+                local function attempt_confirmed_trinket_serverhop_candidates(label, ignore_history)
+                    local min_player_count = 0
+                    if utility and utility.get_serverhop_min_player_count then
+                        min_player_count = utility:get_serverhop_min_player_count()
+                    end
+
+                    local candidates = {}
+                    if utility and utility.get_serverhop_candidates then
+                        candidates = utility:get_serverhop_candidates(min_player_count, ignore_history) or {}
+                    end
+
+                    if #candidates <= 0 then
+                        return false
+                    end
+
+                    local max_attempts = math.min(12, #candidates)
+                    for attempt = 1, max_attempts do
+                        if shared.is_unloading or serverhop_job_changed() then
+                            return true
+                        end
+
+                        local index = math.random(1, #candidates)
+                        local job_id = candidates[index]
+                        table.remove(candidates, index)
+
+                        trinket_bot_debug_log(
+                            "SERVERHOP_CONFIRM",
+                            string.format(
+                                "%s attempt=%d/%d job=%s min_players=%d ignore_history=%s",
+                                tostring(label),
+                                attempt,
+                                max_attempts,
+                                tostring(job_id),
+                                min_player_count,
+                                tostring(ignore_history == true)
+                            )
+                        )
+
+                        if utility
+                            and utility.confirmed_join_public_server
+                            and utility:confirmed_join_public_server(job_id, 1, {
+                                label = "TRINKET_SERVERHOP",
+                                wait_seconds = 10,
+                                start_job_id = serverhop_start_job,
+                                resume_after_hop = true,
+                            }) then
+                            return true
+                        end
+                    end
+
+                    return serverhop_job_changed()
+                end
+
                 local function attempt_standard_hydroxide_serverhop(label)
                     queue_resume_for_retry(label)
 
@@ -16739,7 +16848,17 @@ if is_hydroxide_supported_place() then
 
                     task.wait(returned and 0.65 or 0.2)
 
-                    local hop_ok = utility:Serverhop() == true
+                    local hop_ok = attempt_confirmed_trinket_serverhop_candidates(label, false)
+                    if not hop_ok then
+                        if utility then
+                            utility:clear_server_history()
+                        end
+                        hop_ok = attempt_confirmed_trinket_serverhop_candidates(label .. ":cleared_history", true)
+                    end
+                    if not hop_ok and utility then
+                        hop_ok = utility:Serverhop() == true
+                    end
+
                     if hop_ok or serverhop_job_changed() then
                         return true
                     end
