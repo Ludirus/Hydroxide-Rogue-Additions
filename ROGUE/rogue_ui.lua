@@ -13568,6 +13568,87 @@ if is_hydroxide_supported_place() then
                 end
             end
 
+            local server_player_join_order = {}
+            local next_server_player_join_order = 0
+            local last_whitelist_priority_refresh = 0
+
+            local function remember_server_player_order(player)
+                if not player or not player.UserId then
+                    return
+                end
+
+                if server_player_join_order[player.UserId] then
+                    return
+                end
+
+                next_server_player_join_order += 1
+                server_player_join_order[player.UserId] = next_server_player_join_order
+            end
+
+            for _, player in ipairs(plrs:GetPlayers()) do
+                remember_server_player_order(player)
+            end
+
+            utility:Connection(plrs.PlayerAdded, function(player)
+                remember_server_player_order(player)
+            end)
+
+            utility:Connection(plrs.PlayerRemoving, function(player)
+                if player and player.UserId then
+                    server_player_join_order[player.UserId] = nil
+                end
+            end)
+
+            local function is_manual_whitelisted_trinket_account(player)
+                if not player or player == plr then
+                    return false
+                end
+
+                return cheat_client
+                    and cheat_client.friends
+                    and table.find(cheat_client.friends, player.UserId) ~= nil
+            end
+
+            local function get_earlier_whitelisted_trinket_account()
+                local now = tick()
+                if now - last_whitelist_priority_refresh > 2 then
+                    last_whitelist_priority_refresh = now
+                    pcall(function()
+                        cheat_client:load_friends()
+                    end)
+                end
+
+                if not cheat_client or not cheat_client.friends or #cheat_client.friends == 0 then
+                    return nil
+                end
+
+                for _, player in ipairs(plrs:GetPlayers()) do
+                    remember_server_player_order(player)
+                end
+
+                remember_server_player_order(plr)
+
+                local local_order = server_player_join_order[plr.UserId] or math.huge
+                local earliest_player = nil
+                local earliest_order = math.huge
+
+                for _, player in ipairs(plrs:GetPlayers()) do
+                    if is_manual_whitelisted_trinket_account(player) then
+                        local order = server_player_join_order[player.UserId] or math.huge
+                        if order < local_order and order < earliest_order then
+                            earliest_player = player
+                            earliest_order = order
+                        end
+                    end
+                end
+
+                if earliest_player then
+                    return earliest_player, earliest_order, local_order
+                end
+
+                return nil
+            end
+
             local function path_uses_deepforest_restart(settings)
                 local enabled
                 if settings and settings.deepforest_restart_for_uploaded_path ~= nil then
@@ -16666,6 +16747,36 @@ if is_hydroxide_supported_place() then
                 end
             end
 
+            local function serverhop_if_whitelisted_account_has_priority(test_mode, context_label)
+                if test_mode then
+                    return false
+                end
+
+                local priority_player, priority_order, local_order = get_earlier_whitelisted_trinket_account()
+                if not priority_player then
+                    return false
+                end
+
+                trinket_bot.path_running = false
+                stage_trinket_bot_session_for_hop()
+
+                local reason = string.format(
+                    "%s: Whitelisted account %s joined before this account (order %d < %d) - yielding server",
+                    context_label or "Whitelisted account priority",
+                    tostring(priority_player.Name),
+                    tonumber(priority_order) or -1,
+                    tonumber(local_order) or -1
+                )
+
+                library:Notify(string.format(
+                    "Whitelisted account %s has server priority - serverhopping",
+                    tostring(priority_player.Name)
+                ))
+
+                TrinketBotServerhop(reason, true, nil, true)
+                return true
+            end
+
             local function SafeServerhop(reason, skip_test_mode_check, skip_gate_escape)
                 if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
                     local pos = plr.Character.HumanoidRootPart.Position
@@ -17545,6 +17656,11 @@ if is_hydroxide_supported_place() then
                         task.wait(1)
                         plr:Kick("Bot failed to start: No path points loaded")
                     end
+                    return
+                end
+
+                if serverhop_if_whitelisted_account_has_priority(test_mode, "Start path blocked") then
+                    release_trinket_execute_lock()
                     return
                 end
 
@@ -18626,6 +18742,10 @@ if is_hydroxide_supported_place() then
                 local i = 1
                 while i <= #trinket_bot.path_points do
                     if stop_trinket_bot_for_end_deadline("path loop") then
+                        return
+                    end
+
+                    if serverhop_if_whitelisted_account_has_priority(test_mode, "Path loop blocked") then
                         return
                     end
 
@@ -21286,6 +21406,18 @@ if is_hydroxide_supported_place() then
                                 return
                             end
                         end
+                    end
+
+                    local priority_saved_path = get_saved_trinket_path_name()
+                    if priority_saved_path ~= "" then
+                        trinket_bot.current_path_name = priority_saved_path
+                        pcall(function()
+                            mem:SetItem("trinket_bot_path", priority_saved_path)
+                        end)
+                    end
+
+                    if serverhop_if_whitelisted_account_has_priority(false, "Auto-resume blocked") then
+                        return
                     end
 
                     if not trinket_bot.ensure_character_spawned(45, 60) then
