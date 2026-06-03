@@ -704,6 +704,36 @@ if is_hydroxide_supported_place() then
         join_server = wait_for_child_timeout(requests_folder, "JoinPublicServer", 15)
     end
 
+    local function get_join_public_server_remote(timeout)
+        if game.PlaceId == 14341521240 then
+            return nil
+        end
+
+        if join_server and join_server.Parent then
+            return join_server
+        end
+
+        local requests = requests_folder
+        if not requests or not requests.Parent then
+            requests = FindFirstChild(rps, "Requests")
+            if not requests and timeout and timeout > 0 then
+                requests = wait_for_child_timeout(rps, "Requests", timeout)
+            end
+            requests_folder = requests
+        end
+
+        if not requests then
+            return nil
+        end
+
+        join_server = FindFirstChild(requests, "JoinPublicServer")
+        if not join_server and timeout and timeout > 0 then
+            join_server = wait_for_child_timeout(requests, "JoinPublicServer", timeout)
+        end
+
+        return join_server
+    end
+
     local live_folder = wait_for_child_timeout(ws, "Live", 25)
     if not live_folder then
         debug_warn("[HYDROXIDE] Workspace.Live not found yet - combat features may be limited until spawned")
@@ -3683,7 +3713,6 @@ if is_hydroxide_supported_place() then
 
         function utility:Serverhop()
             local httpService = Services.HttpService
-            local teleportService = Services.TeleportService
             local bot_started = mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true"
             if bot_started then
                 local current_count = 0
@@ -3706,33 +3735,38 @@ if is_hydroxide_supported_place() then
             end
 
             local function attemptTeleport(jobId, maxRetries)
-                if not join_server and not teleportService then
-                    warn("[TELEPORT] JoinPublicServer remote and TeleportService unavailable")
+                local join_remote = get_join_public_server_remote(3)
+                if not join_remote then
+                    warn("[SERVERHOP] JoinPublicServer remote unavailable; refusing direct TeleportService fallback")
                     return false
                 end
 
-                maxRetries = math.min(maxRetries or 1, 2)
+                maxRetries = math.min(maxRetries or 1, 3)
                 local start_job_id = game.JobId
 
                 for attempt = 1, maxRetries do
                     teleport_failed = false
                     teleport_fail_reason = ""
 
-                    if join_server then
-                        local fire_ok, fire_err = pcall(function()
-                            join_server:FireServer(jobId)
-                        end)
-                        if not fire_ok then
-                            warn("[TELEPORT] JoinPublicServer FireServer failed: " .. tostring(fire_err))
-                        end
+                    join_remote = get_join_public_server_remote(3)
+                    if not join_remote then
+                        warn("[SERVERHOP] JoinPublicServer remote disappeared during attempt")
+                        return false
                     end
 
-                    local deadline = tick() + 12
-                    local direct_fallback_at = tick() + (join_server and 3 or 0)
-                    local direct_fallback_sent = false
+                    local fire_ok, fire_err = pcall(function()
+                        join_remote:FireServer(jobId)
+                    end)
+                    if not fire_ok then
+                        warn("[SERVERHOP] JoinPublicServer FireServer failed: " .. tostring(fire_err))
+                        teleport_fail_reason = tostring(fire_err)
+                        break
+                    end
+
+                    local deadline = tick() + 10
                     while tick() < deadline do
                         if game.JobId ~= start_job_id then
-                            print(string.format("[TELEPORT] Job changed %s -> %s", start_job_id, game.JobId))
+                            print(string.format("[SERVERHOP] Job changed %s -> %s", start_job_id, game.JobId))
                             if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
                                 mem:SetItem("trinket_bot_resume_after_hop", "true")
                             end
@@ -3741,13 +3775,6 @@ if is_hydroxide_supported_place() then
 
                         if teleport_failed then
                             break
-                        end
-
-                        if not direct_fallback_sent and teleportService and tick() >= direct_fallback_at then
-                            direct_fallback_sent = true
-                            pcall(function()
-                                teleportService:TeleportToPlaceInstance(game.PlaceId, jobId, plr)
-                            end)
                         end
 
                         task.wait(0.1)
@@ -3761,7 +3788,7 @@ if is_hydroxide_supported_place() then
                     end
 
                     warn(string.format(
-                        "[TELEPORT] Attempt %d/%d to %s failed (reason=%s, still on %s)",
+                        "[SERVERHOP] Attempt %d/%d to %s failed (reason=%s, still on %s)",
                         attempt,
                         maxRetries,
                         tostring(jobId),
