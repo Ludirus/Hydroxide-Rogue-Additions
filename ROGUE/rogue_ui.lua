@@ -467,6 +467,7 @@ if is_hydroxide_supported_place() then
     local vim  = Services.VirtualInputManager
     local mem  = Services.MemStorageService
     local TRINKET_SESSION_MEM_KEY = "hydroxide_trinket_session"
+    local TRINKET_END_DEADLINE_KEY = "trinket_bot_end_deadline"
     local TRINKET_SESSION_FILE = "HYDROXIDE/trinket_resume_session.json"
 
     local function save_trinket_session_to_file(payload)
@@ -531,6 +532,10 @@ if is_hydroxide_supported_place() then
             if payload.restart_reason and payload.restart_reason ~= "" then
                 mem:SetItem("trinket_bot_restart_reason", tostring(payload.restart_reason))
             end
+        end
+
+        if payload.end_deadline then
+            mem:SetItem(TRINKET_END_DEADLINE_KEY, tostring(payload.end_deadline))
         end
 
         pcall(function()
@@ -600,6 +605,7 @@ if is_hydroxide_supported_place() then
             mem:RemoveItem("trinket_bot_restart_after_hop")
             mem:RemoveItem("trinket_bot_restart_reason")
             mem:RemoveItem("trinket_bot_resume_in_progress")
+            mem:RemoveItem(TRINKET_END_DEADLINE_KEY)
             mem:RemoveItem(TRINKET_SESSION_MEM_KEY)
         end)
         if getgenv then
@@ -1157,6 +1163,7 @@ if is_hydroxide_supported_place() then
             deepforest_restart_for_uploaded_path = true,
             death_lives_check = true,
             kick_on_one_life = false,
+            trinket_end_in_hours = 0,
             trinket_debug_ping_user_id = "",
 
 
@@ -1516,33 +1523,303 @@ if is_hydroxide_supported_place() then
     }
 
     local friends_file = "HYDROXIDE/friends.json"
-    function cheat_client:save_friends()
-        local success, err = pcall(function()
-            local json = Services.HttpService:JSONEncode(self.friends)
-            writefile(friends_file, json)
+    local whitelist_file = "HYDROXIDE/whitelist.json"
+    local WHITELIST_SYNC_KEY = "ludsploit_whitelist_sync"
+
+    local function normalize_whitelist_username(value)
+        value = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        value = value:gsub("^@", "")
+        return value
+    end
+
+    local function sort_whitelist_entries(entries)
+        table.sort(entries, function(a, b)
+            return tostring(a.username or ""):lower() < tostring(b.username or ""):lower()
         end)
-        if not success then
-            warn("[Friends] Failed to save:", err)
+        return entries
+    end
+
+    function cheat_client:get_whitelist_entries()
+        local entries = {}
+        local seen = {}
+
+        if type(self.whitelist_entries) == "table" then
+            for user_id, entry in pairs(self.whitelist_entries) do
+                local id = tonumber(entry.userId or user_id)
+                if id and not seen[id] then
+                    seen[id] = true
+                    table.insert(entries, {
+                        userId = id,
+                        username = normalize_whitelist_username(entry.username ~= "" and entry.username or tostring(id))
+                    })
+                end
+            end
+        end
+
+        for _, user_id in ipairs(self.friends or {}) do
+            local id = tonumber(user_id)
+            if id and not seen[id] then
+                seen[id] = true
+                table.insert(entries, {
+                    userId = id,
+                    username = tostring(id)
+                })
+            end
+        end
+
+        return sort_whitelist_entries(entries)
+    end
+
+    function cheat_client:apply_whitelist_payload(payload, source)
+        if type(payload) ~= "table" then
+            return false
+        end
+
+        local raw_entries = payload.entries or payload.whitelist or payload.friends or payload
+        if type(raw_entries) ~= "table" then
+            return false
+        end
+
+        local entries_by_id = {}
+        local ids = {}
+        local seen = {}
+
+        for _, entry in pairs(raw_entries) do
+            local user_id
+            local username
+
+            if type(entry) == "number" then
+                user_id = entry
+                username = tostring(entry)
+            elseif type(entry) == "string" then
+                local normalized = normalize_whitelist_username(entry)
+                local numeric_id = tonumber(normalized)
+                if numeric_id then
+                    user_id = numeric_id
+                    username = normalized
+                end
+            elseif type(entry) == "table" then
+                user_id = tonumber(entry.userId or entry.UserId or entry.id or entry.Id)
+                username = normalize_whitelist_username(entry.username or entry.Username or entry.name or entry.Name or tostring(user_id or ""))
+            end
+
+            if user_id and not seen[user_id] then
+                seen[user_id] = true
+                entries_by_id[user_id] = {
+                    userId = user_id,
+                    username = username ~= "" and username or tostring(user_id)
+                }
+                table.insert(ids, user_id)
+            end
+        end
+
+        self.whitelist_entries = entries_by_id
+        self.friends = ids
+        self.whitelist_version = tonumber(payload.version) or tonumber(self.whitelist_version) or 0
+        self.whitelist_source = source or "local"
+
+        if self.refresh_whitelist_ui then
+            pcall(function()
+                self:refresh_whitelist_ui()
+            end)
+        end
+
+        return true
+    end
+
+    function cheat_client:build_whitelist_payload()
+        return {
+            version = (tonumber(self.whitelist_version) or 0) + 1,
+            updated_at = os.time(),
+            entries = self:get_whitelist_entries()
+        }
+    end
+
+    function cheat_client:save_friends()
+        local payload = self:build_whitelist_payload()
+        local success, err = pcall(function()
+            local httpService = Services.HttpService
+            local compact_ids = {}
+            for _, entry in ipairs(payload.entries) do
+                table.insert(compact_ids, entry.userId)
+            end
+
+            if writefile then
+                writefile(friends_file, httpService:JSONEncode(compact_ids))
+                writefile(whitelist_file, httpService:JSONEncode(payload))
+            end
+
+            if mem then
+                mem:SetItem(WHITELIST_SYNC_KEY, httpService:JSONEncode(payload))
+            end
+        end)
+
+        if success then
+            self:apply_whitelist_payload(payload, "local")
+        else
+            warn("[Whitelist] Failed to save:", err)
         end
     end
 
     function cheat_client:load_friends()
+        local httpService = Services.HttpService
+        local best_payload = nil
+
+        pcall(function()
+            if mem and mem:HasItem(WHITELIST_SYNC_KEY) then
+                best_payload = httpService:JSONDecode(mem:GetItem(WHITELIST_SYNC_KEY))
+            end
+        end)
+
+        pcall(function()
+            if isfile and isfile(whitelist_file) then
+                local file_payload = httpService:JSONDecode(readfile(whitelist_file))
+                if type(file_payload) == "table" and (not best_payload or (tonumber(file_payload.version) or 0) >= (tonumber(best_payload.version) or 0)) then
+                    best_payload = file_payload
+                end
+            end
+        end)
+
+        if best_payload and self:apply_whitelist_payload(best_payload, "load") then
+            return
+        end
+
         local success, result = pcall(function()
-            if isfile(friends_file) then
+            if isfile and isfile(friends_file) then
                 local json = readfile(friends_file)
-                return Services.HttpService:JSONDecode(json)
+                return httpService:JSONDecode(json)
             end
             return {}
         end)
 
         if success and result then
-            self.friends = result
+            self:apply_whitelist_payload(result, "legacy")
         else
             self.friends = {}
+            self.whitelist_entries = {}
         end
     end
 
+    function cheat_client:add_whitelist_username(username)
+        username = normalize_whitelist_username(username)
+        if username == "" then
+            return false, "empty"
+        end
+
+        local success, user_id = pcall(function()
+            return Services.Players:GetUserIdFromNameAsync(username)
+        end)
+
+        if not success or not user_id then
+            return false, "not_found"
+        end
+
+        self.whitelist_entries = self.whitelist_entries or {}
+        self.friends = self.friends or {}
+        self.whitelist_entries[user_id] = {
+            userId = user_id,
+            username = username
+        }
+
+        local already_listed = false
+        for _, existing_id in ipairs(self.friends) do
+            if tonumber(existing_id) == user_id then
+                already_listed = true
+                break
+            end
+        end
+        if not already_listed then
+            self.friends[#self.friends + 1] = user_id
+        end
+
+        self:save_friends()
+        return true, username, user_id
+    end
+
+    function cheat_client:remove_whitelist_username(username)
+        username = normalize_whitelist_username(username)
+        if username == "" then
+            return false, "empty"
+        end
+
+        local lowered = username:lower()
+        local removed_id = nil
+        self.whitelist_entries = self.whitelist_entries or {}
+
+        for user_id, entry in pairs(self.whitelist_entries) do
+            if tostring(user_id) == username or tostring(entry.username or ""):lower() == lowered then
+                removed_id = tonumber(user_id)
+                self.whitelist_entries[user_id] = nil
+                break
+            end
+        end
+
+        if not removed_id then
+            local success, user_id = pcall(function()
+                return Services.Players:GetUserIdFromNameAsync(username)
+            end)
+            if success and user_id then
+                removed_id = user_id
+                self.whitelist_entries[user_id] = nil
+            end
+        end
+
+        if removed_id then
+            for i = #(self.friends or {}), 1, -1 do
+                if tonumber(self.friends[i]) == removed_id then
+                    table.remove(self.friends, i)
+                end
+            end
+            self:save_friends()
+            return true, username, removed_id
+        end
+
+        return false, "not_found"
+    end
+
+    function cheat_client:start_whitelist_sync()
+        if self.whitelist_sync_started then
+            return
+        end
+        self.whitelist_sync_started = true
+
+        task.spawn(function()
+            local last_mem_raw = nil
+            local last_file_raw = nil
+            local httpService = Services.HttpService
+
+            while shared and not shared.is_unloading do
+                pcall(function()
+                    if mem and mem:HasItem(WHITELIST_SYNC_KEY) then
+                        local raw = mem:GetItem(WHITELIST_SYNC_KEY)
+                        if raw and raw ~= last_mem_raw then
+                            local payload = httpService:JSONDecode(raw)
+                            if self:apply_whitelist_payload(payload, "mem") then
+                                last_mem_raw = raw
+                            end
+                        end
+                    end
+                end)
+
+                pcall(function()
+                    if isfile and isfile(whitelist_file) then
+                        local raw = readfile(whitelist_file)
+                        if raw and raw ~= last_file_raw then
+                            local payload = httpService:JSONDecode(raw)
+                            if self:apply_whitelist_payload(payload, "file") then
+                                last_file_raw = raw
+                            end
+                        end
+                    end
+                end)
+
+                task.wait(2)
+            end
+        end)
+    end
+
     cheat_client:load_friends()
+    cheat_client:start_whitelist_sync()
 
     local cpu = {
         services = {
@@ -3879,6 +4156,7 @@ if is_hydroxide_supported_place() then
     end
 
     local TRINKET_SESSION_MEM_KEY = "hydroxide_trinket_session"
+    local TRINKET_END_DEADLINE_KEY = "trinket_bot_end_deadline"
 
     local function build_trinket_resume_payload_from_mem()
         local file_payload = load_trinket_session_from_file()
@@ -3924,6 +4202,7 @@ if is_hydroxide_supported_place() then
             restart_after_hop = memService:HasItem("trinket_bot_restart_after_hop") and memService:GetItem("trinket_bot_restart_after_hop") == "true",
             path_name = memService:HasItem("trinket_bot_path") and memService:GetItem("trinket_bot_path") or "",
             restart_reason = memService:HasItem("trinket_bot_restart_reason") and memService:GetItem("trinket_bot_restart_reason") or "",
+            end_deadline = memService:HasItem(TRINKET_END_DEADLINE_KEY) and tonumber(memService:GetItem(TRINKET_END_DEADLINE_KEY)) or nil,
             from_job = game.JobId,
         }
     end
@@ -3935,11 +4214,13 @@ if is_hydroxide_supported_place() then
 
         local path_name = tostring(resume_payload.path_name or "")
         local restart_literal = resume_payload.restart_after_hop and "true" or "false"
+        local deadline_literal = resume_payload.end_deadline and tostring(tonumber(resume_payload.end_deadline) or "nil") or "nil"
 
         return string.format(
-            "if getgenv then getgenv().HYDROXIDE_QUEUED_TRINKET_RESUME={resume_after_hop=true,restart_after_hop=%s,path_name=%s,botstarted=true} getgenv().HYDROXIDE_LAST_QUEUED_TRINKET_PAYLOAD=getgenv().HYDROXIDE_QUEUED_TRINKET_RESUME end ",
+            "if getgenv then getgenv().HYDROXIDE_QUEUED_TRINKET_RESUME={resume_after_hop=true,restart_after_hop=%s,path_name=%s,botstarted=true,end_deadline=%s} getgenv().HYDROXIDE_LAST_QUEUED_TRINKET_PAYLOAD=getgenv().HYDROXIDE_QUEUED_TRINKET_RESUME end ",
             restart_literal,
-            lua_string_literal(path_name)
+            lua_string_literal(path_name),
+            deadline_literal
         )
     end
 
@@ -8286,6 +8567,7 @@ if is_hydroxide_supported_place() then
             Misc = window:AddTab("Misc", "settings"),
             Botting = window:AddTab("Botting", "bot"),
             Macros = window:AddTab("Macros", "play"),
+            Whitelist = window:AddTab("Whitelist", "user-check"),
             Interface = window:AddTab("Interface", "monitor"),
             Config = window:AddTab("Config", "save")
         }
@@ -13204,7 +13486,10 @@ if is_hydroxide_supported_place() then
                 pending_pickup_ids = {},
                 one_life_cautious = false,
                 one_life_cautious_reason = nil,
-                one_life_cautious_since = nil
+                one_life_cautious_since = nil,
+                end_deadline = nil,
+                end_watchdog_token = nil,
+                end_timer_handled = false
             }
 
             cheat_client.trinket_bot = trinket_bot
@@ -13439,6 +13724,7 @@ if is_hydroxide_supported_place() then
                     "trinket_bot_restart_after_hop",
                     "trinket_bot_restart_reason",
                     "trinket_bot_resume_in_progress",
+                    TRINKET_END_DEADLINE_KEY,
                     "serverhop_count",
                     TRINKET_SESSION_MEM_KEY,
                 }
@@ -13501,6 +13787,110 @@ if is_hydroxide_supported_place() then
                 end
             end
 
+            local function get_trinket_end_in_hours()
+                local configured = Options and Options.TrinketEndInHours and Options.TrinketEndInHours.Value or cheat_client.config.trinket_end_in_hours or 0
+                configured = tonumber(configured) or 0
+                if configured < 0 then
+                    return 0
+                end
+                return configured
+            end
+
+            local function get_trinket_end_deadline()
+                local deadline = tonumber(trinket_bot.end_deadline)
+                if deadline and deadline > 0 then
+                    return deadline
+                end
+
+                if mem:HasItem(TRINKET_END_DEADLINE_KEY) then
+                    deadline = tonumber(mem:GetItem(TRINKET_END_DEADLINE_KEY))
+                    if deadline and deadline > 0 then
+                        trinket_bot.end_deadline = deadline
+                        return deadline
+                    end
+                end
+
+                return nil
+            end
+
+            local function clear_trinket_end_deadline()
+                trinket_bot.end_deadline = nil
+                trinket_bot.end_timer_handled = false
+                trinket_bot.end_watchdog_token = nil
+                pcall(function()
+                    mem:RemoveItem(TRINKET_END_DEADLINE_KEY)
+                end)
+            end
+
+            local function arm_trinket_end_deadline(hours, preserve_existing)
+                hours = tonumber(hours) or get_trinket_end_in_hours()
+                cheat_client.config.trinket_end_in_hours = hours
+
+                if hours <= 0 then
+                    clear_trinket_end_deadline()
+                    return nil
+                end
+
+                local deadline
+                if preserve_existing then
+                    deadline = get_trinket_end_deadline()
+                end
+
+                deadline = deadline or (os.time() + math.floor(hours * 3600))
+                trinket_bot.end_deadline = deadline
+                trinket_bot.end_timer_handled = false
+                mem:SetItem(TRINKET_END_DEADLINE_KEY, tostring(deadline))
+                return deadline
+            end
+
+            local function trinket_end_deadline_reached()
+                local deadline = get_trinket_end_deadline()
+                return deadline ~= nil and os.time() >= deadline
+            end
+
+            local function stop_trinket_bot_for_end_deadline(context)
+                if not trinket_end_deadline_reached() or trinket_bot.end_timer_handled then
+                    return false
+                end
+
+                trinket_bot.end_timer_handled = true
+                local message = string.format("Bot stopped: End In timer reached%s", context and (" (" .. tostring(context) .. ")") or "")
+
+                if utility and utility.plain_webhook then
+                    pcall(function()
+                        utility:plain_webhook(message)
+                    end)
+                end
+
+                if stop_trinket_bot_manually then
+                    stop_trinket_bot_manually(message)
+                else
+                    trinket_bot.path_running = false
+                    mem:RemoveItem("botstarted")
+                    clear_trinket_end_deadline()
+                    library:Notify(message)
+                end
+
+                return true
+            end
+
+            local function start_trinket_end_watchdog()
+                if not get_trinket_end_deadline() then
+                    return
+                end
+
+                local token = {}
+                trinket_bot.end_watchdog_token = token
+                task.spawn(function()
+                    while trinket_bot.end_watchdog_token == token and not shared.is_unloading do
+                        if stop_trinket_bot_for_end_deadline("timer") then
+                            return
+                        end
+                        task.wait(5)
+                    end
+                end)
+            end
+
             local function build_trinket_resume_payload_for_hop(reason)
                 local path_name = trinket_bot.current_path_name or ""
                 if path_name == "" and mem:HasItem("trinket_bot_path") then
@@ -13516,6 +13906,7 @@ if is_hydroxide_supported_place() then
                     path_name = path_name,
                     from_job = game.JobId,
                     reason = tostring(reason or "serverhop"),
+                    end_deadline = get_trinket_end_deadline(),
                 }
             end
 
@@ -13538,6 +13929,9 @@ if is_hydroxide_supported_place() then
                     mem:SetItem("trinket_bot_restart_reason", resume_state.reason)
                     if resume_state.path_name ~= "" then
                         mem:SetItem("trinket_bot_path", resume_state.path_name)
+                    end
+                    if resume_state.end_deadline then
+                        mem:SetItem(TRINKET_END_DEADLINE_KEY, tostring(resume_state.end_deadline))
                     end
                     mem:SetItem(TRINKET_SESSION_MEM_KEY, Services.HttpService:JSONEncode(resume_state))
                 end)
@@ -14160,6 +14554,68 @@ if is_hydroxide_supported_place() then
                 return string.format("%dh %dm %ds", hours, minutes, seconds)
             end
 
+            local function get_last_looted_time(where)
+                if game.PlaceId ~= 5208655184 then
+                    return "N/A"
+                end
+
+                local trigger_name = ({
+                    cr = "CastleRockSnake",
+                    deepsunken = "evileye2",
+                    crypt = "CryptTrigger",
+                    temple = "MazeSnakes"
+                })[where]
+
+                if not trigger_name then
+                    return "N/A"
+                end
+
+                local success, result = pcall(function()
+                    local monster_spawns = FindFirstChild(ws, "MonsterSpawns")
+                    local triggers = monster_spawns and FindFirstChild(monster_spawns, "Triggers")
+                    local trigger = triggers and FindFirstChild(triggers, trigger_name)
+                    local last_spawned = trigger and FindFirstChild(trigger, "LastSpawned")
+                    if not last_spawned then
+                        return "N/A"
+                    end
+
+                    local minutes = math.floor(math.max(0, os.time() - last_spawned.Value) / 60)
+                    return tostring(minutes) .. "m"
+                end)
+
+                return success and result or "N/A"
+            end
+
+            local function format_last_looted_text()
+                return string.format(
+                    "**Castle Rock:** `%s`\n**Deep Sunken:** `%s`\n**Crypt of Kings:** `%s`\n**Temple of Fire:** `%s`",
+                    get_last_looted_time("cr"),
+                    get_last_looted_time("deepsunken"),
+                    get_last_looted_time("crypt"),
+                    get_last_looted_time("temple")
+                )
+            end
+
+            local function format_trinket_time_left_text()
+                local deadline = get_trinket_end_deadline()
+                if not deadline then
+                    return nil
+                end
+
+                local remaining = math.max(0, deadline - os.time())
+                local hours = math.floor(remaining / 3600)
+                local minutes = math.floor((remaining % 3600) / 60)
+                local seconds = math.floor(remaining % 60)
+
+                if hours > 0 then
+                    return string.format("%dh %dm left", hours, minutes)
+                elseif minutes > 0 then
+                    return string.format("%dm %ds left", minutes, seconds)
+                end
+
+                return string.format("%ds left", seconds)
+            end
+
             local function build_trinket_session_embed(title, reason, color)
                 local serverName, serverRegion = get_server_info()
                 local hours, minutes, seconds = get_session_duration_parts()
@@ -14169,6 +14625,8 @@ if is_hydroxide_supported_place() then
                 local war_max = idol_count * 6
                 local war_average = idol_count * 4.6
                 local path_name = trinket_bot.current_path_name and trinket_bot.current_path_name ~= "" and trinket_bot.current_path_name or "None"
+                local time_left_text = format_trinket_time_left_text()
+                local time_left_line = time_left_text and string.format("\n**Time Left:** `%s`", time_left_text) or ""
 
                 local footer_text
                 if cheat_client.config.webhook_show_username ~= false then
@@ -14185,11 +14643,12 @@ if is_hydroxide_supported_place() then
                         {
                             name = "Run Details",
                             value = string.format(
-                                "**Server:** `%s (%s)`\n**Path:** `%s`\n**Session:** `%s`",
+                                "**Server:** `%s (%s)`\n**Path:** `%s`\n**Session:** `%s`%s",
                                 serverName ~= "" and serverName or "Unknown",
                                 serverRegion ~= "" and serverRegion or "Unknown",
                                 path_name,
-                                format_duration_text(hours, minutes, seconds)
+                                format_duration_text(hours, minutes, seconds),
+                                time_left_line
                             ),
                             inline = false
                         },
@@ -14213,6 +14672,11 @@ if is_hydroxide_supported_place() then
                             inline = true
                         },
                         {
+                            name = "Last Looted",
+                            value = format_last_looted_text(),
+                            inline = false
+                        },
+                        {
                             name = "Items Collected",
                             value = string.format("```\n%s```", format_items_collected_text()),
                             inline = false
@@ -14228,15 +14692,19 @@ if is_hydroxide_supported_place() then
             local function format_loot_summary()
                 local hours, minutes, seconds = get_session_duration_parts()
                 local idol_count = get_inventory_tool_quantity("Idol of War")
+                local time_left_text = format_trinket_time_left_text()
+                local time_left_line = time_left_text and ("\n**Time Left:** " .. time_left_text) or ""
 
                 return string.format(
-                    "**Inventory Value:** %d\n**Idol of War:** %d\n**War Points:** %d-%d (avg %.1f)\n**Session:** %s\n%s",
+                    "**Inventory Value:** %d\n**Idol of War:** %d\n**War Points:** %d-%d (avg %.1f)\n**Session:** %s%s\n**Last Looted:**\n%s\n%s",
                     get_inventory_value(),
                     idol_count,
                     idol_count * 3,
                     idol_count * 6,
                     idol_count * 4.6,
                     format_duration_text(hours, minutes, seconds),
+                    time_left_line,
+                    format_last_looted_text(),
                     format_items_collected_text()
                 )
             end
@@ -15870,6 +16338,10 @@ if is_hydroxide_supported_place() then
                     return
                 end
 
+                if stop_trinket_bot_for_end_deadline("serverhop") then
+                    return
+                end
+
                 local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
                 if stay_in_server and not force_serverhop then
                     library:Notify(string.format("Serverhop blocked (stay in server): %s", reason or "Unknown"))
@@ -15942,6 +16414,8 @@ if is_hydroxide_supported_place() then
                     trinket_debug_ping_user_id = normalize_trinket_debug_ping_user_id(Options.TrinketDebugPingUserId and Options.TrinketDebugPingUserId.Value or cheat_client.config.trinket_debug_ping_user_id),
                     trinket_general_webhook = normalize_trinket_webhook_url(Options.TrinketGeneralWebhook and Options.TrinketGeneralWebhook.Value or ((cheat_client.config.trinket_general_webhook and cheat_client.config.trinket_general_webhook ~= "") and cheat_client.config.trinket_general_webhook or cheat_client.config.webhook)),
                     trinket_artifact_webhook = normalize_trinket_webhook_url(Options.TrinketArtifactWebhook and Options.TrinketArtifactWebhook.Value or cheat_client.config.trinket_artifact_webhook),
+                    trinket_end_in_hours = get_trinket_end_in_hours(),
+                    trinket_end_deadline = get_trinket_end_deadline(),
                     time_between_looting = Options.TimeBetweenLooting and Options.TimeBetweenLooting.Value or 5,
                     proximity_check = Options.ProximityCheck and Options.ProximityCheck.Value or 0,
                     critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 60,
@@ -17231,6 +17705,19 @@ if is_hydroxide_supported_place() then
                     end
 
                     start_loot_tracking()
+                    local end_hours = get_trinket_end_in_hours()
+                    if end_hours > 0 then
+                        local preserve_existing_deadline = (mem:HasItem("trinket_bot_resume_after_hop") and mem:GetItem("trinket_bot_resume_after_hop") == "true")
+                            or (getgenv and getgenv().HYDROXIDE_TRINKET_PENDING_RESUME == true)
+                        local deadline = arm_trinket_end_deadline(end_hours, preserve_existing_deadline)
+                        start_trinket_end_watchdog()
+                        if deadline then
+                            local remaining_minutes = math.max(0, math.floor((deadline - os.time()) / 60))
+                            library:Notify(string.format("Trinket bot will stop in %dm", remaining_minutes))
+                        end
+                    else
+                        clear_trinket_end_deadline()
+                    end
 
                     for _, connection in next, getconnections(plr.Idled) do
                         connection:Disable()
@@ -18138,6 +18625,10 @@ if is_hydroxide_supported_place() then
 
                 local i = 1
                 while i <= #trinket_bot.path_points do
+                    if stop_trinket_bot_for_end_deadline("path loop") then
+                        return
+                    end
+
                     if trinket_bot.moderator_detected then
                         library:Notify("Moderator detected - exiting main loop")
                         break
@@ -19712,6 +20203,10 @@ if is_hydroxide_supported_place() then
                 local completion_stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
                 local should_serverhop_after_completion = not test_mode and completed_entire_path and not completion_stay_in_server
 
+                if completed_entire_path and stop_trinket_bot_for_end_deadline("path completion") then
+                    return
+                end
+
                 if should_serverhop_after_completion then
                     stage_trinket_bot_session_for_hop()
                 end
@@ -19841,6 +20336,10 @@ if is_hydroxide_supported_place() then
                         library:Notify(string.format("Waiting %d minutes before restarting path...", wait_time_minutes))
 
                         for i = 1, wait_time_seconds do
+                            if stop_trinket_bot_for_end_deadline("stay wait") then
+                                return
+                            end
+
                             if not trinket_bot.path_running or not (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true") then
                                 library:Notify("Bot stopped during wait period")
                                 return
@@ -20428,6 +20927,32 @@ if is_hydroxide_supported_place() then
                     local debug_ping_user_id = normalize_trinket_debug_ping_user_id(settings.trinket_debug_ping_user_id)
                     cheat_client.config.trinket_debug_ping_user_id = debug_ping_user_id
                     Options.TrinketDebugPingUserId:SetValue(debug_ping_user_id)
+                end
+                if Options.TrinketEndInHours then
+                    local end_hours = tonumber(settings.trinket_end_in_hours) or 0
+                    if end_hours < 0 then
+                        end_hours = 0
+                    end
+                    cheat_client.config.trinket_end_in_hours = end_hours
+                    Options.TrinketEndInHours:SetValue(end_hours)
+
+                    local saved_deadline = tonumber(settings.trinket_end_deadline)
+                    local restore_saved_deadline = saved_deadline
+                        and saved_deadline > os.time()
+                        and (
+                            (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true")
+                            or (mem:HasItem("trinket_bot_resume_after_hop") and mem:GetItem("trinket_bot_resume_after_hop") == "true")
+                            or (getgenv and getgenv().HYDROXIDE_TRINKET_PENDING_RESUME == true)
+                        )
+
+                    if restore_saved_deadline then
+                        trinket_bot.end_deadline = saved_deadline
+                        trinket_bot.end_timer_handled = false
+                        mem:SetItem(TRINKET_END_DEADLINE_KEY, tostring(saved_deadline))
+                        start_trinket_end_watchdog()
+                    elseif end_hours <= 0 then
+                        clear_trinket_end_deadline()
+                    end
                 end
                 if Options.TimeBetweenLooting then Options.TimeBetweenLooting:SetValue(settings.time_between_looting or 5) end
                 if Options.ProximityCheck then Options.ProximityCheck:SetValue(settings.proximity_check or 0) end
@@ -21662,6 +22187,7 @@ if is_hydroxide_supported_place() then
                             trinket_debug_ping_user_id = normalize_trinket_debug_ping_user_id(Options.TrinketDebugPingUserId and Options.TrinketDebugPingUserId.Value or cheat_client.config.trinket_debug_ping_user_id),
                             trinket_general_webhook = normalize_trinket_webhook_url(Options.TrinketGeneralWebhook and Options.TrinketGeneralWebhook.Value or ((cheat_client.config.trinket_general_webhook and cheat_client.config.trinket_general_webhook ~= "") and cheat_client.config.trinket_general_webhook or cheat_client.config.webhook)),
                             trinket_artifact_webhook = normalize_trinket_webhook_url(Options.TrinketArtifactWebhook and Options.TrinketArtifactWebhook.Value or cheat_client.config.trinket_artifact_webhook),
+                            trinket_end_in_hours = get_trinket_end_in_hours(),
                             time_between_looting = Options.TimeBetweenLooting and Options.TimeBetweenLooting.Value or 5,
                             proximity_check = Options.ProximityCheck and Options.ProximityCheck.Value or 0,
                             critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 60,
@@ -21791,6 +22317,7 @@ if is_hydroxide_supported_place() then
                         mem:RemoveItem("trinket_bot_restart_reason")
                         mem:RemoveItem("trinket_bot_resume_after_hop")
                         mem:RemoveItem(TRINKET_SESSION_MEM_KEY)
+                        clear_trinket_end_deadline()
                         clear_trinket_session_file()
 
                         kick_after_path = false
@@ -21918,6 +22445,7 @@ if is_hydroxide_supported_place() then
                         mem:RemoveItem("trinket_bot_restart_reason")
                         mem:RemoveItem("trinket_bot_resume_after_hop")
                         mem:RemoveItem(TRINKET_SESSION_MEM_KEY)
+                        clear_trinket_end_deadline()
                         clear_trinket_session_file()
 
                         pcall(function()
@@ -21992,6 +22520,43 @@ if is_hydroxide_supported_place() then
                 Rounding = 0,
                 Suffix = "m",
                 Tooltip = "Wait time before respawning and restarting path (in minutes)"
+            })
+
+            group_trinket_looping:AddSlider("TrinketEndInHours", {
+                Text = "End In",
+                Default = cheat_client.config.trinket_end_in_hours or 0,
+                Min = 0,
+                Max = 12,
+                Rounding = 1,
+                Suffix = "h",
+                Compact = true,
+                Tooltip = "Stops trinket botting after this many hours. 0 disables the timed stop.",
+                Callback = function(value)
+                    value = tonumber(value) or 0
+                    if value < 0 then
+                        value = 0
+                    end
+
+                    cheat_client.config.trinket_end_in_hours = value
+
+                    local bot_running = trinket_bot.path_running or (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true")
+                    if not bot_running then
+                        if value <= 0 then
+                            clear_trinket_end_deadline()
+                        end
+                        return
+                    end
+
+                    if value > 0 then
+                        local deadline = arm_trinket_end_deadline(value, false)
+                        start_trinket_end_watchdog()
+                        local remaining_minutes = deadline and math.max(0, math.floor((deadline - os.time()) / 60)) or 0
+                        library:Notify(string.format("End In timer reset: %dm left", remaining_minutes))
+                    else
+                        clear_trinket_end_deadline()
+                        library:Notify("End In timer disabled")
+                    end
+                end
             })
 
             do
@@ -24580,6 +25145,119 @@ if is_hydroxide_supported_place() then
             end
         end
 
+        do
+            local group_whitelist = Tabs.Whitelist:AddLeftGroupbox("Synced Whitelist")
+            local group_whitelist_info = Tabs.Whitelist:AddRightGroupbox("Whitelist Info")
+
+            local whitelist_status_label = group_whitelist:AddLabel("Synced users: 0")
+            local whitelist_list_label = group_whitelist:AddLabel("No users whitelisted")
+            local whitelist_sync_label = group_whitelist_info:AddLabel("Sync source: loading")
+
+            local function get_whitelist_input()
+                return normalize_whitelist_username(Options.WhitelistUsername and Options.WhitelistUsername.Value or "")
+            end
+
+            function cheat_client:refresh_whitelist_ui()
+                local entries = self:get_whitelist_entries()
+                local names = {}
+
+                for index, entry in ipairs(entries) do
+                    if index > 24 then
+                        table.insert(names, string.format("+%d more", #entries - 24))
+                        break
+                    end
+                    table.insert(names, string.format("%s (%d)", tostring(entry.username or entry.userId), entry.userId))
+                end
+
+                local list_text = #names > 0 and table.concat(names, "\n") or "No users whitelisted"
+                whitelist_status_label:SetText(string.format("Synced users: %d", #entries))
+                whitelist_list_label:SetText(list_text)
+                whitelist_sync_label:SetText(string.format(
+                    "Sync source: %s | version %s",
+                    tostring(self.whitelist_source or "local"),
+                    tostring(self.whitelist_version or 0)
+                ))
+            end
+
+            group_whitelist:AddInput("WhitelistUsername", {
+                Text = "Username",
+                Default = "",
+                Numeric = false,
+                Finished = false,
+                Placeholder = "Roblox username"
+            })
+
+            group_whitelist:AddButton({
+                Text = "Add Username",
+                Func = function()
+                    local username = get_whitelist_input()
+                    if username == "" then
+                        library:Notify("Enter a username first", 2)
+                        return
+                    end
+
+                    task.spawn(function()
+                        library:Notify("Resolving " .. username .. "...", 2)
+                        local ok, name_or_reason, user_id = cheat_client:add_whitelist_username(username)
+                        if ok then
+                            library:Notify(string.format("Whitelisted %s (%d)", name_or_reason, user_id), 3)
+                            if Options.WhitelistUsername then
+                                Options.WhitelistUsername:SetValue("")
+                            end
+                        else
+                            library:Notify("Could not add username: " .. tostring(name_or_reason), 3)
+                        end
+                    end)
+                end
+            })
+
+            group_whitelist:AddButton({
+                Text = "Remove Username",
+                Func = function()
+                    local username = get_whitelist_input()
+                    if username == "" then
+                        library:Notify("Enter a username or user ID first", 2)
+                        return
+                    end
+
+                    task.spawn(function()
+                        local ok, name_or_reason, user_id = cheat_client:remove_whitelist_username(username)
+                        if ok then
+                            library:Notify(string.format("Removed %s (%d)", name_or_reason, user_id), 3)
+                            if Options.WhitelistUsername then
+                                Options.WhitelistUsername:SetValue("")
+                            end
+                        else
+                            library:Notify("Could not remove username: " .. tostring(name_or_reason), 3)
+                        end
+                    end)
+                end
+            })
+
+            group_whitelist:AddButton({
+                Text = "Clear Whitelist",
+                Func = function()
+                    cheat_client.friends = {}
+                    cheat_client.whitelist_entries = {}
+                    cheat_client:save_friends()
+                    library:Notify("Whitelist cleared and synced", 3)
+                end
+            })
+
+            group_whitelist_info:AddLabel("Whitelisted users are treated as friendly by every feature that checks friendly status.")
+            group_whitelist_info:AddLabel("Changes auto-save to HYDROXIDE/whitelist.json and sync through shared memory.")
+            group_whitelist_info:AddButton({
+                Text = "Force Sync Refresh",
+                Func = function()
+                    cheat_client:load_friends()
+                    cheat_client:refresh_whitelist_ui()
+                    library:Notify("Whitelist sync refreshed", 2)
+                end
+            })
+
+            cheat_client:refresh_whitelist_ui()
+        end
+
         local status_window
 
         do
@@ -24656,8 +25334,16 @@ if is_hydroxide_supported_place() then
 
                             if isAlreadyFriend then
                                 table.remove(cheat_client.friends, friendIndex)
+                                if cheat_client.whitelist_entries then
+                                    cheat_client.whitelist_entries[clickedPlayer.UserId] = nil
+                                end
                             else
                                 cheat_client.friends[#cheat_client.friends + 1] = clickedPlayer.UserId
+                                cheat_client.whitelist_entries = cheat_client.whitelist_entries or {}
+                                cheat_client.whitelist_entries[clickedPlayer.UserId] = {
+                                    userId = clickedPlayer.UserId,
+                                    username = clickedPlayer.Name
+                                }
                             end
 
                             if cheat_client.save_friends then
@@ -24675,6 +25361,7 @@ if is_hydroxide_supported_place() then
                 Func = function()
                     if cheat_client and cheat_client.friends then
                         cheat_client.friends = {}
+                        cheat_client.whitelist_entries = {}
                         if cheat_client.save_friends then
                             cheat_client:save_friends()
                         end
@@ -28092,8 +28779,16 @@ if is_hydroxide_supported_place() then
 
                     if isAlreadyFriend then
                         table.remove(cheat_client.friends, friendIndex)
+                        if cheat_client.whitelist_entries then
+                            cheat_client.whitelist_entries[clickMenuSelectedPlayer.UserId] = nil
+                        end
                     else
                         cheat_client.friends[#cheat_client.friends + 1] = clickMenuSelectedPlayer.UserId
+                        cheat_client.whitelist_entries = cheat_client.whitelist_entries or {}
+                        cheat_client.whitelist_entries[clickMenuSelectedPlayer.UserId] = {
+                            userId = clickMenuSelectedPlayer.UserId,
+                            username = clickMenuSelectedPlayer.Name
+                        }
                     end
 
                     cheat_client:save_friends()
