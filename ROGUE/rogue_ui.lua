@@ -3404,6 +3404,7 @@ if is_hydroxide_supported_place() then
 
         function utility:Serverhop()
             local httpService = Services.HttpService
+            local teleportService = Services.TeleportService
             local bot_started = mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true"
             if bot_started then
                 local current_count = 0
@@ -3426,8 +3427,8 @@ if is_hydroxide_supported_place() then
             end
 
             local function attemptTeleport(jobId, maxRetries)
-                if not join_server then
-                    warn("[TELEPORT] JoinPublicServer remote unavailable")
+                if not join_server and not teleportService then
+                    warn("[TELEPORT] JoinPublicServer remote and TeleportService unavailable")
                     return false
                 end
 
@@ -3438,9 +3439,18 @@ if is_hydroxide_supported_place() then
                     teleport_failed = false
                     teleport_fail_reason = ""
 
-                    join_server:FireServer(jobId)
+                    if join_server then
+                        local fire_ok, fire_err = pcall(function()
+                            join_server:FireServer(jobId)
+                        end)
+                        if not fire_ok then
+                            warn("[TELEPORT] JoinPublicServer FireServer failed: " .. tostring(fire_err))
+                        end
+                    end
 
                     local deadline = tick() + 12
+                    local direct_fallback_at = tick() + (join_server and 3 or 0)
+                    local direct_fallback_sent = false
                     while tick() < deadline do
                         if game.JobId ~= start_job_id then
                             print(string.format("[TELEPORT] Job changed %s -> %s", start_job_id, game.JobId))
@@ -3452,6 +3462,13 @@ if is_hydroxide_supported_place() then
 
                         if teleport_failed then
                             break
+                        end
+
+                        if not direct_fallback_sent and teleportService and tick() >= direct_fallback_at then
+                            direct_fallback_sent = true
+                            pcall(function()
+                                teleportService:TeleportToPlaceInstance(game.PlaceId, jobId, plr)
+                            end)
                         end
 
                         task.wait(0.1)
@@ -15547,14 +15564,14 @@ if is_hydroxide_supported_place() then
             end
 
             local teleport_debounce = false
-            local function TrinketBotServerhop(reason, skip_test_mode_check)
+            local function TrinketBotServerhop(reason, skip_test_mode_check, skip_return_to_menu, force_serverhop)
                 if not skip_test_mode_check and trinket_bot.test_mode then
                     library:Notify(string.format("Serverhop blocked (test mode): %s", reason or "Unknown"))
                     return
                 end
 
                 local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
-                if stay_in_server then
+                if stay_in_server and not force_serverhop then
                     library:Notify(string.format("Serverhop blocked (stay in server): %s", reason or "Unknown"))
                     if utility then
                         utility:plain_webhook(string.format("@here Serverhop blocked (stay in server): %s", reason or "Unknown"))
@@ -15820,7 +15837,7 @@ if is_hydroxide_supported_place() then
 
                 local serverhop_start_job = game.JobId
                 local serverhop_success = false
-                if InAir() then
+                if skip_return_to_menu or InAir() then
                     serverhop_success = utility:Serverhop() == true
                 else
                     pcall(function()
@@ -15844,10 +15861,14 @@ if is_hydroxide_supported_place() then
                     persist_trinket_resume_state_for_hop("serverhop_retry:" .. tostring(reason))
                     queue_hydroxide_loader_for_teleport((getgenv and getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD) or build_trinket_resume_payload_from_mem())
 
-                    pcall(function()
-                        rps.Requests.ReturnToMenu:InvokeServer()
-                    end)
-                    task.wait(0.75)
+                    if not skip_return_to_menu then
+                        pcall(function()
+                            rps.Requests.ReturnToMenu:InvokeServer()
+                        end)
+                        task.wait(0.75)
+                    else
+                        task.wait(0.2)
+                    end
 
                     serverhop_success = utility:Serverhop() == true
                     if not serverhop_success and game.JobId ~= serverhop_start_job then
@@ -15855,6 +15876,16 @@ if is_hydroxide_supported_place() then
                     end
 
                     if not serverhop_success then
+                        if skip_return_to_menu then
+                            library:Notify("!! DIRECT SERVERHOP FAILED - kicking for safety !!")
+                            if utility then
+                                utility:plain_webhook("@here DIRECT SERVERHOP FAILED during server health watchdog - kicking for safety")
+                            end
+                            task.wait(0.5)
+                            plr:Kick("Direct serverhop failed during server health watchdog")
+                            return
+                        end
+
                         local character = plr.Character
 
                         if character and cs:HasTag(character, "Danger") then
@@ -16025,6 +16056,193 @@ if is_hydroxide_supported_place() then
                 end)
                 TrinketBotServerhop(reason .. (escaped and " (escaped)" or " (escape failed)"), skip_test_mode_check)
             end
+
+            local function trinket_server_health_watch_active()
+                if trinket_bot.path_running or trinket_bot.death_resume_pending then
+                    return true
+                end
+
+                if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                    return true
+                end
+
+                if mem:HasItem("trinket_bot_resume_after_hop") and mem:GetItem("trinket_bot_resume_after_hop") == "true" then
+                    return true
+                end
+
+                if mem:HasItem("trinket_bot_restart_after_hop") and mem:GetItem("trinket_bot_restart_after_hop") == "true" then
+                    return true
+                end
+
+                return getgenv
+                    and (
+                        getgenv().HYDROXIDE_TRINKET_PENDING_RESUME
+                        or getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD
+                        or getgenv().HYDROXIDE_TRINKET_RESUME_STATE
+                    )
+            end
+
+            local function get_server_health_ping_stat()
+                local ok, ping_stat = pcall(function()
+                    local stats = Services.Stats
+                    local performance_stats = FindFirstChild(stats, "PerformanceStats") or stats:WaitForChild("PerformanceStats", 2)
+                    return performance_stats and (FindFirstChild(performance_stats, "Ping") or performance_stats:WaitForChild("Ping", 2)) or nil
+                end)
+
+                if ok then
+                    return ping_stat
+                end
+
+                return nil
+            end
+
+            local function run_timed_server_health_probe(timeout_seconds)
+                timeout_seconds = timeout_seconds or 6
+
+                local completed = false
+                local ok = false
+                local result = nil
+
+                task.spawn(function()
+                    ok, result = pcall(function()
+                        local requests = FindFirstChild(rps, "Requests")
+                        if not requests then
+                            error("Requests folder missing")
+                        end
+
+                        if not FindFirstChild(requests, "Get") then
+                            error("Get remote missing")
+                        end
+
+                        if not join_server then
+                            error("JoinPublicServer remote missing")
+                        end
+
+                        return Get("Lives")
+                    end)
+                    completed = true
+                end)
+
+                local deadline = os.clock() + timeout_seconds
+                while not completed and os.clock() < deadline and not shared.is_unloading do
+                    task.wait(0.05)
+                end
+
+                if not completed then
+                    return false, "Get remote timed out"
+                end
+
+                if not ok then
+                    return false, tostring(result)
+                end
+
+                return true, result
+            end
+
+            local function start_trinket_server_health_watchdog()
+                if trinket_bot.server_health_watchdog_started then
+                    return
+                end
+
+                trinket_bot.server_health_watchdog_started = true
+                trinket_bot.server_health_hop_triggered = false
+
+                local ping_stat = get_server_health_ping_stat()
+                local last_heartbeat_at = os.clock()
+                utility:Connection(rs.Heartbeat, function()
+                    last_heartbeat_at = os.clock()
+                end)
+
+                task.spawn(function()
+                    local high_ping_score = 0
+                    local stall_score = 0
+                    local remote_failure_score = 0
+                    local last_loop_at = os.clock()
+                    local last_probe_at = 0
+
+                    local function trigger_health_hop(reason)
+                        if trinket_bot.server_health_hop_triggered or shared.is_unloading then
+                            return
+                        end
+
+                        trinket_bot.server_health_hop_triggered = true
+                        reason = "Server health watchdog: " .. tostring(reason)
+                        trinket_bot_debug_log("SERVER_HEALTH_HOP", reason)
+                        pcall(function()
+                            library:Notify(reason .. " - serverhopping")
+                        end)
+                        pcall(function()
+                            trinket_plain_webhook("@here", reason .. " - serverhopping")
+                        end)
+                        TrinketBotServerhop(reason, true, true, true)
+                    end
+
+                    while shared and not shared.is_unloading do
+                        local now = os.clock()
+                        local loop_gap = now - last_loop_at
+                        last_loop_at = now
+
+                        if not trinket_server_health_watch_active() then
+                            high_ping_score = 0
+                            stall_score = 0
+                            remote_failure_score = 0
+                            trinket_bot.server_health_hop_triggered = false
+                            task.wait(2)
+                            continue
+                        end
+
+                        if loop_gap >= 9 or (now - last_heartbeat_at) >= 9 then
+                            stall_score = stall_score + 2
+                        else
+                            stall_score = math.max(0, stall_score - 1)
+                        end
+
+                        local ping_value = nil
+                        local ping_ok = ping_stat ~= nil and pcall(function()
+                            ping_value = ping_stat:GetValue()
+                        end)
+
+                        if not ping_ok and not ping_stat then
+                            ping_stat = get_server_health_ping_stat()
+                        end
+
+                        if ping_ok and tonumber(ping_value) then
+                            if tonumber(ping_value) >= 2500 then
+                                high_ping_score = high_ping_score + 1
+                            elseif tonumber(ping_value) <= 1200 then
+                                high_ping_score = math.max(0, high_ping_score - 1)
+                            end
+                        else
+                            high_ping_score = high_ping_score + 1
+                        end
+
+                        if now - last_probe_at >= 12 then
+                            last_probe_at = now
+                            local probe_ok, probe_reason = run_timed_server_health_probe(6)
+                            if probe_ok then
+                                remote_failure_score = 0
+                            else
+                                remote_failure_score = remote_failure_score + 1
+                                trinket_bot_debug_log("SERVER_HEALTH_PROBE_FAIL", tostring(probe_reason))
+                            end
+                        end
+
+                        if remote_failure_score >= 2 then
+                            trigger_health_hop("remotes unhealthy")
+                        elseif remote_failure_score >= 1 and high_ping_score >= 2 then
+                            trigger_health_hop("remotes unhealthy with extreme ping")
+                        elseif high_ping_score >= 5 then
+                            trigger_health_hop("sustained extreme ping")
+                        elseif stall_score >= 4 then
+                            trigger_health_hop("heartbeat/task scheduler stalled")
+                        end
+
+                        task.wait(2)
+                    end
+                end)
+            end
+
+            start_trinket_server_health_watchdog()
 
             local function handle_moderator_detection(moderator_player)
                 if not moderator_player then return end
@@ -23767,29 +23985,33 @@ if is_hydroxide_supported_place() then
                         local toggle = Toggles[featureName]
                         if not toggle then return end
 
-                        if state then
-                            toggle:SetDisabled(false)
+                    if state then
+                        toggle:SetDisabled(false)
 
-                            if toggle.Value ~= nil then
-                                toggle:SetValue(toggle.Value)
-                            end
+                        if toggle.Value ~= nil then
+                            toggle:SetValue(toggle.Value)
+                        end
 
-                            if toggle.TextLabel then
-                                toggle.TextLabel.TextColor3 = Library.Scheme.FontColor
+                        if toggle.TextLabel then
+                            toggle.TextLabel.TextColor3 = Library.Scheme.FontColor
+                            if Library.Registry and Library.Registry[toggle.TextLabel] then
                                 Library.Registry[toggle.TextLabel].TextColor3 = "FontColor"
                             end
-                        else
-                            if toggle.Value then
-                                toggle:SetValue(false)
-                            end
+                        end
+                    else
+                        if toggle.Value then
+                            toggle:SetValue(false)
+                        end
 
-                            toggle:SetDisabled(true)
+                        toggle:SetDisabled(true)
 
-                            if toggle.TextLabel then
-                                toggle.TextLabel.TextColor3 = Library.Scheme.Red
+                        if toggle.TextLabel then
+                            toggle.TextLabel.TextColor3 = Library.Scheme.Red
+                            if Library.Registry and Library.Registry[toggle.TextLabel] then
                                 Library.Registry[toggle.TextLabel].TextColor3 = "Red"
                             end
                         end
+                    end
                     end
 
                     for _, featureName in pairs(shared.blatant_features) do
