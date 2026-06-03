@@ -4041,9 +4041,11 @@ if is_hydroxide_supported_place() then
                             return true
                         end
 
-                        utility:plain_webhook("@here SERVERHOP FAILED: No joinable public servers after filtered ServerInfo/API attempts. Kicking bot.")
-                        task.wait(0.5)
-                        plr:Kick("Serverhop failed, dm zyu if this occurs [1]")
+                        if bot_started then
+                            utility:plain_webhook("@here SERVERHOP FAILED: No joinable public servers after filtered ServerInfo/API attempts. Retrying without kicking.")
+                        else
+                            utility:plain_webhook("@here SERVERHOP FAILED: No joinable public servers after filtered ServerInfo/API attempts.")
+                        end
                         return false
                     else
                         warn("[!] No servers found in ServerInfo, trying public API fallback")
@@ -16673,103 +16675,121 @@ if is_hydroxide_supported_place() then
                 end
 
                 local serverhop_start_job = game.JobId
-                local serverhop_success = false
-                if skip_return_to_menu or InAir() then
-                    serverhop_success = utility:Serverhop() == true
-                else
-                    pcall(function()
-                        rps.Requests.ReturnToMenu:InvokeServer()
-                    end)
-                    task.wait(0.35)
-                    serverhop_success = utility:Serverhop() == true
+
+                local function serverhop_job_changed()
+                    if game.JobId ~= serverhop_start_job then
+                        trinket_bot_debug_log("SERVERHOP", "job changed during hop; treating as success")
+                        return true
+                    end
+
+                    return false
                 end
 
-                if not serverhop_success and game.JobId ~= serverhop_start_job then
-                    serverhop_success = true
-                    trinket_bot_debug_log("SERVERHOP", "job changed during hop; treating as success")
+                local function invoke_return_to_menu_for_hop(timeout)
+                    timeout = timeout or 5
+
+                    local requests = FindFirstChild(rps, "Requests")
+                    local return_to_menu = requests and FindFirstChild(requests, "ReturnToMenu")
+                    if not return_to_menu then
+                        return false, "ReturnToMenu remote missing"
+                    end
+
+                    local finished = false
+                    local ok = false
+                    local result = nil
+
+                    task.spawn(function()
+                        ok, result = pcall(function()
+                            return return_to_menu:InvokeServer()
+                        end)
+                        finished = true
+                    end)
+
+                    local deadline = tick() + timeout
+                    while not finished and tick() < deadline and not shared.is_unloading do
+                        if serverhop_job_changed() then
+                            return true, "job changed"
+                        end
+                        task.wait(0.05)
+                    end
+
+                    if not finished then
+                        return false, "ReturnToMenu timed out"
+                    end
+
+                    if not ok then
+                        return false, tostring(result)
+                    end
+
+                    return true, "returned"
                 end
+
+                local function queue_resume_for_retry(retry_reason)
+                    persist_trinket_resume_state_for_hop("serverhop_retry:" .. tostring(retry_reason or reason))
+                    queue_hydroxide_loader_for_teleport((getgenv and getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD) or build_trinket_resume_payload_from_mem())
+                end
+
+                local function attempt_standard_hydroxide_serverhop(label)
+                    queue_resume_for_retry(label)
+
+                    local returned, return_reason = invoke_return_to_menu_for_hop(5)
+                    if not returned then
+                        warn(string.format("[SERVERHOP] ReturnToMenu failed before %s: %s", tostring(label), tostring(return_reason)))
+                    end
+
+                    task.wait(returned and 0.65 or 0.2)
+
+                    local hop_ok = utility:Serverhop() == true
+                    if hop_ok or serverhop_job_changed() then
+                        return true
+                    end
+
+                    return false
+                end
+
+                local serverhop_success = attempt_standard_hydroxide_serverhop("initial:" .. tostring(reason))
 
                 if not serverhop_success then
-                    library:Notify("!! SERVERHOP FAILED - retrying... !!")
+                    library:Notify("!! SERVERHOP FAILED - retrying without kicking !!")
                     if utility then
-                        utility:plain_webhook("@here SERVERHOP FAILED - retrying serverhop...")
+                        utility:plain_webhook("@here SERVERHOP FAILED - retrying without kicking")
                     end
 
-                    persist_trinket_resume_state_for_hop("serverhop_retry:" .. tostring(reason))
-                    queue_hydroxide_loader_for_teleport((getgenv and getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD) or build_trinket_resume_payload_from_mem())
-
-                    if not skip_return_to_menu then
-                        pcall(function()
-                            rps.Requests.ReturnToMenu:InvokeServer()
-                        end)
-                        task.wait(0.75)
-                    else
-                        task.wait(0.2)
+                    if utility then
+                        utility:clear_server_history()
                     end
 
-                    serverhop_success = utility:Serverhop() == true
-                    if not serverhop_success and game.JobId ~= serverhop_start_job then
-                        serverhop_success = true
+                    for retry = 1, 6 do
+                        if shared.is_unloading or serverhop_job_changed() then
+                            return
+                        end
+
+                        task.wait(math.min(1 + retry, 5))
+
+                        if attempt_standard_hydroxide_serverhop(string.format("%s retry %d", tostring(reason), retry)) then
+                            return
+                        end
                     end
 
-                    if not serverhop_success then
-                        if skip_return_to_menu then
-                            library:Notify("!! DIRECT SERVERHOP FAILED - kicking for safety !!")
+                    local persistent_notice_sent = false
+                    while not shared.is_unloading and not serverhop_job_changed() do
+                        if not persistent_notice_sent then
+                            persistent_notice_sent = true
+                            library:Notify("Serverhop still failing - continuing retries, not kicking")
                             if utility then
-                                utility:plain_webhook("@here DIRECT SERVERHOP FAILED during server health watchdog - kicking for safety")
+                                utility:plain_webhook("@here SERVERHOP STILL FAILING - continuing retries, not kicking")
                             end
-                            task.wait(0.5)
-                            plr:Kick("Direct serverhop failed during server health watchdog")
-                            return
                         end
 
-                        local character = plr.Character
-
-                        if character and cs:HasTag(character, "Danger") then
-                            library:Notify("!! SERVERHOP FAILED - In combat, waiting for danger to clear !!")
-                            utility:plain_webhook("@here SERVERHOP FAILED - In combat, waiting for danger to clear then retrying")
-
-                            local danger_cleared = false
-                            local danger_connection
-
-                            danger_connection = utility:Connection(cs:GetInstanceRemovedSignal("Danger"), function(instance)
-                                if instance == character then
-                                    danger_cleared = true
-                                    if danger_connection then
-                                        danger_connection:Disconnect()
-                                        danger_connection = nil
-                                    end
-                                end
-                            end)
-
-                            while not danger_cleared do
-                                task.wait(0.1)
-                            end
-
-                            library:Notify("Danger cleared - retrying serverhop now!")
-                            utility:plain_webhook("Danger cleared after combat - retrying serverhop")
-
-                            pcall(function()
-                                rps.Requests.ReturnToMenu:InvokeServer()
-                            end)
-                            task.wait(0.1)
-
-                            local final_serverhop = utility:Serverhop()
-                            if not final_serverhop then
-                                library:Notify("!! SERVERHOP STILL FAILED after danger cleared - kicking !!")
-                                utility:plain_webhook("@here SERVERHOP FAILED even after danger cleared - kicking for safety")
-                                task.wait(0.5)
-                                plr:Kick("Serverhop failed after danger cleared - Kicked for safety.")
-                            end
-                            return
-                        end
-
-                        library:Notify("!! SERVERHOP RETRY FAILED - kicking for safety !!")
                         if utility then
-                            utility:plain_webhook("@here SERVERHOP RETRY FAILED - kicking for safety")
+                            utility:clear_server_history()
                         end
-                        task.wait(0.5)
-                        plr:Kick("Serverhop failed after retry - Kicked for safety.")
+
+                        task.wait(5)
+
+                        if attempt_standard_hydroxide_serverhop("persistent:" .. tostring(reason)) then
+                            return
+                        end
                     end
                 end
             end
@@ -16981,7 +17001,7 @@ if is_hydroxide_supported_place() then
                             error("Get remote missing")
                         end
 
-                        if not join_server then
+                        if not get_join_public_server_remote(1) then
                             error("JoinPublicServer remote missing")
                         end
 
