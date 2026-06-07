@@ -16660,6 +16660,7 @@ if is_hydroxide_supported_place() then
                     }
                     local artifact_tier = {
                         ["Lannis's Amulet"] = true,
+                        ["Lannis Amulet"] = true,
                         ["Night Stone"] = true,
                         ["Howler Friend"] = true
                     }
@@ -16707,7 +16708,7 @@ if is_hydroxide_supported_place() then
 
                     local ping_content = #role_pings > 0 and table.concat(role_pings, " ") or ""
 
-                    if #embeds > 0 and webhook_url then
+                    if #embeds > 0 and webhook_url and webhook_url ~= "" then
                         local embed_count = #embeds
                         task.spawn(function()
                             local success, result = pcall(function()
@@ -17754,6 +17755,46 @@ if is_hydroxide_supported_place() then
                 return false
             end
 
+            local function wait_for_character_spawn_ready(timeout, settle_seconds)
+                timeout = timeout or 45
+                settle_seconds = settle_seconds or 1.5
+
+                local deadline = tick() + timeout
+
+                while tick() < deadline and not shared.is_unloading do
+                    local character = plr.Character
+                    if character
+                        and character.Parent
+                        and FindFirstChild(character, "HumanoidRootPart")
+                        and FindFirstChildOfClass(character, "Humanoid") then
+                        local ready_character = character
+                        local settle_deadline = tick() + settle_seconds
+                        local settled = true
+
+                        while tick() < settle_deadline and not shared.is_unloading do
+                            character = plr.Character
+                            if character ~= ready_character
+                                or not character.Parent
+                                or not FindFirstChild(character, "HumanoidRootPart")
+                                or not FindFirstChildOfClass(character, "Humanoid") then
+                                settled = false
+                                break
+                            end
+
+                            task.wait(0.1)
+                        end
+
+                        if settled and not shared.is_unloading then
+                            return true
+                        end
+                    end
+
+                    task.wait(0.1)
+                end
+
+                return false
+            end
+
             local function ExecutePath(test_mode)
                 if not cheat_client or not cheat_client.config then
                     trinket_bot_debug_log("EXECUTE_PATH_ABORT", "cheat_client.config missing")
@@ -17855,6 +17896,11 @@ if is_hydroxide_supported_place() then
                         return
                     end
                     library:Notify("Spawned character from StartMenu")
+                end
+
+                if not wait_for_character_spawn_ready(45, 1.5) then
+                    abort_execute_path_start("Character did not finish loading before ForceField exit.")
+                    return
                 end
 
                 local forcefield_clear_ok, forcefield_clear_reason = ensure_spawn_forcefield_cleared("path start")
@@ -21590,6 +21636,13 @@ if is_hydroxide_supported_place() then
                         trinket_plain_webhook("@everyone", "CRITICAL: Character did not spawn during auto-start - serverhopping")
                         library:Notify("Character did not spawn after Play - serverhopping")
                         TrinketBotServerhop("Character did not spawn after auto-start Play")
+                        return
+                    end
+
+                    if not wait_for_character_spawn_ready(45, 1.5) then
+                        trinket_plain_webhook("@here", "Auto-resume character did not finish loading before ForceField exit - serverhopping")
+                        library:Notify("Character did not settle after Play - serverhopping")
+                        TrinketBotServerhop("Character did not finish loading before auto-resume ForceField exit")
                         return
                     end
 
@@ -30792,21 +30845,10 @@ end
                                 timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
                             }
 
-                            if cheat_client.config.webhook and cheat_client.config.webhook ~= "" then
-                                pcall(function()
-                                    HXD_SEND_WEBHOOK(cheat_client.config.webhook, {
-                                        username = cheat_client.config.webhook_username or "LudSploit",
-                                        content = webhook_msg,
-                                        embeds = {embed}
-                                    })
-                                end)
-                            end
-
                             local configured_artifact_webhook = get_trinket_artifact_webhook()
-                            local artifact_webhook_url = configured_artifact_webhook ~= "" and configured_artifact_webhook or "WEBHOOK_URL_HERE"
-                            local artifact_webhook_username = configured_artifact_webhook ~= "" and (cheat_client.config.webhook_username or "LudSploit") or "LudSploit Artifacts"
-                            local secondary_webhook_url = artifact_webhook_url
-                            local should_send_secondary = cheat_client.config.webhook ~= secondary_webhook_url
+                            local artifact_webhook_url = configured_artifact_webhook
+                            local artifact_webhook_username = cheat_client.config.webhook_username or "LudSploit"
+                            local has_artifact_webhook = artifact_webhook_url ~= ""
 
                             local player_has_artifact = #unpicked_artifact_names == 0
 
@@ -30839,7 +30881,19 @@ end
                                 should_show_in_stream = true
                             end
 
-                            if not player_has_artifact and should_show_in_stream and not (Toggles.StayInServer and Toggles.StayInServer.Value) then
+                            if has_artifact_webhook then
+                                pcall(function()
+                                    HXD_SEND_WEBHOOK(artifact_webhook_url, {
+                                        username = artifact_webhook_username,
+                                        content = webhook_msg,
+                                        embeds = {embed}
+                                    })
+                                end)
+                            else
+                                warn("[LudSploit] Artifact webhook not configured; artifact alert was not sent.")
+                            end
+
+                            if has_artifact_webhook and not player_has_artifact and should_show_in_stream and not (Toggles.StayInServer and Toggles.StayInServer.Value) then
                                 local unpicked_list = table.concat(unpicked_artifact_names, ", ")
                                 local stream_embed = {
                                     title = string.format("LudSploit | Artifact Found: %s%s", unpicked_list, area_text),
@@ -30868,29 +30922,6 @@ end
                                     end
                                     library:Notify(string.format("Artifact log queued: %s (%d total)", unpicked_list, #cheat_client.trinket_bot.pending_artifact_logs))
                                 end
-                            elseif not player_has_artifact and should_send_secondary and bot_running and not (Toggles.StayInServer and Toggles.StayInServer.Value) then
-                                pcall(function()
-                                    local log_description = string.format("**User:** %s (%d)\n<@%DISCORD_ID%>\n\n", plr.Name, plr.UserId) .. description
-
-                                    local log_embed = {
-                                        title = string.format("LudSploit | Artifact Found: %s%s", artifact_list, area_text),
-                                        description = log_description,
-                                        color = 0xff3679,
-                                        thumbnail = {
-                                            url = "https://static.wikia.nocookie.net/rogue-lineage/images/d/d8/PhiloRender.png/revision/latest?cb=20251012003300"
-                                        },
-                                        footer = {
-                                            text = string.format("LudSploit • Players: %d/23 • %s • Job: %s", player_count, plr.Name, game.JobId)
-                                        },
-                                        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
-                                    }
-
-                                    HXD_SEND_WEBHOOK(secondary_webhook_url, {
-                                        username = artifact_webhook_username,
-                                        content = "<@&1454862161015734455>",
-                                        embeds = {log_embed}
-                                    })
-                                end)
                             end
 
                             batch_timer = nil
