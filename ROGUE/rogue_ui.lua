@@ -14424,6 +14424,7 @@ if is_hydroxide_supported_place() then
             local quantity_connections = {}
             local initial_quantities = {}
             local logged_pickup_ids = {}
+            local artifact_pickup_alert_ids = {}
             local recent_logged_pickup_names = {}
             local pd_char_connection = nil
             local auto_drop_char_connection = nil
@@ -14476,6 +14477,107 @@ if is_hydroxide_supported_place() then
                 recent_logged_pickup_names[session_loot_key(item_name)] = tick() + 4
             end
 
+            local function is_trinket_artifact_item(item_name)
+                item_name = normalize_session_loot_name(item_name)
+                for _, artifact_name in ipairs(cheat_client.artifacts or {}) do
+                    if item_name == normalize_session_loot_name(artifact_name) then
+                        return true
+                    end
+                end
+
+                return item_name == "Lannis's Amulet"
+                    or item_name == "Lannis Amulet"
+                    or item_name == "Phoenix Down"
+                    or item_name == "Phoenix Flower"
+                    or item_name == "Azael Horn"
+                    or item_name == "Mysterious Artifact"
+                    or item_name == "Rift Gem"
+                    or item_name == "Amulet of the White King"
+                    or item_name == "Night Stone"
+                    or item_name == "Howler Friend"
+            end
+
+            local function send_artifact_pickup_webhook(item_name, quantity, pickup_id)
+                if not is_trinket_artifact_item(item_name) then
+                    return
+                end
+
+                local alert_key = pickup_id and pickup_id ~= "" and tostring(pickup_id) or (session_loot_key(item_name) .. ":" .. tostring(math.floor(tick() / 10)))
+                if artifact_pickup_alert_ids[alert_key] then
+                    return
+                end
+                artifact_pickup_alert_ids[alert_key] = tick()
+
+                local count = 0
+                for key, seen_at in pairs(artifact_pickup_alert_ids) do
+                    count += 1
+                    if tick() - seen_at > 900 or count > 250 then
+                        artifact_pickup_alert_ids[key] = nil
+                    end
+                end
+
+                local configured_artifact_webhook = get_trinket_artifact_webhook()
+                local fallback_general_webhook = get_trinket_general_webhook()
+                local target_webhook = configured_artifact_webhook ~= "" and configured_artifact_webhook or fallback_general_webhook
+                if target_webhook == "" then
+                    warn("[LudSploit] No artifact or general webhook configured; artifact pickup alert was not sent.")
+                    return
+                end
+
+                local server_name, server_region = get_server_info()
+                local player_count = #plrs:GetPlayers()
+                local path_name = trinket_bot.current_path_name and trinket_bot.current_path_name ~= "" and trinket_bot.current_path_name or "None"
+                local footer_text
+                if cheat_client.config.webhook_show_username ~= false then
+                    footer_text = string.format("LudSploit • Players: %d/23 • %s • Job: %s", player_count, plr.Name, game.JobId)
+                else
+                    footer_text = string.format("LudSploit • Players: %d/23 • Job: %s", player_count, game.JobId)
+                end
+
+                local embed = {
+                    title = string.format("LudSploit | Artifact Collected: %s", normalize_session_loot_name(item_name)),
+                    description = string.format(
+                        "**Item:** `%s`\n**Quantity:** `%d`\n**Path:** `%s`\n**Server:** `%s (%s)`",
+                        normalize_session_loot_name(item_name),
+                        tonumber(quantity) or 1,
+                        path_name,
+                        server_name ~= "" and server_name or "Unknown",
+                        server_region ~= "" and server_region or "Unknown"
+                    ),
+                    color = 0xff3679,
+                    footer = {
+                        text = footer_text
+                    },
+                    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                }
+
+                local payload = {
+                    username = cheat_client.config.webhook_username or "LudSploit",
+                    content = "@here",
+                    embeds = {embed}
+                }
+
+                task.spawn(function()
+                    local ok, result = pcall(function()
+                        return HXD_SEND_WEBHOOK(target_webhook, payload)
+                    end)
+
+                    if (not ok or result == false)
+                        and configured_artifact_webhook ~= ""
+                        and fallback_general_webhook ~= ""
+                        and fallback_general_webhook ~= configured_artifact_webhook then
+                        warn("[LudSploit] Artifact pickup webhook failed, retrying general webhook fallback.")
+                        ok, result = pcall(function()
+                            return HXD_SEND_WEBHOOK(fallback_general_webhook, payload)
+                        end)
+                    end
+
+                    if not ok or result == false then
+                        warn("[LudSploit] Artifact pickup webhook failed: " .. tostring(result))
+                    end
+                end)
+            end
+
             local function remove_pending_pickup_id(pickup_id)
                 if not pickup_id or pickup_id == "" then
                     return
@@ -14510,6 +14612,8 @@ if is_hydroxide_supported_place() then
                 else
                     trinket_bot.session_loot[item_name] = quantity
                 end
+
+                send_artifact_pickup_webhook(item_name, quantity, pickup_id)
 
                 if trinket_bot.pending_artifact_logs and #trinket_bot.pending_artifact_logs > 0 then
                     pickup_id = pickup_id or table.remove(pending_pickup_ids, 1)
@@ -14580,6 +14684,7 @@ if is_hydroxide_supported_place() then
                 trinket_bot.session_start_time = os.clock()
                 initial_quantities = {}
                 logged_pickup_ids = {}
+                artifact_pickup_alert_ids = {}
                 recent_logged_pickup_names = {}
 
                 if loot_tracking_connection then
