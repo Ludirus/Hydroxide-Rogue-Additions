@@ -99,6 +99,10 @@ local function is_hydroxide_debug_enabled()
 
     if getgenv then
         local env = getgenv()
+        if local_player and local_player.Name == HYDROXIDE_DEBUG_USER then
+            env.HYDROXIDE_DEBUG = true
+            return true
+        end
         if env.HYDROXIDE_DEBUG ~= nil then
             return env.HYDROXIDE_DEBUG == true
         end

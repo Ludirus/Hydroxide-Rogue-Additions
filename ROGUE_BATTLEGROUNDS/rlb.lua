@@ -20,6 +20,10 @@ local function is_hydroxide_debug_enabled()
 
     if getgenv then
         local env = getgenv()
+        if local_player and local_player.Name == HYDROXIDE_DEBUG_USER then
+            env.HYDROXIDE_DEBUG = true
+            return true
+        end
         if env.HYDROXIDE_DEBUG ~= nil then
             return env.HYDROXIDE_DEBUG == true
         end
@@ -35,6 +39,10 @@ local function debug_warn(...)
     if is_hydroxide_debug_enabled() then
         warn(...)
     end
+end
+
+local function load_warn(...)
+    warn(...)
 end
 
 local executor_cloneref = cloneref
@@ -2459,6 +2467,15 @@ if game.PlaceId == 100010170789226 then
         end
         return repo_url .. url_encode_repo_path(path)
     end
+    local function cache_bust_url(url)
+        url = tostring(url or "")
+        if url == "" then
+            return url
+        end
+
+        local sep = url:find("?", 1, true) and "&" or "?"
+        return url .. sep .. "hxd_t=" .. tostring(os.time())
+    end
     local function get_queued_loader_script()
         local repo_url = tostring(getgenv and getgenv().HYDROXIDE_REPO or shared.hydroxide_repo or repo)
         if repo_url:sub(-1) ~= "/" then
@@ -2476,7 +2493,7 @@ if game.PlaceId == 100010170789226 then
                 :gsub("\n", "\\n") .. '"'
         end
         local entrypoint_assignment = has_entrypoint and (" getgenv().HYDROXIDE_ENTRYPOINT=" .. lua_string_literal(entrypoint)) or " getgenv().HYDROXIDE_ENTRYPOINT=nil"
-        local queue_debug_setup = [[ local hxd_debug=false pcall(function() local lp=game:GetService("Players").LocalPlayer if getgenv and getgenv().HYDROXIDE_DEBUG~=nil then hxd_debug=getgenv().HYDROXIDE_DEBUG==true elseif lp and lp.Name==]] .. lua_string_literal(HYDROXIDE_DEBUG_USER) .. [[ then hxd_debug=true if getgenv then getgenv().HYDROXIDE_DEBUG=true end elseif getgenv then getgenv().HYDROXIDE_DEBUG=false end end) ]]
+        local queue_debug_setup = [[ local hxd_debug=false pcall(function() local lp=game:GetService("Players").LocalPlayer if lp and lp.Name==]] .. lua_string_literal(HYDROXIDE_DEBUG_USER) .. [[ then hxd_debug=true if getgenv then getgenv().HYDROXIDE_DEBUG=true end elseif getgenv and getgenv().HYDROXIDE_DEBUG~=nil then hxd_debug=getgenv().HYDROXIDE_DEBUG==true elseif getgenv then getgenv().HYDROXIDE_DEBUG=false end end) ]]
         return [[if getgenv then getgenv().HYDROXIDE_REPO=]] .. lua_string_literal(repo_url) .. entrypoint_assignment .. [[ end if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1)]] .. queue_debug_setup .. [[local s,code=pcall(function() return game:HttpGet(]] .. lua_string_literal(loader_url) .. [[,true) end) if not s then if hxd_debug then print("[QUEUE ERROR] HttpGet failed:",code) end return end local fn,compileErr=loadstring(code) if not fn then if hxd_debug then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) end return end local ok,runErr=pcall(fn) if not ok and hxd_debug then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
     end
     --[[
@@ -2485,19 +2502,33 @@ if game.PlaceId == 100010170789226 then
     end)
     --]]
     local success, library_func = pcall(function()
-        return loadstring(game:HttpGet(repo .. "DEPENDENCIES/Library.lua", true))()
+        return loadstring(game:HttpGet(cache_bust_url(repo .. "DEPENDENCIES/Library.lua"), true))()
     end)
 
     if success then
-        library = library_func(shared, utility)
+        local library_ok, library_or_err = pcall(library_func, shared, utility)
+        if not library_ok then
+            load_warn("[HYDROXIDE] Failed to initialize UI library:", library_or_err)
+            return
+        end
+
+        library = library_or_err
         shared.library = library
 
         getgenv().Toggles = library.Toggles or {}
         getgenv().Options = library.Options or {}
         getgenv().Labels = library.Labels or {}
 
-        local SaveManager = loadstring(game:HttpGet(repo .. "DEPENDENCIES/SaveManager.lua", true))()
-        local ThemeManager = loadstring(game:HttpGet(repo .. "DEPENDENCIES/ThemeManager.lua", true))()
+        local save_ok, SaveManager = pcall(function()
+            return loadstring(game:HttpGet(cache_bust_url(repo .. "DEPENDENCIES/SaveManager.lua"), true))()
+        end)
+        local theme_ok, ThemeManager = pcall(function()
+            return loadstring(game:HttpGet(cache_bust_url(repo .. "DEPENDENCIES/ThemeManager.lua"), true))()
+        end)
+        if not save_ok or not theme_ok then
+            load_warn("[HYDROXIDE] Failed to load SaveManager/ThemeManager:", SaveManager, ThemeManager)
+            return
+        end
 
         SaveManager:SetLibrary(library)
         ThemeManager:SetLibrary(library)
@@ -2506,7 +2537,7 @@ if game.PlaceId == 100010170789226 then
         shared.SaveManager = SaveManager
         shared.ThemeManager = ThemeManager
     else
-        print("Failed to load UI library: " .. tostring(library_func))
+        load_warn("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
     end
 
     do -- Analytics (only sent to Hydroxide developers — baba & boss)

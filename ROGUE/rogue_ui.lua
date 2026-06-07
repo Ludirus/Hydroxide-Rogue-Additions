@@ -20,6 +20,10 @@ local function is_hydroxide_debug_enabled()
 
     if getgenv then
         local env = getgenv()
+        if local_player and local_player.Name == HYDROXIDE_DEBUG_USER then
+            env.HYDROXIDE_DEBUG = true
+            return true
+        end
         if env.HYDROXIDE_DEBUG ~= nil then
             return env.HYDROXIDE_DEBUG == true
         end
@@ -41,6 +45,10 @@ local function debug_warn(...)
     if is_hydroxide_debug_enabled() then
         warn(...)
     end
+end
+
+local function load_warn(...)
+    warn(...)
 end
 
 local function hydroxide_flag_truthy(value)
@@ -120,6 +128,7 @@ repeat task.wait() until Players.LocalPlayer or os.clock() >= local_player_deadl
 
 if not Players.LocalPlayer then
     set_hydroxide_load_stage("rogue_local_player_timeout")
+    load_warn("[HYDROXIDE] LocalPlayer was not available after 20s; aborting load")
     debug_warn("[HYDROXIDE] LocalPlayer was not available after 20s; aborting load")
     return
 end
@@ -4222,6 +4231,15 @@ if is_hydroxide_supported_place() then
             return string.format("%%%02X", string.byte(char))
         end)
     end
+    local function cache_bust_url(url)
+        url = tostring(url or "")
+        if url == "" then
+            return url
+        end
+
+        local sep = url:find("?", 1, true) and "&" or "?"
+        return url .. sep .. "hxd_t=" .. tostring(os.time())
+    end
     local function get_repo_file_url(path)
         return get_hydroxide_repo() .. url_encode_repo_path(path)
     end
@@ -4320,7 +4338,7 @@ if is_hydroxide_supported_place() then
         local loader_url = resolve_repo_file_url(has_entrypoint and entrypoint or "loader.lua")
         local entrypoint_assignment = has_entrypoint and (" getgenv().HYDROXIDE_ENTRYPOINT=" .. lua_string_literal(entrypoint)) or " getgenv().HYDROXIDE_ENTRYPOINT=nil"
         local silent_aim_assignment = hidden_grapple_silent_aim_enabled() and " getgenv().HYDROXIDE_SILENT_AIM=true getgenv().Silent_Aim=true" or ""
-        local queue_debug_setup = [[ local hxd_debug=false pcall(function() local lp=game:GetService("Players").LocalPlayer if getgenv and getgenv().HYDROXIDE_DEBUG~=nil then hxd_debug=getgenv().HYDROXIDE_DEBUG==true elseif lp and lp.Name==]] .. lua_string_literal(HYDROXIDE_DEBUG_USER) .. [[ then hxd_debug=true if getgenv then getgenv().HYDROXIDE_DEBUG=true end elseif getgenv then getgenv().HYDROXIDE_DEBUG=false end end) ]]
+        local queue_debug_setup = [[ local hxd_debug=false pcall(function() local lp=game:GetService("Players").LocalPlayer if lp and lp.Name==]] .. lua_string_literal(HYDROXIDE_DEBUG_USER) .. [[ then hxd_debug=true if getgenv then getgenv().HYDROXIDE_DEBUG=true end elseif getgenv and getgenv().HYDROXIDE_DEBUG~=nil then hxd_debug=getgenv().HYDROXIDE_DEBUG==true elseif getgenv then getgenv().HYDROXIDE_DEBUG=false end end) ]]
         return resume_prefix .. [[if getgenv then getgenv().HYDROXIDE_REPO=]] .. lua_string_literal(repo_url) .. entrypoint_assignment .. silent_aim_assignment .. [[ end if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1)]] .. queue_debug_setup .. [[local loaderUrl=]] .. lua_string_literal(loader_url) .. [[ local sep=loaderUrl:find("?",1,true) and "&" or "?" loaderUrl=loaderUrl..sep.."hxd_t="..tostring(os.time()) local s,code=pcall(function() return game:HttpGet(loaderUrl,true) end) if not s then if hxd_debug then print("[QUEUE ERROR] HttpGet failed:",code) end return end local fn,compileErr=loadstring(code) if not fn then if hxd_debug then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) end return end local ok,runErr=pcall(fn) if not ok and hxd_debug then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
     end
 
@@ -4352,11 +4370,19 @@ if is_hydroxide_supported_place() then
     debug_print("[HYDROXIDE] Bootstrap: loading UI library from " .. tostring(repo))
     local success, library_func = pcall(function()
         set_hydroxide_load_stage("rogue_ui_library_fetch", repo)
-        return loadstring(game:HttpGet(repo .. "DEPENDENCIES/Library.lua", true))()
+        return loadstring(game:HttpGet(cache_bust_url(repo .. "DEPENDENCIES/Library.lua"), true))()
     end)
 
     if success then
-        library = library_func(shared, utility)
+        local library_ok, library_or_err = pcall(library_func, shared, utility)
+        if not library_ok then
+            set_hydroxide_load_stage("rogue_ui_library_init_error", library_or_err)
+            load_warn("[HYDROXIDE] Failed to initialize UI library:", library_or_err)
+            debug_warn("[HYDROXIDE] Failed to initialize UI library:", library_or_err)
+            return
+        end
+
+        library = library_or_err
         shared.library = library
 
         getgenv().Toggles = library.Toggles or {}
@@ -4364,13 +4390,14 @@ if is_hydroxide_supported_place() then
         getgenv().Labels = library.Labels or {}
 
         local save_ok, save_manager_or_err = pcall(function()
-            return loadstring(game:HttpGet(repo .. "DEPENDENCIES/SaveManager.lua", true))()
+            return loadstring(game:HttpGet(cache_bust_url(repo .. "DEPENDENCIES/SaveManager.lua"), true))()
         end)
         local theme_ok, theme_manager_or_err = pcall(function()
-            return loadstring(game:HttpGet(repo .. "DEPENDENCIES/ThemeManager.lua", true))()
+            return loadstring(game:HttpGet(cache_bust_url(repo .. "DEPENDENCIES/ThemeManager.lua"), true))()
         end)
 
         if not save_ok or not theme_ok then
+            load_warn("[HYDROXIDE] Failed to load SaveManager/ThemeManager:", save_manager_or_err, theme_manager_or_err)
             debug_warn("[HYDROXIDE] Failed to load SaveManager/ThemeManager:", save_manager_or_err, theme_manager_or_err)
             return
         end
@@ -4388,6 +4415,7 @@ if is_hydroxide_supported_place() then
         set_hydroxide_load_stage("rogue_ui_library_ready")
     else
         set_hydroxide_load_stage("rogue_ui_library_error", library_func)
+        load_warn("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
         debug_warn("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
         debug_print("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
         return
@@ -4395,6 +4423,7 @@ if is_hydroxide_supported_place() then
 
     if not library or type(library) ~= "table" or not library.Notify then
         set_hydroxide_load_stage("rogue_ui_library_invalid")
+        load_warn("[HYDROXIDE] UI library loaded but is invalid; aborting script load")
         debug_warn("[HYDROXIDE] UI library loaded but is invalid; aborting script load")
         debug_print("[HYDROXIDE] UI library loaded but is invalid; aborting script load")
         return
@@ -33395,6 +33424,7 @@ end
             getgenv().HYDROXIDE_LAST_ERROR = tostring(err)
         end
         set_hydroxide_load_stage("rogue_source_error", err)
+        load_warn("[HYDROXIDE] Script error:", err)
         debug_warn("[HYDROXIDE] Script error:", err)
         debug_print("[HYDROXIDE] Script error:", err)
     else
@@ -33403,6 +33433,11 @@ end
     end
 else
     set_hydroxide_load_stage("rogue_unsupported_place", tostring(game.GameId))
+    load_warn(string.format(
+        "[HYDROXIDE] Unsupported place/game (PlaceId=%s GameId=%s). Run Hydroxide in Rogue Lineage (Gaia/Khei/RLP).",
+        tostring(game.PlaceId),
+        tostring(game.GameId)
+    ))
     debug_warn(string.format(
         "[HYDROXIDE] Unsupported place/game (PlaceId=%s GameId=%s). Run Hydroxide in Rogue Lineage (Gaia/Khei/RLP).",
         tostring(game.PlaceId),
