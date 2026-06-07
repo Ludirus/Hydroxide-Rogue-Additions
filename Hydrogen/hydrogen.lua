@@ -96,6 +96,7 @@ local defaultConfig = {
     legit_intent = false,
     legit_healthview = false,
     gate_hotkeys = false,
+    gate_flavor_lines = false,
     run_any_direction = false,
     target_part = "Closest",
     panic_key = "KeypadPlus",
@@ -129,6 +130,7 @@ local menuItems = {
     { key = "legit_intent", label = "Legit Intent", type = "toggle" },
     { key = "legit_healthview", label = "Legit Healthview", type = "toggle" },
     { key = "gate_hotkeys", label = "Gate Hotkeys", type = "toggle" },
+    { key = "gate_flavor_lines", label = "Gate One-Liners", type = "toggle" },
     { key = "run_any_direction", label = "Run Any Direction", type = "toggle" },
     { section = "system", id = "system" },
     { key = "panic_key", label = "Panic Keybind", type = "keybind" },
@@ -504,36 +506,67 @@ local headerAccent = New("Frame", {
 
 local logoPlate = New("Frame", {
     Name = "LogoPlate",
-    BackgroundColor3 = theme.control,
-    BackgroundTransparency = 0.08,
+    BackgroundColor3 = Color3.fromRGB(10, 6, 14),
+    BackgroundTransparency = 0,
     BorderSizePixel = 0,
     Position = UDim2.fromOffset(9, 9),
     Size = UDim2.fromOffset(32, 26),
 }, header)
 corner(logoPlate, 2)
-stroke(logoPlate, theme.redSoft, 0.28, 1)
+stroke(logoPlate, theme.red, 0.18, 1)
+
+New("UIGradient", {
+    Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(18, 9, 24)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(5, 3, 8)),
+    }),
+    Rotation = 90,
+}, logoPlate)
 
 local logo = New("TextLabel", {
     Name = "Logo",
     BackgroundTransparency = 1,
-    Font = Enum.Font.Code,
-    Text = "H/",
-    TextColor3 = theme.red,
-    TextSize = 13,
+    Font = Enum.Font.GothamBold,
+    Text = "H2",
+    TextColor3 = Color3.fromRGB(252, 238, 244),
+    TextSize = 12,
     TextXAlignment = Enum.TextXAlignment.Center,
     Position = UDim2.fromOffset(0, 0),
     Size = UDim2.fromScale(1, 1),
+    ZIndex = 3,
 }, logoPlate)
 
 New("Frame", {
-    Name = "LogoCut",
-    BackgroundColor3 = theme.text,
-    BackgroundTransparency = 0.12,
+    Name = "LogoOrbitA",
+    BackgroundColor3 = theme.red,
+    BackgroundTransparency = 0.18,
     BorderSizePixel = 0,
-    Position = UDim2.fromOffset(21, 7),
-    Rotation = -18,
-    Size = UDim2.fromOffset(1, 11),
+    Position = UDim2.fromOffset(5, 12),
+    Rotation = -21,
+    Size = UDim2.fromOffset(22, 1),
+    ZIndex = 2,
 }, logoPlate)
+
+New("Frame", {
+    Name = "LogoOrbitB",
+    BackgroundColor3 = theme.redSoft,
+    BackgroundTransparency = 0.05,
+    BorderSizePixel = 0,
+    Position = UDim2.fromOffset(5, 13),
+    Rotation = 21,
+    Size = UDim2.fromOffset(22, 1),
+    ZIndex = 2,
+}, logoPlate)
+
+local logoCore = New("Frame", {
+    Name = "LogoCore",
+    BackgroundColor3 = theme.red,
+    BorderSizePixel = 0,
+    Position = UDim2.fromOffset(25, 5),
+    Size = UDim2.fromOffset(3, 3),
+    ZIndex = 4,
+}, logoPlate)
+corner(logoCore, 3)
 
 local title = New("TextLabel", {
     Name = "Title",
@@ -2585,8 +2618,51 @@ local function set_textbox_text(textBox, text)
     end)
 end
 
+local numberWords = {
+    ["0"] = "Zero",
+    ["1"] = "One",
+    ["2"] = "Two",
+    ["3"] = "Three",
+    ["4"] = "Four",
+    ["5"] = "Five",
+    ["6"] = "Six",
+    ["7"] = "Seven",
+    ["8"] = "Eight",
+    ["9"] = "Nine",
+    ["10"] = "Ten",
+    ["11"] = "Eleven",
+    ["12"] = "Twelve",
+    ["13"] = "Thirteen",
+    ["14"] = "Fourteen",
+    ["15"] = "Fifteen",
+    ["16"] = "Sixteen",
+    ["17"] = "Seventeen",
+    ["18"] = "Eighteen",
+    ["19"] = "Nineteen",
+    ["20"] = "Twenty",
+}
+
+local gateFlavorLines = {
+    ", Prepare to vanish!",
+    ", welcome to Gripsville!",
+    ", blink and miss this!",
+    ", no time to panic!",
+    ", vanish like magic!",
+    ", quick as a trick!",
+    ", gone before dawn!",
+}
+
 local function title_case_destination(prefix, number)
-    return prefix .. " " .. tostring(number)
+    local word = numberWords[tostring(number)] or tostring(number)
+    return prefix .. " " .. word
+end
+
+local function add_gate_flavor_line(destination)
+    if not config.gate_flavor_lines then
+        return destination
+    end
+
+    return destination .. gateFlavorLines[math.random(1, #gateFlavorLines)]
 end
 
 local function gate_replacement(text)
@@ -2595,31 +2671,35 @@ local function gate_replacement(text)
 
     local prefix, number = value:match("^(df)(%d+)$")
     if prefix and number then
-        return title_case_destination("DeepForest", number)
+        return add_gate_flavor_line(title_case_destination("DeepForest", number))
     end
 
     prefix, number = value:match("^([tdfs])(%d+)$")
     if prefix and number then
+        local destination
         if prefix == "t" then
             if tostring(number) == "2" and math.random(1, 2) == 2 then
-                return "Tundra Temple"
+                destination = "Tundra Temple"
+            else
+                destination = title_case_destination("Tundra", number)
             end
-            return title_case_destination("Tundra", number)
         elseif prefix == "d" then
-            return title_case_destination("Desert", number)
+            destination = title_case_destination("Desert", number)
         elseif prefix == "f" then
-            return title_case_destination("Forest", number)
+            destination = title_case_destination("Forest", number)
         elseif prefix == "s" then
-            return title_case_destination("Shore", number)
+            destination = title_case_destination("Shore", number)
         end
+
+        return destination and add_gate_flavor_line(destination) or nil
     end
 
     if value == "sk" or value == "sky" or value == "skyc" or value == "skyca" or value == "skycas" or value == "skycast" or value == "skycastl" or value == "skycastle" then
-        return "Skycastle"
+        return add_gate_flavor_line("Skycastle")
     elseif value == "sn" or value == "sna" or value == "snai" or value == "snail" then
-        return "Snail"
+        return add_gate_flavor_line("Snail")
     elseif value == "si" or value == "sig" or value == "sigi" or value == "sigil" then
-        return "Sigil"
+        return add_gate_flavor_line("Sigil")
     end
 
     return nil
