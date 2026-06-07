@@ -143,6 +143,10 @@ local function set_hydroxide_load_stage(stage, detail)
     local env = getgenv()
     env.HYDROXIDE_LOAD_STAGE = tostring(stage)
     env.HYDROXIDE_LOAD_DETAIL = detail == nil and nil or tostring(detail)
+    local updater = env.HYDROXIDE_BOOT_DEBUG_UPDATE
+    if type(updater) == "function" then
+        pcall(updater, env.HYDROXIDE_LOAD_STAGE, env.HYDROXIDE_LOAD_DETAIL)
+    end
 end
 
 local seed = {seed}
@@ -150,8 +154,13 @@ local carry = {carry}
 local byte = string.byte
 local char = string.char
 local floor = math.floor
+local native_bxor = (bit32 and bit32.bxor) or (bit and bit.bxor)
 
 local function bxor(left, right)
+    if native_bxor then
+        return native_bxor(left, right)
+    end
+
     local result = 0
     local bit = 1
 

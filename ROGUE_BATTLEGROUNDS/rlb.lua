@@ -45,6 +45,35 @@ local function load_warn(...)
     warn(...)
 end
 
+local function set_hydroxide_load_stage(stage, detail)
+    if not getgenv then
+        return
+    end
+
+    local env = getgenv()
+    env.HYDROXIDE_LOAD_STAGE = tostring(stage)
+    env.HYDROXIDE_LOAD_DETAIL = detail == nil and nil or tostring(detail)
+    local updater = env.HYDROXIDE_BOOT_DEBUG_UPDATE
+    if type(updater) == "function" then
+        pcall(updater, env.HYDROXIDE_LOAD_STAGE, env.HYDROXIDE_LOAD_DETAIL)
+    end
+end
+
+local function fatal_load(stage, message)
+    message = tostring(message or "[HYDROXIDE] Bootstrap failed")
+    if getgenv then
+        getgenv().HYDROXIDE_LAST_ERROR = message
+    end
+    set_hydroxide_load_stage(stage or "battlegrounds_fatal_load", message)
+    load_warn(message)
+    error(message)
+end
+
+set_hydroxide_load_stage("battlegrounds_source_start")
+if getgenv then
+    getgenv().HYDROXIDE_LAST_ERROR = nil
+end
+
 local executor_cloneref = cloneref
 local function cloneref(value)
     if type(executor_cloneref) == "function" then
@@ -2502,14 +2531,14 @@ if game.PlaceId == 100010170789226 then
     end)
     --]]
     local success, library_func = pcall(function()
+        set_hydroxide_load_stage("battlegrounds_ui_library_fetch", repo)
         return loadstring(game:HttpGet(cache_bust_url(repo .. "DEPENDENCIES/Library.lua"), true))()
     end)
 
     if success then
         local library_ok, library_or_err = pcall(library_func, shared, utility)
         if not library_ok then
-            load_warn("[HYDROXIDE] Failed to initialize UI library:", library_or_err)
-            return
+            fatal_load("battlegrounds_ui_library_init_error", "[HYDROXIDE] Failed to initialize UI library: " .. tostring(library_or_err))
         end
 
         library = library_or_err
@@ -2526,8 +2555,10 @@ if game.PlaceId == 100010170789226 then
             return loadstring(game:HttpGet(cache_bust_url(repo .. "DEPENDENCIES/ThemeManager.lua"), true))()
         end)
         if not save_ok or not theme_ok then
-            load_warn("[HYDROXIDE] Failed to load SaveManager/ThemeManager:", SaveManager, ThemeManager)
-            return
+            fatal_load(
+                "battlegrounds_ui_managers_error",
+                "[HYDROXIDE] Failed to load SaveManager/ThemeManager: " .. tostring(SaveManager) .. " | " .. tostring(ThemeManager)
+            )
         end
 
         SaveManager:SetLibrary(library)
@@ -2536,8 +2567,9 @@ if game.PlaceId == 100010170789226 then
 
         shared.SaveManager = SaveManager
         shared.ThemeManager = ThemeManager
+        set_hydroxide_load_stage("battlegrounds_ui_library_ready")
     else
-        load_warn("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
+        fatal_load("battlegrounds_ui_library_error", "[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
     end
 
     do -- Analytics (only sent to Hydroxide developers — baba & boss)
@@ -14358,6 +14390,18 @@ if game.PlaceId == 100010170789226 then
         if key then
             getgenv()[key] = nil
         end
-        warn("[hydroxide.sol] Script error:", err)
+        if getgenv then
+            getgenv().HYDROXIDE_LAST_ERROR = tostring(err)
+        end
+        set_hydroxide_load_stage("battlegrounds_source_error", err)
+        load_warn("[HYDROXIDE] Script error:", err)
+        error(err)
+    else
+        set_hydroxide_load_stage("battlegrounds_source_ready")
     end
+else
+    fatal_load(
+        "battlegrounds_unsupported_place",
+        string.format("[HYDROXIDE] Unsupported Battlegrounds place/game (PlaceId=%s GameId=%s).", tostring(game.PlaceId), tostring(game.GameId))
+    )
 end

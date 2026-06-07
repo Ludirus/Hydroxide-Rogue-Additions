@@ -89,6 +89,20 @@ local function set_hydroxide_load_stage(stage, detail)
     local env = getgenv()
     env.HYDROXIDE_LOAD_STAGE = tostring(stage)
     env.HYDROXIDE_LOAD_DETAIL = detail == nil and nil or tostring(detail)
+    local updater = env.HYDROXIDE_BOOT_DEBUG_UPDATE
+    if type(updater) == "function" then
+        pcall(updater, env.HYDROXIDE_LOAD_STAGE, env.HYDROXIDE_LOAD_DETAIL)
+    end
+end
+
+local function fatal_load(stage, message)
+    message = tostring(message or "[HYDROXIDE] Bootstrap failed")
+    if getgenv then
+        getgenv().HYDROXIDE_LAST_ERROR = message
+    end
+    set_hydroxide_load_stage(stage or "rogue_fatal_load", message)
+    load_warn(message)
+    error(message)
 end
 
 set_hydroxide_load_stage("rogue_source_start")
@@ -127,10 +141,7 @@ local local_player_deadline = os.clock() + 20
 repeat task.wait() until Players.LocalPlayer or os.clock() >= local_player_deadline
 
 if not Players.LocalPlayer then
-    set_hydroxide_load_stage("rogue_local_player_timeout")
-    load_warn("[HYDROXIDE] LocalPlayer was not available after 20s; aborting load")
-    debug_warn("[HYDROXIDE] LocalPlayer was not available after 20s; aborting load")
-    return
+    fatal_load("rogue_local_player_timeout", "[HYDROXIDE] LocalPlayer was not available after 20s; aborting load")
 end
 
 if getgenv and getgenv().HYDROXIDE_DEBUG == nil then
@@ -4376,10 +4387,7 @@ if is_hydroxide_supported_place() then
     if success then
         local library_ok, library_or_err = pcall(library_func, shared, utility)
         if not library_ok then
-            set_hydroxide_load_stage("rogue_ui_library_init_error", library_or_err)
-            load_warn("[HYDROXIDE] Failed to initialize UI library:", library_or_err)
-            debug_warn("[HYDROXIDE] Failed to initialize UI library:", library_or_err)
-            return
+            fatal_load("rogue_ui_library_init_error", "[HYDROXIDE] Failed to initialize UI library: " .. tostring(library_or_err))
         end
 
         library = library_or_err
@@ -4397,9 +4405,10 @@ if is_hydroxide_supported_place() then
         end)
 
         if not save_ok or not theme_ok then
-            load_warn("[HYDROXIDE] Failed to load SaveManager/ThemeManager:", save_manager_or_err, theme_manager_or_err)
-            debug_warn("[HYDROXIDE] Failed to load SaveManager/ThemeManager:", save_manager_or_err, theme_manager_or_err)
-            return
+            fatal_load(
+                "rogue_ui_managers_error",
+                "[HYDROXIDE] Failed to load SaveManager/ThemeManager: " .. tostring(save_manager_or_err) .. " | " .. tostring(theme_manager_or_err)
+            )
         end
 
         local SaveManager = save_manager_or_err
@@ -4414,19 +4423,11 @@ if is_hydroxide_supported_place() then
         debug_print("[HYDROXIDE] Bootstrap: UI library ready")
         set_hydroxide_load_stage("rogue_ui_library_ready")
     else
-        set_hydroxide_load_stage("rogue_ui_library_error", library_func)
-        load_warn("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
-        debug_warn("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
-        debug_print("[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
-        return
+        fatal_load("rogue_ui_library_error", "[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
     end
 
     if not library or type(library) ~= "table" or not library.Notify then
-        set_hydroxide_load_stage("rogue_ui_library_invalid")
-        load_warn("[HYDROXIDE] UI library loaded but is invalid; aborting script load")
-        debug_warn("[HYDROXIDE] UI library loaded but is invalid; aborting script load")
-        debug_print("[HYDROXIDE] UI library loaded but is invalid; aborting script load")
-        return
+        fatal_load("rogue_ui_library_invalid", "[HYDROXIDE] UI library loaded but is invalid; aborting script load")
     end
 
     pcall(function()
@@ -33427,25 +33428,27 @@ end
         load_warn("[HYDROXIDE] Script error:", err)
         debug_warn("[HYDROXIDE] Script error:", err)
         debug_print("[HYDROXIDE] Script error:", err)
+        error(err)
     else
         set_hydroxide_load_stage("rogue_source_ready")
         debug_print("[HYDROXIDE] Bootstrap: main init finished without errors")
     end
 else
+    local message = string.format(
+        "[HYDROXIDE] Unsupported place/game (PlaceId=%s GameId=%s). Run Hydroxide in Rogue Lineage (Gaia/Khei/RLP).",
+        tostring(game.PlaceId),
+        tostring(game.GameId)
+    )
+    if getgenv then
+        getgenv().HYDROXIDE_LAST_ERROR = message
+    end
     set_hydroxide_load_stage("rogue_unsupported_place", tostring(game.GameId))
-    load_warn(string.format(
-        "[HYDROXIDE] Unsupported place/game (PlaceId=%s GameId=%s). Run Hydroxide in Rogue Lineage (Gaia/Khei/RLP).",
-        tostring(game.PlaceId),
-        tostring(game.GameId)
-    ))
-    debug_warn(string.format(
-        "[HYDROXIDE] Unsupported place/game (PlaceId=%s GameId=%s). Run Hydroxide in Rogue Lineage (Gaia/Khei/RLP).",
-        tostring(game.PlaceId),
-        tostring(game.GameId)
-    ))
+    load_warn(message)
+    debug_warn(message)
     debug_print(string.format(
         "[HYDROXIDE] Unsupported place/game (PlaceId=%s GameId=%s)",
         tostring(game.PlaceId),
         tostring(game.GameId)
     ))
+    error(message)
 end

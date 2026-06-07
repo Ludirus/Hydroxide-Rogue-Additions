@@ -2,10 +2,140 @@ local repo = tostring(getgenv and getgenv().HYDROXIDE_REPO or "https://raw.githu
 if repo:sub(-1) ~= "/" then
     repo = repo .. "/"
 end
+local HYDROXIDE_DEBUG_USER = "Caikunya"
 if getgenv then
     local env = getgenv()
     env.HYDROXIDE_REPO = repo
     env.HYDROXIDE_LAST_ERROR = nil
+end
+
+local function loader_truthy(value)
+    if value == true then
+        return true
+    end
+    if type(value) == "number" then
+        return value ~= 0
+    end
+    if type(value) ~= "string" then
+        return false
+    end
+
+    local text = value:lower():gsub("^%s+", ""):gsub("%s+$", "")
+    return text == "true" or text == "1" or text == "yes" or text == "on" or text == "debug"
+end
+
+local function get_loader_local_player()
+    local ok, players = pcall(game.GetService, game, "Players")
+    return ok and players and players.LocalPlayer or nil
+end
+
+local function boot_debug_enabled()
+    local local_player = get_loader_local_player()
+    if local_player and local_player.Name == HYDROXIDE_DEBUG_USER then
+        if getgenv then
+            getgenv().HYDROXIDE_DEBUG = true
+            getgenv().HYDROXIDE_BOOT_DEBUG = true
+        end
+        return true
+    end
+
+    if getgenv then
+        local env = getgenv()
+        return loader_truthy(env.HYDROXIDE_BOOT_DEBUG) or loader_truthy(env.HYDROXIDE_LOADER_DEBUG) or loader_truthy(env.HYDROXIDE_DEBUG)
+    end
+
+    return false
+end
+
+local boot_debug_label = nil
+local function ensure_boot_debug_overlay()
+    if not boot_debug_enabled() then
+        return nil
+    end
+    if boot_debug_label and boot_debug_label.Parent then
+        return boot_debug_label
+    end
+
+    local parent = nil
+    pcall(function()
+        parent = gethui and gethui() or game:GetService("CoreGui")
+    end)
+    if not parent then
+        local local_player = get_loader_local_player()
+        parent = local_player and local_player:FindFirstChildOfClass("PlayerGui") or nil
+    end
+    if not parent then
+        return nil
+    end
+
+    local existing = parent:FindFirstChild("HydroxideBootDebug")
+    if existing then
+        existing:Destroy()
+    end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "HydroxideBootDebug"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+
+    local frame = Instance.new("Frame")
+    frame.Name = "Panel"
+    frame.BackgroundColor3 = Color3.fromRGB(4, 4, 6)
+    frame.BackgroundTransparency = 0.08
+    frame.BorderColor3 = Color3.fromRGB(255, 34, 50)
+    frame.BorderSizePixel = 1
+    frame.Position = UDim2.new(0, 12, 0, 76)
+    frame.Size = UDim2.new(0, 430, 0, 34)
+    frame.Parent = gui
+
+    local label = Instance.new("TextLabel")
+    label.Name = "Status"
+    label.BackgroundTransparency = 1
+    label.Font = Enum.Font.Code
+    label.TextColor3 = Color3.fromRGB(245, 238, 248)
+    label.TextSize = 14
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Position = UDim2.new(0, 10, 0, 0)
+    label.Size = UDim2.new(1, -20, 1, 0)
+    label.Text = "[HYDROXIDE] boot debug starting"
+    label.Parent = frame
+
+    pcall(function()
+        if protectgui then
+            protectgui(gui)
+        end
+    end)
+    gui.Parent = parent
+    boot_debug_label = label
+
+    if getgenv then
+        local env = getgenv()
+        env.HYDROXIDE_BOOT_DEBUG_GUI = gui
+        env.HYDROXIDE_BOOT_DEBUG_LABEL = label
+    end
+
+    return label
+end
+
+local function update_boot_debug(stage, detail)
+    if not boot_debug_enabled() then
+        return
+    end
+
+    local message = "[HYDROXIDE] " .. tostring(stage)
+    if detail ~= nil and tostring(detail) ~= "" then
+        message = message .. " | " .. tostring(detail)
+    end
+
+    print(message)
+    local label = ensure_boot_debug_overlay()
+    if label then
+        label.Text = message:sub(1, 220)
+    end
+end
+
+if getgenv then
+    getgenv().HYDROXIDE_BOOT_DEBUG_UPDATE = update_boot_debug
 end
 
 local function set_loader_stage(stage, detail)
@@ -14,6 +144,7 @@ local function set_loader_stage(stage, detail)
         env.HYDROXIDE_LOAD_STAGE = stage
         env.HYDROXIDE_LOAD_DETAIL = detail
     end
+    update_boot_debug(stage, detail)
 end
 
 local function set_loader_error(message)
@@ -21,6 +152,7 @@ local function set_loader_error(message)
         local env = getgenv()
         env.HYDROXIDE_LAST_ERROR = tostring(message)
     end
+    update_boot_debug("loader_error", message)
 end
 
 local function visible_warn(message, detail)
@@ -33,11 +165,9 @@ end
 
 set_loader_stage("loader_start", "initializing")
 
-local HYDROXIDE_DEBUG_USER = "Caikunya"
 local function is_hydroxide_debug_enabled()
     local default_enabled = false
-    local ok, players = pcall(game.GetService, game, "Players")
-    local local_player = ok and players and players.LocalPlayer or nil
+    local local_player = get_loader_local_player()
     if local_player and local_player.Name == HYDROXIDE_DEBUG_USER then
         default_enabled = true
     end
@@ -191,6 +321,24 @@ local function run_fetched_script(label, source, options)
         return false
     end
 
+    local child_error = nil
+    if getgenv then
+        child_error = getgenv().HYDROXIDE_LAST_ERROR
+    end
+    if child_error ~= nil and tostring(child_error) ~= "" then
+        local message = string.format("[HYDROXIDE] %s reported failure: %s", label, tostring(child_error))
+        set_loader_stage("loader_child_error", label)
+        set_loader_error(message)
+        if options.visible_errors then
+            visible_warn(message)
+        end
+        if not options.quiet then
+            debug_warn(message)
+            debug_print(message)
+        end
+        return false
+    end
+
     set_loader_stage("loader_done", label)
     return true
 end
@@ -268,10 +416,22 @@ if not legit then
     debug_print(string.format("[HYDROXIDE] Loader (place=%s game=%s)", tostring(placeId), tostring(gameId)))
 end
 
-if placeId == 100010170789226 or gameId == 7359098240 then
+local ROGUE_GAME_ID = 1087859240
+local BATTLEGROUNDS_GAME_ID = 7359098240
+local ROGUE_PLACE_IDS = {
+    [3541987450] = true,
+    [5208655184] = true,
+    [109732117428502] = true,
+    [14341521240] = true,
+}
+local BATTLEGROUNDS_PLACE_IDS = {
+    [100010170789226] = true,
+}
+
+if BATTLEGROUNDS_PLACE_IDS[placeId] or gameId == BATTLEGROUNDS_GAME_ID then
     set_loader_stage("loader_route_battlegrounds", tostring(placeId))
     load_repo_script("rogue_battlegrounds", "dist/rogue_battlegrounds.lua", { visible_errors = true })
-elseif gameId == 1087859240 then
+elseif ROGUE_PLACE_IDS[placeId] or gameId == ROGUE_GAME_ID then
     if legit then
         set_loader_stage("loader_route_hydrogen", tostring(placeId))
         load_repo_script("hydrogen", "dist/hydrogen.lua", { quiet = true, visible_errors = true })
