@@ -2662,7 +2662,7 @@ local function add_gate_flavor_line(destination)
         return destination
     end
 
-    return destination .. gateFlavorLines[math.random(1, #gateFlavorLines)]
+    return destination .. " " .. gateFlavorLines[math.random(1, #gateFlavorLines)]
 end
 
 local function gate_replacement(text)
@@ -2678,7 +2678,7 @@ local function gate_replacement(text)
     if prefix and number then
         local destination
         if prefix == "t" then
-            if tostring(number) == "2" and math.random(1, 2) == 2 then
+            if tostring(number) == "2" then
                 destination = "Tundra Temple"
             else
                 destination = title_case_destination("Tundra", number)
