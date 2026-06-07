@@ -14425,10 +14425,15 @@ if is_hydroxide_supported_place() then
             local initial_quantities = {}
             local logged_pickup_ids = {}
             local artifact_pickup_alert_ids = {}
+            local artifact_found_alert_ids = {}
+            local artifact_location_cache = {}
             local recent_logged_pickup_names = {}
             local pd_char_connection = nil
             local auto_drop_char_connection = nil
             local auto_drop_backpack_connection = nil
+            local send_artifact_found_webhook = nil
+            local detect_artifact_area_from_position = nil
+            local get_nearest_path_point_for_position = nil
 
             utility:Connection(plr.CharacterRemoving, function()
                 for _, conn in ipairs(quantity_connections) do
@@ -14497,12 +14502,46 @@ if is_hydroxide_supported_place() then
                     or item_name == "Howler Friend"
             end
 
+            local function get_artifact_object_id(object)
+                local id_value = object and FindFirstChild(object, "ID")
+                if id_value then
+                    return tostring(id_value.Value or "")
+                end
+                return ""
+            end
+
+            local function get_artifact_alert_key(item_name, pickup_id, object)
+                local id = tostring(pickup_id or "")
+                if id == "" then
+                    id = get_artifact_object_id(object)
+                end
+                if id ~= "" then
+                    return "id:" .. id
+                end
+
+                if object and object:IsA("BasePart") then
+                    local pos = object.Position
+                    return string.format(
+                        "pos:%s:%d:%d:%d",
+                        session_loot_key(item_name),
+                        math.floor(pos.X * 10),
+                        math.floor(pos.Y * 10),
+                        math.floor(pos.Z * 10)
+                    )
+                end
+
+                return "pickup:" .. session_loot_key(item_name) .. ":" .. tostring(math.floor(tick() / 10))
+            end
+
             local function send_artifact_pickup_webhook(item_name, quantity, pickup_id)
                 if not is_trinket_artifact_item(item_name) then
                     return
                 end
 
-                local alert_key = pickup_id and pickup_id ~= "" and tostring(pickup_id) or (session_loot_key(item_name) .. ":" .. tostring(math.floor(tick() / 10)))
+                local alert_key = get_artifact_alert_key(item_name, pickup_id, nil)
+                if artifact_found_alert_ids[alert_key] then
+                    return
+                end
                 if artifact_pickup_alert_ids[alert_key] then
                     return
                 end
@@ -14527,6 +14566,43 @@ if is_hydroxide_supported_place() then
                 local server_name, server_region = get_server_info()
                 local player_count = #plrs:GetPlayers()
                 local path_name = trinket_bot.current_path_name and trinket_bot.current_path_name ~= "" and trinket_bot.current_path_name or "None"
+                local cached_location = artifact_location_cache[alert_key]
+                if not cached_location then
+                    local root = plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart")
+                    if root then
+                        local nearest_index, nearest_distance = nil, nil
+                        if get_nearest_path_point_for_position then
+                            nearest_index, nearest_distance = get_nearest_path_point_for_position(root.Position)
+                        end
+                        cached_location = {
+                            area = detect_artifact_area_from_position and detect_artifact_area_from_position(root.Position) or "None",
+                            position = root.Position,
+                            nearest_point_index = nearest_index,
+                            nearest_point_distance = nearest_distance
+                        }
+                    end
+                end
+                local location_line = ""
+                if cached_location then
+                    if cached_location.area and cached_location.area ~= "" and cached_location.area ~= "None" then
+                        location_line = location_line .. string.format("\n**Area:** `%s`", cached_location.area)
+                    end
+                    if cached_location.position then
+                        location_line = location_line .. string.format(
+                            "\n**Position:** `%.0f, %.0f, %.0f`",
+                            cached_location.position.X,
+                            cached_location.position.Y,
+                            cached_location.position.Z
+                        )
+                    end
+                    if cached_location.nearest_point_index then
+                        location_line = location_line .. string.format(
+                            "\n**Nearest Point:** `%d (%.0f studs)`",
+                            cached_location.nearest_point_index,
+                            cached_location.nearest_point_distance or 0
+                        )
+                    end
+                end
                 local footer_text
                 if cheat_client.config.webhook_show_username ~= false then
                     footer_text = string.format("LudSploit • Players: %d/23 • %s • Job: %s", player_count, plr.Name, game.JobId)
@@ -14537,10 +14613,11 @@ if is_hydroxide_supported_place() then
                 local embed = {
                     title = string.format("LudSploit | Artifact Collected: %s", normalize_session_loot_name(item_name)),
                     description = string.format(
-                        "**Item:** `%s`\n**Quantity:** `%d`\n**Path:** `%s`\n**Server:** `%s (%s)`",
+                        "**Item:** `%s`\n**Quantity:** `%d`\n**Path:** `%s`%s\n**Server:** `%s (%s)`",
                         normalize_session_loot_name(item_name),
                         tonumber(quantity) or 1,
                         path_name,
+                        location_line,
                         server_name ~= "" and server_name or "Unknown",
                         server_region ~= "" and server_region or "Unknown"
                     ),
@@ -14685,6 +14762,8 @@ if is_hydroxide_supported_place() then
                 initial_quantities = {}
                 logged_pickup_ids = {}
                 artifact_pickup_alert_ids = {}
+                artifact_found_alert_ids = {}
+                artifact_location_cache = {}
                 recent_logged_pickup_names = {}
 
                 if loot_tracking_connection then
@@ -14985,6 +15064,195 @@ if is_hydroxide_supported_place() then
                     },
                     timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
                 }
+            end
+
+            local function is_valid_artifact_position(position)
+                if typeof(position) ~= "Vector3" then
+                    return false
+                end
+
+                local x, y, z = position.X, position.Y, position.Z
+                if x ~= x or y ~= y or z ~= z then
+                    return false
+                end
+
+                return math.abs(x) ~= math.huge
+                    and math.abs(y) ~= math.huge
+                    and math.abs(z) ~= math.huge
+                    and math.abs(x) <= 500000
+                    and math.abs(y) <= 500000
+                    and math.abs(z) <= 500000
+            end
+
+            detect_artifact_area_from_position = function(position)
+                if not is_valid_artifact_position(position) or not FindFirstChild(ws, "AreaMarkers") then
+                    return "None"
+                end
+
+                local nearest_name = "None"
+                local nearest_distance = math.huge
+                for _, marker in ipairs(ws.AreaMarkers:GetChildren()) do
+                    if marker:IsA("BasePart") then
+                        local offset = position - marker.Position
+                        local distance = offset.X * offset.X + offset.Y * offset.Y + offset.Z * offset.Z
+                        if distance < nearest_distance then
+                            nearest_distance = distance
+                            nearest_name = marker.Name
+                        end
+                    end
+                end
+
+                return nearest_name
+            end
+
+            get_nearest_path_point_for_position = function(position)
+                if not is_valid_artifact_position(position) or not trinket_bot.path_points or #trinket_bot.path_points <= 0 then
+                    return nil, nil
+                end
+
+                local nearest_index = nil
+                local nearest_distance = math.huge
+                for index, point in ipairs(trinket_bot.path_points) do
+                    if point and point.position then
+                        local distance = (point.position - position).Magnitude
+                        if distance < nearest_distance then
+                            nearest_index = index
+                            nearest_distance = distance
+                        end
+                    end
+                end
+
+                return nearest_index, nearest_distance
+            end
+
+            send_artifact_found_webhook = function(records, source)
+                if not records or #records <= 0 then
+                    return false
+                end
+
+                local names = {}
+                local first_position = nil
+                local sent_any = false
+
+                for _, record in ipairs(records) do
+                    local item_name = normalize_session_loot_name(record.name)
+                    if is_trinket_artifact_item(item_name) then
+                        local object = record.object
+                        local pickup_id = tostring(record.id or get_artifact_object_id(object) or "")
+                        local alert_key = get_artifact_alert_key(item_name, pickup_id, object)
+
+                        if not artifact_found_alert_ids[alert_key] then
+                            artifact_found_alert_ids[alert_key] = tick()
+                            table.insert(names, item_name)
+                            sent_any = true
+                        end
+
+                        if object and object:IsA("BasePart") then
+                            local position = object.Position
+                            first_position = first_position or position
+                            local nearest_index, nearest_distance = get_nearest_path_point_for_position(position)
+                            artifact_location_cache[alert_key] = {
+                                area = detect_artifact_area_from_position(position),
+                                position = position,
+                                nearest_point_index = nearest_index,
+                                nearest_point_distance = nearest_distance
+                            }
+                        end
+                    end
+                end
+
+                if not sent_any or #names <= 0 then
+                    return false
+                end
+
+                local configured_artifact_webhook = get_trinket_artifact_webhook()
+                local fallback_general_webhook = get_trinket_general_webhook()
+                local target_webhook = configured_artifact_webhook ~= "" and configured_artifact_webhook or fallback_general_webhook
+                if target_webhook == "" then
+                    warn("[LudSploit] No artifact or general webhook configured; artifact found alert was not sent.")
+                    return false
+                end
+
+                local artifact_list = table.concat(names, ", ")
+                local area = first_position and detect_artifact_area_from_position(first_position) or "None"
+                local area_text = area ~= "None" and " (" .. area .. ")" or ""
+                local nearest_index, nearest_distance = get_nearest_path_point_for_position(first_position)
+                local server_name, server_region = get_server_info()
+                local player_count = #plrs:GetPlayers()
+                local path_name = trinket_bot.current_path_name and trinket_bot.current_path_name ~= "" and trinket_bot.current_path_name or "None"
+
+                local location_lines = ""
+                if area ~= "None" then
+                    location_lines = location_lines .. string.format("**Area:** `%s`\n", area)
+                end
+                if first_position then
+                    location_lines = location_lines .. string.format(
+                        "**Position:** `%.0f, %.0f, %.0f`\n",
+                        first_position.X,
+                        first_position.Y,
+                        first_position.Z
+                    )
+                end
+                if nearest_index then
+                    location_lines = location_lines .. string.format("**Nearest Point:** `%d (%.0f studs)`\n", nearest_index, nearest_distance or 0)
+                end
+
+                local footer_text
+                if cheat_client.config.webhook_show_username ~= false then
+                    footer_text = string.format("LudSploit • Players: %d/23 • %s • Job: %s", player_count, plr.Name, game.JobId)
+                else
+                    footer_text = string.format("LudSploit • Players: %d/23 • Job: %s", player_count, game.JobId)
+                end
+
+                local embed = {
+                    title = string.format("LudSploit | Artifact Found: %s%s", artifact_list, area_text),
+                    description = string.format(
+                        "**Artifact%s:** `%s`\n**Path:** `%s`\n%s**Server:** `%s (%s)`\n\n%s",
+                        #names > 1 and "s" or "",
+                        artifact_list,
+                        path_name,
+                        location_lines,
+                        server_name ~= "" and server_name or "Unknown",
+                        server_region ~= "" and server_region or "Unknown",
+                        format_last_looted_text()
+                    ),
+                    color = 0xff3679,
+                    thumbnail = {
+                        url = "https://static.wikia.nocookie.net/rogue-lineage/images/d/d8/PhiloRender.png/revision/latest?cb=20251012003300"
+                    },
+                    footer = {
+                        text = footer_text
+                    },
+                    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                }
+
+                local payload = {
+                    username = cheat_client.config.webhook_username or "LudSploit",
+                    content = "@here",
+                    embeds = {embed}
+                }
+
+                task.spawn(function()
+                    local ok, result = pcall(function()
+                        return HXD_SEND_WEBHOOK(target_webhook, payload)
+                    end)
+
+                    if (not ok or result == false)
+                        and configured_artifact_webhook ~= ""
+                        and fallback_general_webhook ~= ""
+                        and fallback_general_webhook ~= configured_artifact_webhook then
+                        warn("[LudSploit] Artifact found webhook failed, retrying general webhook fallback.")
+                        ok, result = pcall(function()
+                            return HXD_SEND_WEBHOOK(fallback_general_webhook, payload)
+                        end)
+                    end
+
+                    if not ok or result == false then
+                        warn("[LudSploit] Artifact found webhook failed: " .. tostring(result))
+                    end
+                end)
+
+                return true
             end
 
             local function format_loot_summary()
@@ -16415,6 +16683,13 @@ if is_hydroxide_supported_place() then
                 for _, object in next, ws:GetChildren() do
                     if object.Name == "Part" and FindFirstChild(object, "ID") then
                         local trinketName, trinketColor, trinketZIndex = cheat_client:identify_trinket(object)
+                        if is_trinket_artifact_item(trinketName) and send_artifact_found_webhook then
+                            send_artifact_found_webhook({{
+                                name = trinketName,
+                                object = object,
+                                id = get_artifact_object_id(object)
+                            }}, "check_existing")
+                        end
                         local should_pickup = true
 
                         if ignore_ice and trinketName == "Ice Essence" then
@@ -16457,6 +16732,13 @@ if is_hydroxide_supported_place() then
 
                     if object.Name == "Part" and FindFirstChild(object, "ID") then
                         local trinketName, trinketColor, trinketZIndex = cheat_client:identify_trinket(object)
+                        if is_trinket_artifact_item(trinketName) and send_artifact_found_webhook then
+                            send_artifact_found_webhook({{
+                                name = trinketName,
+                                object = object,
+                                id = get_artifact_object_id(object)
+                            }}, "check_child")
+                        end
                         local should_pickup = true
 
                         if ignore_ice and trinketName == "Ice Essence" then
@@ -16545,6 +16827,13 @@ if is_hydroxide_supported_place() then
                 for _, object in next, ws:GetChildren() do
                     if object.Name == "Part" and FindFirstChild(object, "ID") then
                         local trinketName, trinketColor, trinketZIndex = cheat_client:identify_trinket(object)
+                        if is_trinket_artifact_item(trinketName) and send_artifact_found_webhook then
+                            send_artifact_found_webhook({{
+                                name = trinketName,
+                                object = object,
+                                id = get_artifact_object_id(object)
+                            }}, "scan_existing")
+                        end
                         local should_pickup = true
 
                         if ignore_ice and trinketName == "Ice Essence" then
@@ -18960,6 +19249,13 @@ if is_hydroxide_supported_place() then
 
                     for _, object in next, trinkets_list do
                         local trinket_name, trinket_color, trinket_zindex = cheat_client:identify_trinket(object)
+                        if is_trinket_artifact_item(trinket_name) and send_artifact_found_webhook then
+                            send_artifact_found_webhook({{
+                                name = trinket_name,
+                                object = object,
+                                id = get_artifact_object_id(object)
+                            }}, "heartbeat_scan")
+                        end
                         local should_pickup = false
                         local is_special_item = false
                         local selected_mythics_artifacts = Options.PickupMythicsArtifacts and Options.PickupMythicsArtifacts.Value or {}
@@ -19723,6 +20019,13 @@ if is_hydroxide_supported_place() then
                                     end
 
                                     local trinket_name, trinket_color = cheat_client:identify_trinket(object)
+                                    if is_trinket_artifact_item(trinket_name) and send_artifact_found_webhook then
+                                        send_artifact_found_webhook({{
+                                            name = trinket_name,
+                                            object = object,
+                                            id = get_artifact_object_id(object)
+                                        }}, "detour_scan")
+                                    end
 
                                     local selected_mythics_artifacts = Options.PickupMythicsArtifacts and Options.PickupMythicsArtifacts.Value or {}
                                     if not selected_mythics_artifacts[trinket_name] then
@@ -20465,6 +20768,13 @@ if is_hydroxide_supported_place() then
                                     local root = plr.Character.HumanoidRootPart
                                     if object.Name == "Part" and FindFirstChild(object, "ID") then
                                         local trinketName, trinketColor, trinketZIndex = cheat_client:identify_trinket(object)
+                                        if is_trinket_artifact_item(trinketName) and send_artifact_found_webhook then
+                                            send_artifact_found_webhook({{
+                                                name = trinketName,
+                                                object = object,
+                                                id = get_artifact_object_id(object)
+                                            }}, "wait_point_child")
+                                        end
                                         local ignore_ice = not (Toggles.PickupIceEssence and Toggles.PickupIceEssence.Value)
                                         local ignore_scrolls = not (Toggles.PickupScrolls and Toggles.PickupScrolls.Value)
                                         local selected_mythics_artifacts = Options.PickupMythicsArtifacts and Options.PickupMythicsArtifacts.Value or {}
