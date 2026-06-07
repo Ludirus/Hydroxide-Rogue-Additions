@@ -23384,6 +23384,7 @@ if is_hydroxide_supported_place() then
 
             do
             if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 then
+                (function()
                 local phoenix_down_pop_in_progress = false
                 local last_one_life_pd_attempt = 0
                 local last_one_life_caution_webhook = 0
@@ -23552,7 +23553,7 @@ if is_hydroxide_supported_place() then
                     trinket_bot.one_life_cautious_since = nil
                 end
 
-                local function handle_zero_life_wipe()
+                trinket_bot.handle_zero_life_wipe = function()
                     if zero_life_wipe_handled then
                         return
                     end
@@ -23697,7 +23698,7 @@ if is_hydroxide_supported_place() then
                         if trinket_bot_running_for_pd() then
                             local lives = tonumber(Get("Lives"))
                             if lives and lives <= 0 then
-                                handle_zero_life_wipe()
+                                trinket_bot.handle_zero_life_wipe()
                                 break
                             end
 
@@ -23767,6 +23768,7 @@ if is_hydroxide_supported_place() then
                         task.wait(1)
                     end
                 end)
+                end)()
             end
             end
 
