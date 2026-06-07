@@ -3,7 +3,9 @@ if repo:sub(-1) ~= "/" then
     repo = repo .. "/"
 end
 if getgenv then
-    getgenv().HYDROXIDE_REPO = repo
+    local env = getgenv()
+    env.HYDROXIDE_REPO = repo
+    env.HYDROXIDE_LAST_ERROR = nil
 end
 
 local function set_loader_stage(stage, detail)
@@ -73,6 +75,20 @@ local function resolve_repo_file_url(path)
     return repo .. path
 end
 
+local function cache_bust_url(url)
+    url = tostring(url or "")
+    if url == "" then
+        return url
+    end
+
+    local sep = url:find("?", 1, true) and "&" or "?"
+    local stamp = tostring(os.time())
+    if tick then
+        stamp = stamp .. "_" .. tostring(math.floor((tick() % 1) * 1000000))
+    end
+    return url .. sep .. "hxd_t=" .. stamp
+end
+
 local function flag_truthy(value)
     if value == true then
         return true
@@ -107,6 +123,29 @@ local function legit_flag_enabled()
 
     local env = getgenv()
     return flag_truthy(env.HYDROGEN_LEGIT) or flag_truthy(env.HYDROXIDE_LEGIT) or tostring(env.HYDROGEN_MODE or ""):lower() == "legit"
+end
+
+local function get_explicit_entrypoint()
+    if not getgenv then
+        return nil
+    end
+
+    local env = getgenv()
+    local explicit = env.HYDROXIDE_LOADER_ENTRYPOINT or env.HYDROGEN_ENTRYPOINT
+    if explicit ~= nil and tostring(explicit) ~= "" and tostring(explicit) ~= "loader.lua" then
+        return tostring(explicit)
+    end
+
+    -- Dist artifacts set HYDROXIDE_ENTRYPOINT as bookkeeping for queued reloads.
+    -- Only treat it as a top-level loader override when explicitly requested.
+    if flag_truthy(env.HYDROXIDE_ALLOW_ENTRYPOINT_OVERRIDE) then
+        local legacy = env.HYDROXIDE_ENTRYPOINT
+        if legacy ~= nil and tostring(legacy) ~= "" and tostring(legacy) ~= "loader.lua" then
+            return tostring(legacy)
+        end
+    end
+
+    return nil
 end
 
 local function run_fetched_script(label, source, options)
@@ -154,7 +193,7 @@ end
 
 local function load_repo_script(label, path, options)
     options = options or {}
-    local url = resolve_repo_file_url(path)
+    local url = cache_bust_url(resolve_repo_file_url(path))
     set_loader_stage("loader_fetching", label)
     if not options.quiet then
         debug_print(string.format("[HYDROXIDE] Loader fetching %s", url))
@@ -181,14 +220,31 @@ local function load_repo_script(label, path, options)
         return false
     end
 
+    if type(source_or_err) ~= "string" or source_or_err == "" then
+        local message = string.format("[HYDROXIDE] Loader fetched empty source for %s", label)
+        set_loader_stage("loader_empty_source", label)
+        set_loader_error(message)
+        if options.raise then
+            error(message)
+        end
+        if options.visible_errors then
+            visible_warn(message)
+        end
+        if not options.quiet then
+            debug_warn(message)
+            debug_print(message)
+        end
+        return false
+    end
+
     set_loader_stage("loader_fetched", label)
     return run_fetched_script(label, source_or_err, options)
 end
 
-local entrypoint = getgenv and getgenv().HYDROXIDE_ENTRYPOINT
+local entrypoint = get_explicit_entrypoint()
 if entrypoint and entrypoint ~= "" and entrypoint ~= "loader.lua" then
     local quiet_entrypoint = tostring(entrypoint):lower():find("hydrogen", 1, true) ~= nil
-    load_repo_script("entrypoint", entrypoint, { quiet = quiet_entrypoint, visible_errors = quiet_entrypoint })
+    load_repo_script("entrypoint", entrypoint, { quiet = quiet_entrypoint, visible_errors = true })
     return
 end
 
@@ -210,23 +266,20 @@ end
 
 if placeId == 100010170789226 or gameId == 7359098240 then
     set_loader_stage("loader_route_battlegrounds", tostring(placeId))
-    load_repo_script("rogue_battlegrounds", "dist/rogue_battlegrounds.lua")
+    load_repo_script("rogue_battlegrounds", "dist/rogue_battlegrounds.lua", { visible_errors = true })
 elseif gameId == 1087859240 then
     if legit then
         set_loader_stage("loader_route_hydrogen", tostring(placeId))
         load_repo_script("hydrogen", "dist/hydrogen.lua", { quiet = true, visible_errors = true })
     else
         set_loader_stage("loader_route_rogue_lineage", tostring(placeId))
-        load_repo_script("rogue_lineage", "dist/rogue_lineage.lua")
+        load_repo_script("rogue_lineage", "dist/rogue_lineage.lua", { visible_errors = true })
     end
 else
     local message = string.format("[HYDROXIDE] Loader: unsupported GameId %s PlaceId %s", tostring(gameId), tostring(placeId))
     set_loader_stage("loader_unsupported", message)
     set_loader_error(message)
-    if legit then
-        visible_warn(message .. " (HYDROGEN_LEGIT is enabled, but Hydrogen only routes on Rogue Lineage)")
-    else
-        debug_warn(message)
-        debug_print(message)
-    end
+    visible_warn(legit and (message .. " (HYDROGEN_LEGIT is enabled, but Hydrogen only routes on Rogue Lineage)") or message)
+    debug_warn(message)
+    debug_print(message)
 end

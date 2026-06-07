@@ -14,7 +14,7 @@ A VPS would only be optional for adjacent infrastructure, such as hosting a priv
   - Minimal GameId dispatcher.
   - Loads the Rogue or Rogue Battlegrounds script from GitHub with `game:HttpGet` and `loadstring`.
   - Honors `getgenv().HYDROXIDE_REPO` as the raw GitHub base URL, so forked GitHub deployments can keep dependency and teleport reloads on the same repo.
-  - Honors `getgenv().HYDROXIDE_ENTRYPOINT` when set, so encrypted dist artifacts can queue and reload the same encrypted file after a serverhop.
+  - Uses `getgenv().HYDROXIDE_LOADER_ENTRYPOINT` only for explicit top-level overrides. `HYDROXIDE_ENTRYPOINT` remains artifact bookkeeping and is ignored by the loader unless `HYDROXIDE_ALLOW_ENTRYPOINT_OVERRIDE` is enabled, which prevents stale executor state from bypassing normal routing.
   - Debug prints are gated behind `HYDROXIDE_DEBUG`, which defaults on only for username `Caikunya`.
 
 - `ROGUE/rogue_ui.lua`
