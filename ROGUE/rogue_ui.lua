@@ -13535,6 +13535,33 @@ if is_hydroxide_supported_place() then
             return webhook
         end
 
+        local function get_trinket_general_webhook()
+            local option_value = Options and Options.TrinketGeneralWebhook and Options.TrinketGeneralWebhook.Value
+            local webhook = normalize_trinket_webhook_url(option_value)
+            if webhook ~= "" then
+                return webhook
+            end
+
+            webhook = normalize_trinket_webhook_url(cheat_client.config.trinket_general_webhook)
+            if webhook ~= "" then
+                return webhook
+            end
+
+            webhook = normalize_trinket_webhook_url(cheat_client.config.webhook)
+            if webhook ~= "" then
+                return webhook
+            end
+
+            local bot_settings = read_hydroxide_mem_json("trinket_bot_settings")
+            webhook = normalize_trinket_webhook_url(bot_settings and (bot_settings.trinket_general_webhook or bot_settings.general_webhook or bot_settings.webhook))
+            if webhook ~= "" then
+                return webhook
+            end
+
+            local shared_settings = read_hydroxide_mem_json("shared_settings")
+            return normalize_trinket_webhook_url(shared_settings and (shared_settings.trinket_general_webhook or shared_settings.webhook))
+        end
+
         local function get_trinket_artifact_webhook()
             local option_value = Options and Options.TrinketArtifactWebhook and Options.TrinketArtifactWebhook.Value
             local webhook = normalize_trinket_webhook_url(option_value)
@@ -30846,9 +30873,10 @@ end
                             }
 
                             local configured_artifact_webhook = get_trinket_artifact_webhook()
-                            local artifact_webhook_url = configured_artifact_webhook
+                            local fallback_general_webhook = get_trinket_general_webhook()
+                            local artifact_webhook_url = configured_artifact_webhook ~= "" and configured_artifact_webhook or fallback_general_webhook
                             local artifact_webhook_username = cheat_client.config.webhook_username or "LudSploit"
-                            local has_artifact_webhook = artifact_webhook_url ~= ""
+                            local has_artifact_destination = artifact_webhook_url ~= ""
 
                             local player_has_artifact = #unpicked_artifact_names == 0
 
@@ -30881,19 +30909,52 @@ end
                                 should_show_in_stream = true
                             end
 
-                            if has_artifact_webhook then
-                                pcall(function()
-                                    HXD_SEND_WEBHOOK(artifact_webhook_url, {
-                                        username = artifact_webhook_username,
-                                        content = webhook_msg,
-                                        embeds = {embed}
-                                    })
+                            local function send_artifact_payload(url, payload)
+                                if not url or url == "" then
+                                    return false, "missing webhook URL"
+                                end
+
+                                local ok, result = pcall(function()
+                                    return HXD_SEND_WEBHOOK(url, payload)
                                 end)
-                            else
-                                warn("[LudSploit] Artifact webhook not configured; artifact alert was not sent.")
+
+                                if not ok then
+                                    return false, tostring(result)
+                                end
+
+                                if result == false then
+                                    return false, "request failed"
+                                end
+
+                                return true
                             end
 
-                            if has_artifact_webhook and not player_has_artifact and should_show_in_stream and not (Toggles.StayInServer and Toggles.StayInServer.Value) then
+                            if has_artifact_destination then
+                                local artifact_payload = {
+                                    username = artifact_webhook_username,
+                                    content = webhook_msg,
+                                    embeds = {embed}
+                                }
+
+                                local sent, send_reason = send_artifact_payload(artifact_webhook_url, artifact_payload)
+                                if not sent and configured_artifact_webhook ~= "" and fallback_general_webhook ~= "" and fallback_general_webhook ~= configured_artifact_webhook then
+                                    warn("[LudSploit] Artifact webhook send failed, retrying general webhook fallback: " .. tostring(send_reason))
+                                    artifact_webhook_url = fallback_general_webhook
+                                    sent, send_reason = send_artifact_payload(artifact_webhook_url, artifact_payload)
+                                end
+
+                                if not sent then
+                                    warn("[LudSploit] Artifact alert webhook failed: " .. tostring(send_reason))
+                                    pcall(function()
+                                        library:Notify("Artifact webhook failed; check artifact/general webhook config.")
+                                    end)
+                                    has_artifact_destination = false
+                                end
+                            else
+                                warn("[LudSploit] No artifact or general webhook configured; artifact alert was not sent.")
+                            end
+
+                            if has_artifact_destination and not player_has_artifact and should_show_in_stream and not (Toggles.StayInServer and Toggles.StayInServer.Value) then
                                 local unpicked_list = table.concat(unpicked_artifact_names, ", ")
                                 local stream_embed = {
                                     title = string.format("LudSploit | Artifact Found: %s%s", unpicked_list, area_text),
