@@ -2618,30 +2618,6 @@ local function set_textbox_text(textBox, text)
     end)
 end
 
-local numberWords = {
-    ["0"] = "Zero",
-    ["1"] = "One",
-    ["2"] = "Two",
-    ["3"] = "Three",
-    ["4"] = "Four",
-    ["5"] = "Five",
-    ["6"] = "Six",
-    ["7"] = "Seven",
-    ["8"] = "Eight",
-    ["9"] = "Nine",
-    ["10"] = "Ten",
-    ["11"] = "Eleven",
-    ["12"] = "Twelve",
-    ["13"] = "Thirteen",
-    ["14"] = "Fourteen",
-    ["15"] = "Fifteen",
-    ["16"] = "Sixteen",
-    ["17"] = "Seventeen",
-    ["18"] = "Eighteen",
-    ["19"] = "Nineteen",
-    ["20"] = "Twenty",
-}
-
 local gateFlavorLines = {
     ", Prepare to vanish!",
     ", welcome to Gripsville!",
@@ -2653,8 +2629,8 @@ local gateFlavorLines = {
 }
 
 local function title_case_destination(prefix, number)
-    local word = numberWords[tostring(number)] or tostring(number)
-    return prefix .. " " .. word
+    local normalized = tonumber(number)
+    return prefix .. " " .. tostring(normalized or number)
 end
 
 local function add_gate_flavor_line(destination)
@@ -2668,6 +2644,20 @@ end
 local function gate_replacement(text)
     local value = tostring(text or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
     value = value:gsub("%s+", "")
+
+    if value == "tt" then
+        return add_gate_flavor_line("Tundra Temple")
+    elseif value == "df" then
+        return add_gate_flavor_line("DeepForest")
+    elseif value == "t" then
+        return add_gate_flavor_line("Tundra")
+    elseif value == "d" then
+        return add_gate_flavor_line("Desert")
+    elseif value == "f" then
+        return add_gate_flavor_line("Forest")
+    elseif value == "s" then
+        return add_gate_flavor_line("Shore")
+    end
 
     local prefix, number = value:match("^(df)(%d+)$")
     if prefix and number then
