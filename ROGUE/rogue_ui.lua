@@ -13626,6 +13626,11 @@ if is_hydroxide_supported_place() then
                 moderator_detected = false,
                 pending_artifact_logs = {},
                 pending_pickup_ids = {},
+                recent_debug_events = {},
+                current_point_index = nil,
+                current_point_kind = nil,
+                current_point_position = nil,
+                death_debug_last_sent = 0,
                 one_life_cautious = false,
                 one_life_cautious_reason = nil,
                 one_life_cautious_since = nil,
@@ -13966,8 +13971,45 @@ if is_hydroxide_supported_place() then
                 return snapshot
             end
 
+            trinket_bot.record_debug_event = function(step, extra, snapshot)
+                local events = trinket_bot.recent_debug_events
+                if not events then
+                    events = {}
+                    trinket_bot.recent_debug_events = events
+                end
+
+                local entry = {
+                    t = os.time(),
+                    clock = tick(),
+                    step = tostring(step or "EVENT"),
+                    extra = tostring(extra or ""),
+                    path = trinket_bot.current_path_name,
+                    point = trinket_bot.current_point_index,
+                    kind = trinket_bot.current_point_kind,
+                    snapshot = snapshot
+                }
+
+                table.insert(events, entry)
+                while #events > 120 do
+                    table.remove(events, 1)
+                end
+            end
+
+            trinket_bot.is_kick_on_one_life_enabled = function()
+                return Toggles
+                    and Toggles.KickOnOneLife
+                    and Toggles.KickOnOneLife.Value == true
+            end
+
             local function trinket_bot_debug_log(step, extra)
                 local step_name = tostring(step)
+                local snapshot = get_trinket_bot_mem_snapshot()
+                if trinket_bot.record_debug_event then
+                    pcall(function()
+                        trinket_bot.record_debug_event(step_name, extra, snapshot)
+                    end)
+                end
+
                 local is_error_step = step_name:find("_ERROR", 1, true) ~= nil
                     or step_name:find("_FAIL", 1, true) ~= nil
                     or step_name:find("_ABORT", 1, true) ~= nil
@@ -13980,7 +14022,6 @@ if is_hydroxide_supported_place() then
                     return
                 end
 
-                local snapshot = get_trinket_bot_mem_snapshot()
                 local httpService = Services.HttpService
                 local snapshot_json = ""
                 pcall(function()
@@ -14721,6 +14762,14 @@ if is_hydroxide_supported_place() then
                 end
 
                 send_artifact_pickup_webhook(item_name, quantity, pickup_id)
+                if trinket_bot.record_debug_event then
+                    pcall(function()
+                        trinket_bot.record_debug_event(
+                            "PICKUP",
+                            string.format("%dx %s id=%s", quantity, tostring(item_name), tostring(pickup_id or ""))
+                        )
+                    end)
+                end
 
                 if trinket_bot.pending_artifact_logs and #trinket_bot.pending_artifact_logs > 0 then
                     pickup_id = pickup_id or table.remove(pending_pickup_ids, 1)
@@ -15303,6 +15352,303 @@ if is_hydroxide_supported_place() then
                     format_last_looted_text(),
                     format_items_collected_text()
                 )
+            end
+
+            trinket_bot.send_death_debug_dump = function(context, previous_lives)
+                local now = tick()
+                if trinket_bot.death_debug_last_sent and now - trinket_bot.death_debug_last_sent < 3 then
+                    return
+                end
+                trinket_bot.death_debug_last_sent = now
+
+                local function trim_text(text, max_length)
+                    text = tostring(text or "")
+                    max_length = max_length or 950
+                    if #text > max_length then
+                        return text:sub(1, max_length - 3) .. "..."
+                    end
+                    return text
+                end
+
+                local function fmt_bool(value)
+                    return value and "true" or "false"
+                end
+
+                local function fmt_vec3(position)
+                    if typeof(position) ~= "Vector3" then
+                        return "N/A"
+                    end
+                    return string.format("%.1f, %.1f, %.1f", position.X, position.Y, position.Z)
+                end
+
+                local character = plr.Character
+                local humanoid = character and FindFirstChildOfClass(character, "Humanoid")
+                local root = character and FindFirstChild(character, "HumanoidRootPart")
+                local current_lives = Get("Lives")
+                local server_name, server_region = get_server_info()
+                local nearest_index, nearest_distance = nil, nil
+                local area = "None"
+
+                if root then
+                    if get_nearest_path_point_for_position then
+                        nearest_index, nearest_distance = get_nearest_path_point_for_position(root.Position)
+                    end
+                    if detect_artifact_area_from_position then
+                        area = detect_artifact_area_from_position(root.Position)
+                    end
+                end
+
+                local character_tags = "None"
+                if character and Services.CollectionService then
+                    pcall(function()
+                        local tags = Services.CollectionService:GetTags(character)
+                        if tags and #tags > 0 then
+                            table.sort(tags)
+                            character_tags = table.concat(tags, ", ")
+                        end
+                    end)
+                end
+
+                local tools = {}
+                local function collect_tools(container, prefix)
+                    if not container then return end
+                    for _, child in ipairs(container:GetChildren()) do
+                        if child:IsA("Tool") then
+                            table.insert(tools, prefix .. child.Name)
+                        end
+                    end
+                end
+                collect_tools(FindFirstChild(plr, "Backpack"), "B:")
+                collect_tools(character, "C:")
+                table.sort(tools)
+
+                local nearby = {}
+                if root then
+                    for _, other_player in ipairs(plrs:GetPlayers()) do
+                        if other_player ~= plr and other_player.Character then
+                            local other_root = FindFirstChild(other_player.Character, "HumanoidRootPart")
+                            local other_humanoid = FindFirstChildOfClass(other_player.Character, "Humanoid")
+                            if other_root then
+                                local distance = (other_root.Position - root.Position).Magnitude
+                                local held = "None"
+                                for _, child in ipairs(other_player.Character:GetChildren()) do
+                                    if child:IsA("Tool") then
+                                        held = child.Name
+                                        break
+                                    end
+                                end
+                                table.insert(nearby, {
+                                    distance = distance,
+                                    line = string.format(
+                                        "%.0f | %s (%s) | hp %s/%s | tool %s",
+                                        distance,
+                                        other_player.Name,
+                                        tostring(other_player.UserId),
+                                        other_humanoid and math.floor(other_humanoid.Health) or "?",
+                                        other_humanoid and math.floor(other_humanoid.MaxHealth) or "?",
+                                        held
+                                    )
+                                })
+                            end
+                        end
+                    end
+                    table.sort(nearby, function(a, b)
+                        return a.distance < b.distance
+                    end)
+                end
+
+                local nearby_lines = {}
+                for index = 1, math.min(#nearby, 16) do
+                    table.insert(nearby_lines, nearby[index].line)
+                end
+
+                local event_lines = {}
+                local events = trinket_bot.recent_debug_events or {}
+                local start_index = math.max(1, #events - 55)
+                for index = start_index, #events do
+                    local event = events[index]
+                    local age = event.clock and math.max(0, now - event.clock) or 0
+                    local point_text = event.point and (" p=" .. tostring(event.point)) or ""
+                    local line = string.format(
+                        "-%.1fs [%s]%s %s",
+                        age,
+                        tostring(event.step or "EVENT"),
+                        point_text,
+                        tostring(event.extra or "")
+                    )
+                    table.insert(event_lines, trim_text(line, 180))
+                end
+
+                local snapshot_json = ""
+                pcall(function()
+                    snapshot_json = Services.HttpService:JSONEncode(get_trinket_bot_mem_snapshot())
+                end)
+
+                local state_lines = {
+                    "context=" .. tostring(context or "trinket bot"),
+                    "path=" .. tostring(trinket_bot.current_path_name or "None"),
+                    "point=" .. tostring(trinket_bot.current_point_index or "None") .. "/" .. tostring(#(trinket_bot.path_points or {})),
+                    "point_kind=" .. tostring(trinket_bot.current_point_kind or "None"),
+                    "area=" .. tostring(area),
+                    "position=" .. fmt_vec3(root and root.Position),
+                    "velocity=" .. fmt_vec3(root and root.AssemblyLinearVelocity),
+                    "humanoid_health=" .. tostring(humanoid and math.floor(humanoid.Health) or "N/A") .. "/" .. tostring(humanoid and math.floor(humanoid.MaxHealth) or "N/A"),
+                    "humanoid_state=" .. tostring(humanoid and humanoid:GetState().Name or "N/A"),
+                    "floor=" .. tostring(humanoid and humanoid.FloorMaterial and humanoid.FloorMaterial.Name or "N/A"),
+                    "sit=" .. fmt_bool(humanoid and humanoid.Sit),
+                    "platform_stand=" .. fmt_bool(humanoid and humanoid.PlatformStand),
+                    "forcefield=" .. fmt_bool(character and FindFirstChildOfClass(character, "ForceField") ~= nil),
+                    "tags=" .. tostring(character_tags),
+                    "lives_before=" .. tostring(previous_lives or "unknown"),
+                    "lives_now=" .. tostring(current_lives or "unknown"),
+                    "race=" .. tostring(Get("Race") or "unknown"),
+                    "days=" .. tostring(Get("DaysSurvived") or "unknown"),
+                    "nearest_path_point=" .. tostring(nearest_index or "None") .. (nearest_distance and string.format(" (%.0f studs)", nearest_distance) or ""),
+                    "path_running=" .. fmt_bool(trinket_bot.path_running),
+                    "death_resume_pending=" .. fmt_bool(trinket_bot.death_resume_pending),
+                    "one_life_cautious=" .. fmt_bool(trinket_bot.one_life_cautious),
+                    "one_life_reason=" .. tostring(trinket_bot.one_life_cautious_reason or "None"),
+                }
+
+                local toggle_lines = {
+                    "DeathLivesCheck=" .. fmt_bool(Toggles.DeathLivesCheck and Toggles.DeathLivesCheck.Value == true),
+                    "AutoPopPDs=" .. fmt_bool(Toggles.AutoPopPDs and Toggles.AutoPopPDs.Value == true),
+                    "KickOnOneLife=" .. fmt_bool(trinket_bot.is_kick_on_one_life_enabled and trinket_bot.is_kick_on_one_life_enabled()),
+                    "StayInServer=" .. fmt_bool(Toggles.StayInServer and Toggles.StayInServer.Value == true),
+                    "AutoRestartAfterHop=" .. fmt_bool(Toggles.AutoRestartAfterHop and Toggles.AutoRestartAfterHop.Value == true),
+                    "DeepforestRestart=" .. fmt_bool(Toggles.DeepforestRestartForUploadedPath and Toggles.DeepforestRestartForUploadedPath.Value == true),
+                    "CriticalDistance=" .. tostring(Options.CriticalDistance and Options.CriticalDistance.Value or "N/A"),
+                    "ProximityCheck=" .. tostring(Options.ProximityCheck and Options.ProximityCheck.Value or "N/A"),
+                    "EndIn=" .. tostring(Options.TrinketEndInHours and Options.TrinketEndInHours.Value or "N/A"),
+                }
+
+                local state_text = table.concat(state_lines, "\n")
+                local toggles_text = table.concat(toggle_lines, "\n")
+                local nearby_text = #nearby_lines > 0 and table.concat(nearby_lines, "\n") or "No nearby players with loaded roots"
+                local tools_text = #tools > 0 and table.concat(tools, "\n") or "No tools in backpack/character"
+                local events_text = #event_lines > 0 and table.concat(event_lines, "\n") or "No recent trinket bot debug events"
+                local mem_text = snapshot_json ~= "" and snapshot_json or "Snapshot encode failed"
+                local loot_text = format_items_collected_text()
+                local event_fields = {}
+
+                if #event_lines > 0 then
+                    local chunk = ""
+                    for _, line in ipairs(event_lines) do
+                        if #chunk > 0 and (#chunk + #line + 1) > 950 then
+                            table.insert(event_fields, chunk)
+                            chunk = line
+                        elseif #chunk > 0 then
+                            chunk = chunk .. "\n" .. line
+                        else
+                            chunk = line
+                        end
+                    end
+                    if chunk ~= "" then
+                        table.insert(event_fields, chunk)
+                    end
+                else
+                    table.insert(event_fields, events_text)
+                end
+
+                while #event_fields > 4 do
+                    table.remove(event_fields, 1)
+                end
+
+                local context_fields = {}
+                for index, event_text in ipairs(event_fields) do
+                    table.insert(context_fields, {
+                        name = index == 1 and "Recent Events" or ("Recent Events " .. tostring(index)),
+                        value = "```\n" .. trim_text(event_text, 1000) .. "```",
+                        inline = false
+                    })
+                end
+                table.insert(context_fields, {
+                    name = "Tools",
+                    value = "```\n" .. trim_text(tools_text, 1000) .. "```",
+                    inline = false
+                })
+                table.insert(context_fields, {
+                    name = "Session Loot",
+                    value = "```\n" .. trim_text(loot_text, 1000) .. "```",
+                    inline = false
+                })
+                table.insert(context_fields, {
+                    name = "Memory Snapshot",
+                    value = "```\n" .. trim_text(mem_text, 1000) .. "```",
+                    inline = false
+                })
+
+                local embeds = {
+                    {
+                        title = "LudSploit | Trinket Bot Death Debug",
+                        description = string.format(
+                            "**Death detected while botting.**\n**Server:** `%s (%s)`\n**Job:** `%s`",
+                            server_name ~= "" and server_name or "Unknown",
+                            server_region ~= "" and server_region or "Unknown",
+                            tostring(game.JobId)
+                        ),
+                        color = 0xff365e,
+                        fields = {
+                            {
+                                name = "State",
+                                value = "```\n" .. trim_text(state_text, 1000) .. "```",
+                                inline = false
+                            },
+                            {
+                                name = "Toggles",
+                                value = "```\n" .. trim_text(toggles_text, 1000) .. "```",
+                                inline = false
+                            },
+                            {
+                                name = "Nearby Players",
+                                value = "```\n" .. trim_text(nearby_text, 1000) .. "```",
+                                inline = false
+                            },
+                        },
+                        footer = {
+                            text = string.format("LudSploit • Players: %d/23 • %s", #plrs:GetPlayers(), plr.Name)
+                        },
+                        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                    },
+                    {
+                        title = "LudSploit | Death Debug Context",
+                        color = 0x7f1d1d,
+                        fields = context_fields,
+                        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                    }
+                }
+
+                local artifact_webhook = get_trinket_artifact_webhook()
+                local general_webhook = get_trinket_general_webhook()
+                local target_webhook = artifact_webhook ~= "" and artifact_webhook or general_webhook
+                local payload = {
+                    username = cheat_client.config.webhook_username or "LudSploit",
+                    content = get_trinket_alert_ping("@here") .. " Trinket bot death debug dump",
+                    embeds = embeds
+                }
+
+                if target_webhook == "" then
+                    warn("[LudSploit][TRINKET DEATH DEBUG] no artifact/general webhook configured")
+                    warn("[LudSploit][TRINKET DEATH DEBUG][STATE]\n" .. state_text)
+                    warn("[LudSploit][TRINKET DEATH DEBUG][EVENTS]\n" .. events_text)
+                    return
+                end
+
+                task.spawn(function()
+                    local ok, result = pcall(function()
+                        return HXD_SEND_WEBHOOK(target_webhook, payload)
+                    end)
+                    if (not ok or result == false)
+                        and artifact_webhook ~= ""
+                        and general_webhook ~= ""
+                        and general_webhook ~= artifact_webhook then
+                        pcall(function()
+                            HXD_SEND_WEBHOOK(general_webhook, payload)
+                        end)
+                    elseif not ok or result == false then
+                        warn("[LudSploit] Death debug webhook failed: " .. tostring(result))
+                    end
+                end)
             end
 
             local function is_valid_vector3(position)
@@ -17027,7 +17373,7 @@ if is_hydroxide_supported_place() then
                     auto_restart_after_hop = Toggles.AutoRestartAfterHop == nil and true or Toggles.AutoRestartAfterHop.Value,
                     deepforest_restart_for_uploaded_path = Toggles.DeepforestRestartForUploadedPath == nil and true or Toggles.DeepforestRestartForUploadedPath.Value,
                     death_lives_check = Toggles.DeathLivesCheck == nil and true or Toggles.DeathLivesCheck.Value,
-                    kick_on_one_life = Toggles.KickOnOneLife and Toggles.KickOnOneLife.Value or false,
+                    kick_on_one_life = trinket_bot.is_kick_on_one_life_enabled and trinket_bot.is_kick_on_one_life_enabled() or false,
                     trinket_debug_ping_user_id = normalize_trinket_debug_ping_user_id(Options.TrinketDebugPingUserId and Options.TrinketDebugPingUserId.Value or cheat_client.config.trinket_debug_ping_user_id),
                     trinket_general_webhook = normalize_trinket_webhook_url(Options.TrinketGeneralWebhook and Options.TrinketGeneralWebhook.Value or ((cheat_client.config.trinket_general_webhook and cheat_client.config.trinket_general_webhook ~= "") and cheat_client.config.trinket_general_webhook or cheat_client.config.webhook)),
                     trinket_artifact_webhook = normalize_trinket_webhook_url(Options.TrinketArtifactWebhook and Options.TrinketArtifactWebhook.Value or cheat_client.config.trinket_artifact_webhook),
@@ -18544,6 +18890,17 @@ if is_hydroxide_supported_place() then
                             end
 
                             local previous_lives = Get("Lives")
+                            if trinket_bot.record_debug_event then
+                                pcall(function()
+                                    trinket_bot.record_debug_event("DEATH_DETECTED", "main path death; previous_lives=" .. tostring(previous_lives), get_trinket_bot_mem_snapshot())
+                                end)
+                            end
+                            if trinket_bot.send_death_debug_dump then
+                                pcall(function()
+                                    trinket_bot.send_death_debug_dump("main path", previous_lives)
+                                end)
+                            end
+
                             if not test_mode and Toggles.DeathLivesCheck and Toggles.DeathLivesCheck.Value and handle_death_with_lives_check then
                                 send_trinket_bot_death_webhook(previous_lives, "death lives check")
                                 handle_death_with_lives_check(previous_lives)
@@ -18761,8 +19118,49 @@ if is_hydroxide_supported_place() then
                             and numeric_after_pd_lives
                             and numeric_after_pd_lives >= numeric_previous_lives
 
-                        if confirmed_respawn and (lives_preserved or (not numeric_previous_lives and numeric_after_pd_lives and numeric_after_pd_lives > 0)) then
-                            library:Notify("Lives check passed - continuing trinket bot")
+                        local can_continue_after_death = confirmed_respawn and numeric_after_pd_lives and numeric_after_pd_lives > 0
+                        local life_lost = numeric_previous_lives
+                            and numeric_after_pd_lives
+                            and numeric_after_pd_lives < numeric_previous_lives
+
+                        if can_continue_after_death then
+                            if life_lost and numeric_after_pd_lives <= 1 and trinket_bot.is_kick_on_one_life_enabled and trinket_bot.is_kick_on_one_life_enabled() then
+                                trinket_bot.death_resume_pending = false
+                                trinket_bot.path_running = false
+                                pcall(function()
+                                    mem:RemoveItem("botstarted")
+                                    mem:RemoveItem("trinket_bot_resume_after_hop")
+                                    mem:RemoveItem("trinket_bot_restart_after_hop")
+                                end)
+                                pcall(function()
+                                    trinket_plain_webhook("@here", string.format(
+                                        "Kick on 1 life triggered after death check. Lives: %s | Path: %s | Job: %s",
+                                        tostring(after_pd_lives),
+                                        tostring(trinket_bot.current_path_name or ""),
+                                        tostring(game.JobId)
+                                    ))
+                                end)
+                                task.wait(0.3)
+                                plr:Kick("Kick on 1 life")
+                                return
+                            end
+
+                            if life_lost then
+                                pcall(function()
+                                    trinket_plain_webhook("@here", string.format(
+                                        "bot died and lives changed (%s -> %s) but account is alive; continuing because Kick on 1 life is %s",
+                                        tostring(previous_lives),
+                                        tostring(after_pd_lives),
+                                        trinket_bot.is_kick_on_one_life_enabled and trinket_bot.is_kick_on_one_life_enabled() and "ON" or "OFF"
+                                    ))
+                                end)
+                                library:Notify("Life changed but account survived - continuing trinket bot")
+                            elseif lives_preserved or not numeric_previous_lives then
+                                library:Notify("Lives check passed - continuing trinket bot")
+                            else
+                                library:Notify("Respawn verified - continuing trinket bot")
+                            end
+
                             clear_trinket_bot_session_locks()
                             trinket_bot.path_running = false
                             trinket_bot.death_resume_pending = false
@@ -19432,6 +19830,25 @@ if is_hydroxide_supported_place() then
                     end
 
                     local point = trinket_bot.path_points[i]
+                    trinket_bot.current_point_index = i
+                    trinket_bot.current_point_kind = point and (point.is_gate_point and "gate" or (point.wait_for_trinket and "wait" or "move")) or "missing"
+                    trinket_bot.current_point_position = point and point.position or nil
+                    if trinket_bot.record_debug_event then
+                        pcall(function()
+                            trinket_bot.record_debug_event(
+                                "PATH_POINT",
+                                string.format(
+                                    "%d/%d kind=%s wait=%s gate=%s",
+                                    i,
+                                    #trinket_bot.path_points,
+                                    tostring(trinket_bot.current_point_kind),
+                                    tostring(point and point.wait_for_trinket or false),
+                                    tostring(point and point.gate_location or "")
+                                )
+                            )
+                        end)
+                    end
+
                     if gnav_detected then
                         local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
                         if stay_in_server then
@@ -21519,10 +21936,10 @@ if is_hydroxide_supported_place() then
 
             group_trinket_bot:AddToggle("KickOnOneLife", {
                 Text = "Kick on 1 Life",
-                Default = cheat_client.config.kick_on_one_life or false,
+                Default = cheat_client.config.kick_on_one_life == true,
                 Tooltip = "While the trinket bot is running, kick and webhook if lives reach 1",
                 Callback = function(value)
-                    cheat_client.config.kick_on_one_life = value
+                    cheat_client.config.kick_on_one_life = value == true
                 end
             })
 
@@ -21726,7 +22143,7 @@ if is_hydroxide_supported_place() then
                 if Toggles.AutoRestartAfterHop then Toggles.AutoRestartAfterHop:SetValue(settings.auto_restart_after_hop == nil and true or settings.auto_restart_after_hop) end
                 if Toggles.DeepforestRestartForUploadedPath then Toggles.DeepforestRestartForUploadedPath:SetValue(settings.deepforest_restart_for_uploaded_path == nil and true or settings.deepforest_restart_for_uploaded_path) end
                 if Toggles.DeathLivesCheck then Toggles.DeathLivesCheck:SetValue(settings.death_lives_check == nil and true or settings.death_lives_check) end
-                if Toggles.KickOnOneLife then Toggles.KickOnOneLife:SetValue(settings.kick_on_one_life or false) end
+                if Toggles.KickOnOneLife then Toggles.KickOnOneLife:SetValue(settings.kick_on_one_life == true) end
                 if Options.TrinketDebugPingUserId then
                     local debug_ping_user_id = normalize_trinket_debug_ping_user_id(settings.trinket_debug_ping_user_id)
                     cheat_client.config.trinket_debug_ping_user_id = debug_ping_user_id
@@ -22139,6 +22556,18 @@ if is_hydroxide_supported_place() then
                                     if auto_start_death_connection then
                                         pcall(function() auto_start_death_connection:Disconnect() end)
                                         auto_start_death_connection = nil
+                                    end
+
+                                    local previous_lives = Get("Lives")
+                                    if trinket_bot.record_debug_event then
+                                        pcall(function()
+                                            trinket_bot.record_debug_event("DEATH_DETECTED", "auto-resume death; previous_lives=" .. tostring(previous_lives), get_trinket_bot_mem_snapshot())
+                                        end)
+                                    end
+                                    if trinket_bot.send_death_debug_dump then
+                                        pcall(function()
+                                            trinket_bot.send_death_debug_dump("auto-resume", previous_lives)
+                                        end)
                                     end
 
                                     local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
@@ -23006,7 +23435,7 @@ if is_hydroxide_supported_place() then
                             auto_restart_after_hop = Toggles.AutoRestartAfterHop == nil and true or Toggles.AutoRestartAfterHop.Value,
                             deepforest_restart_for_uploaded_path = Toggles.DeepforestRestartForUploadedPath == nil and true or Toggles.DeepforestRestartForUploadedPath.Value,
                             death_lives_check = Toggles.DeathLivesCheck == nil and true or Toggles.DeathLivesCheck.Value,
-                            kick_on_one_life = Toggles.KickOnOneLife and Toggles.KickOnOneLife.Value or false,
+                            kick_on_one_life = trinket_bot.is_kick_on_one_life_enabled and trinket_bot.is_kick_on_one_life_enabled() or false,
                             trinket_debug_ping_user_id = normalize_trinket_debug_ping_user_id(Options.TrinketDebugPingUserId and Options.TrinketDebugPingUserId.Value or cheat_client.config.trinket_debug_ping_user_id),
                             trinket_general_webhook = normalize_trinket_webhook_url(Options.TrinketGeneralWebhook and Options.TrinketGeneralWebhook.Value or ((cheat_client.config.trinket_general_webhook and cheat_client.config.trinket_general_webhook ~= "") and cheat_client.config.trinket_general_webhook or cheat_client.config.webhook)),
                             trinket_artifact_webhook = normalize_trinket_webhook_url(Options.TrinketArtifactWebhook and Options.TrinketArtifactWebhook.Value or cheat_client.config.trinket_artifact_webhook),
@@ -23702,7 +24131,7 @@ if is_hydroxide_supported_place() then
                                 break
                             end
 
-                            if lives and lives <= 1 and Toggles.KickOnOneLife and Toggles.KickOnOneLife.Value then
+                            if lives and lives <= 1 and trinket_bot.is_kick_on_one_life_enabled and trinket_bot.is_kick_on_one_life_enabled() then
                                 trinket_bot.path_running = false
                                 clear_one_life_cautious_mode()
                                 pcall(function()
