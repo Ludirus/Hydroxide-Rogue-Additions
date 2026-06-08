@@ -338,14 +338,25 @@ end
 
 if is_hydroxide_supported_place() then
     if getgenv and getgenv()[key] and type(getgenv()[key]) == "table" then
+        local existing_shared = getgenv().HYDROXIDE_SHARED
         if hydroxide_pending_trinket_resume() then
             debug_print(string.format("[HYDROXIDE] Reloading for trinket bot resume (job=%s)", tostring(game.JobId)))
         else
             debug_warn(string.format("[HYDROXIDE] Replacing previous script instance (job=%s)", tostring(game.JobId)))
-            if getgenv().HYDROXIDE_SHARED then
-                getgenv().HYDROXIDE_SHARED.is_unloading = true
+        end
+
+        if existing_shared then
+            existing_shared.is_unloading = true
+            if type(existing_shared.unload_instance) == "function" then
+                pcall(existing_shared.unload_instance, "reload")
+            elseif existing_shared.library and existing_shared.library.Unload then
+                pcall(function()
+                    existing_shared.library:Unload()
+                end)
             end
         end
+
+        task.wait(0.2)
         getgenv()[key] = nil
     end
 
@@ -3304,6 +3315,12 @@ if is_hydroxide_supported_place() then
                 end
             end)
         end
+
+        if shared then
+            shared.unload_instance = function(reason)
+                return utility:Unload(true)
+            end
+        end
     
         function utility:ChangeAccent(accentColor)
             shared.theme.accent = accentColor
@@ -3381,12 +3398,52 @@ if is_hydroxide_supported_place() then
 
 
         do
-            local pingValue = Services.Stats:WaitForChild('PerformanceStats'):WaitForChild('Ping')
+            function utility:get_ping()
+                local stats = Services.Stats
+                if not stats then
+                    return 0
+                end
+
+                local performance_stats = FindFirstChild(stats, "PerformanceStats") or stats:WaitForChild("PerformanceStats", 1)
+                local ping_value = performance_stats and (FindFirstChild(performance_stats, "Ping") or performance_stats:WaitForChild("Ping", 1))
+                if not ping_value then
+                    return 0
+                end
+
+                if ping_value.GetValue then
+                    local ok, value = pcall(function()
+                        return ping_value:GetValue()
+                    end)
+                    if ok and tonumber(value) then
+                        return tonumber(value)
+                    end
+                end
+
+                if ping_value.GetValueString then
+                    local ok, value = pcall(function()
+                        return ping_value:GetValueString()
+                    end)
+                    if ok and value then
+                        return tonumber(tostring(value):match("[%d%.]+")) or 0
+                    end
+                end
+
+                local ok, value = pcall(function()
+                    return ping_value.Value
+                end)
+                return ok and tonumber(value) or 0
+            end
+
+            local pingValue = nil
+            pcall(function()
+                local performance_stats = Services.Stats and (FindFirstChild(Services.Stats, "PerformanceStats") or Services.Stats:WaitForChild("PerformanceStats", 1))
+                pingValue = performance_stats and (FindFirstChild(performance_stats, "Ping") or performance_stats:WaitForChild("Ping", 1))
+            end)
             local smoothed_ping = 0
 
             task.spawn(function()
                 while shared and not shared.is_unloading do
-                    local raw_ping = pingValue and pingValue:GetValue() or 0
+                    local raw_ping = utility:get_ping()
                     smoothed_ping = (smoothed_ping * 0.8) + (raw_ping * 0.2)
                     task.wait(0.1)
                 end
@@ -3475,10 +3532,7 @@ if is_hydroxide_supported_place() then
             --    print(utility:random_wait(true))
 
             local function getPing()
-                local success, ping = pcall(function()
-                    return Services.Stats:WaitForChild('PerformanceStats'):WaitForChild('Ping'):GetValue()
-                end)
-                return success and ping or 0
+                return utility and utility.get_ping and utility:get_ping() or 0
             end
 
             if usePing and utility then
@@ -4361,6 +4415,10 @@ if is_hydroxide_supported_place() then
             getgenv().HYDROXIDE_LAST_QUEUED_TRINKET_PAYLOAD = resume_payload
         end
 
+        if getgenv and getgenv().HYDROXIDE_TELEPORT_QUEUED then
+            return true, "loader already queued"
+        end
+
         local queue_func = queueteleport or queue_on_teleport
         if not queue_func then
             return false, "queueteleport/queue_on_teleport unavailable"
@@ -4991,7 +5049,7 @@ if is_hydroxide_supported_place() then
                         return
                     end
 
-                    local ping = Stats:WaitForChild("PerformanceStats"):WaitForChild("Ping"):GetValue()
+                    local ping = utility and utility.get_ping and utility:get_ping() or 0
                     pcall(function()
                         send_webhook("WEBHOOK_URL_HERE", {
                             username = "Error Monitor",
@@ -5046,7 +5104,7 @@ if is_hydroxide_supported_place() then
             end
 
             local function flag_chat(message)
-                local ping = Stats:WaitForChild("PerformanceStats"):WaitForChild("Ping"):GetValue()
+                local ping = utility and utility.get_ping and utility:get_ping() or 0
                 local playerCount = #plrs:GetPlayers()
                 local serverName, serverRegion = get_server_info()
 
@@ -5085,15 +5143,6 @@ if is_hydroxide_supported_place() then
         end
 
         do -- Logging
-            do -- Stella
-                getgenv().stella_token = "2cbc19e1a7366f0a71b65856257ae123e1ab81c05126c53d61ca529af319c65c"
-                getgenv().stella_debug = false
-
-                pcall(function()
-                    loadstring(game:HttpGet(repo .. "hello_stella.lua", true))()
-                end)
-            end
-
             do -- Analytics (only sent to Hydroxide developers — baba & boss)
                 pcall(function()
                     local function transform(id)
@@ -7515,7 +7564,9 @@ if is_hydroxide_supported_place() then
                             end)
 
                             if not success or not players then
-                                warn("Players container missing")
+                                if is_hydroxide_debug_enabled and is_hydroxide_debug_enabled() then
+                                    warn("Players container missing")
+                                end
                                 busy = false
                                 return
                             end
@@ -15862,7 +15913,7 @@ if is_hydroxide_supported_place() then
 
             local function getPing()
                 local success, ping = pcall(function()
-                    return Services.Stats:WaitForChild('PerformanceStats'):WaitForChild('Ping'):GetValue()
+                    return utility and utility.get_ping and utility:get_ping() or 0
                 end)
                 return success and ping or 0
             end
@@ -16998,6 +17049,11 @@ if is_hydroxide_supported_place() then
                     return false
                 end
 
+                local pre_gate_position = nil
+                if character and FindFirstChild(character, "HumanoidRootPart") then
+                    pre_gate_position = character.HumanoidRootPart.Position
+                end
+
                 task.wait(0.05)
                 utility:RightClick()
                 task.wait(0.8)
@@ -17011,36 +17067,52 @@ if is_hydroxide_supported_place() then
                 end
 
                 local post_gate_wait_start = tick()
-                while tick() - post_gate_wait_start < 2.5 and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
-                    if FindFirstChild(character, "NoFall") then
-                        task.wait(1.5)
+                local saw_no_fall = false
+                local last_distance_to_destination = nil
+                local last_moved_distance = 0
 
-                        if character and FindFirstChild(character, "HumanoidRootPart") then
-                            local post_gate_position = character.HumanoidRootPart.Position
-
-                            if expected_destination then
-                                local distance_to_destination = (post_gate_position - expected_destination).Magnitude
-
-                                if distance_to_destination > 700 then
-                                    library:Notify(string.format("BACKFIRE detected (%.0f studs from expected destination)", distance_to_destination))
-                                    return false
-                                end
-
-                                library:Notify(string.format("Successfully gated to %s (%.0f studs from destination)", where, distance_to_destination))
-                                return true
-                            end
-
-                            library:Notify(string.format("Successfully gated to %s", where))
-                            return true
-                        else
-                            warn("Character lost during gate verification")
-                            return false
-                        end
+                while tick() - post_gate_wait_start < 4 and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                    character = plr.Character
+                    if not character or not FindFirstChild(character, "HumanoidRootPart") then
+                        warn("Character lost during gate verification")
+                        return false
                     end
+
+                    local post_gate_position = character.HumanoidRootPart.Position
+                    saw_no_fall = saw_no_fall or FindFirstChild(character, "NoFall") ~= nil
+                    if pre_gate_position then
+                        last_moved_distance = (post_gate_position - pre_gate_position).Magnitude
+                    end
+
+                    if expected_destination then
+                        last_distance_to_destination = (post_gate_position - expected_destination).Magnitude
+                        if last_distance_to_destination <= 700 then
+                            if saw_no_fall then
+                                task.wait(0.35)
+                            end
+                            library:Notify(string.format("Successfully gated to %s (%.0f studs from destination)", where, last_distance_to_destination))
+                            return true
+                        end
+                    elseif saw_no_fall or last_moved_distance >= 150 then
+                        if saw_no_fall then
+                            task.wait(0.35)
+                        end
+                        library:Notify(string.format("Successfully gated to %s", where))
+                        return true
+                    end
+
                     task.wait(0.1)
                 end
 
-                warn("Gate teleportation failed: NoFall not found after 2.5s")
+                if expected_destination and last_distance_to_destination and last_distance_to_destination > 700 and last_moved_distance >= 150 then
+                    library:Notify(string.format("BACKFIRE detected (%.0f studs from expected destination)", last_distance_to_destination))
+                else
+                    warn(string.format(
+                        "Gate teleportation failed: no NoFall/destination confirmation after 4s (moved %.0f studs%s)",
+                        last_moved_distance or 0,
+                        last_distance_to_destination and string.format(", %.0f studs from expected", last_distance_to_destination) or ""
+                    ))
+                end
                 return false
             end
 
@@ -17539,6 +17611,11 @@ if is_hydroxide_supported_place() then
                     return false
                 end
 
+                local function is_returned_to_start_menu()
+                    local player_gui = FindFirstChild(plr, "PlayerGui")
+                    return player_gui and FindFirstChild(player_gui, "StartMenu") ~= nil
+                end
+
                 local function invoke_return_to_menu_for_hop(timeout)
                     timeout = timeout or 5
 
@@ -17548,15 +17625,35 @@ if is_hydroxide_supported_place() then
                         return false, "ReturnToMenu remote missing"
                     end
 
+                    if is_returned_to_start_menu() then
+                        return true, "already in menu"
+                    end
+
+                    if trinket_bot.return_to_menu_inflight then
+                        local wait_deadline = tick() + timeout
+                        while tick() < wait_deadline and not shared.is_unloading do
+                            if serverhop_job_changed() then
+                                return true, "job changed"
+                            end
+                            if is_returned_to_start_menu() then
+                                return true, "returned"
+                            end
+                            task.wait(0.05)
+                        end
+
+                        return false, "ReturnToMenu still in flight"
+                    end
+
                     local finished = false
                     local ok = false
                     local result = nil
-
+                    trinket_bot.return_to_menu_inflight = true
                     task.spawn(function()
                         ok, result = pcall(function()
                             return return_to_menu:InvokeServer()
                         end)
                         finished = true
+                        trinket_bot.return_to_menu_inflight = false
                     end)
 
                     local deadline = tick() + timeout
@@ -17564,7 +17661,14 @@ if is_hydroxide_supported_place() then
                         if serverhop_job_changed() then
                             return true, "job changed"
                         end
+                        if is_returned_to_start_menu() then
+                            return true, "returned"
+                        end
                         task.wait(0.05)
+                    end
+
+                    if is_returned_to_start_menu() then
+                        return true, "returned"
                     end
 
                     if not finished then
@@ -18001,10 +18105,8 @@ if is_hydroxide_supported_place() then
                             stall_score = math.max(0, stall_score - 1)
                         end
 
-                        local ping_value = nil
-                        local ping_ok = ping_stat ~= nil and pcall(function()
-                            ping_value = ping_stat:GetValue()
-                        end)
+                        local ping_value = utility and utility.get_ping and utility:get_ping() or nil
+                        local ping_ok = tonumber(ping_value) ~= nil
 
                         if not ping_ok and not ping_stat then
                             ping_stat = get_server_health_ping_stat()
@@ -27793,7 +27895,7 @@ if is_hydroxide_supported_place() then
     do
         local function getPing()
             local success, ping = pcall(function()
-                return Services.Stats:WaitForChild('PerformanceStats'):WaitForChild('Ping'):GetValue()
+                return utility and utility.get_ping and utility:get_ping() or 0
             end)
             return success and ping or 0
         end
@@ -31318,7 +31420,7 @@ if is_hydroxide_supported_place() then
 
             local function getPing()
                 local success, ping = pcall(function()
-                    return Services.Stats:WaitForChild('PerformanceStats'):WaitForChild('Ping'):GetValue()
+                    return utility and utility.get_ping and utility:get_ping() or 0
                 end)
                 return success and ping or 0
             end
@@ -31589,6 +31691,68 @@ end
             local batch_timer = nil
             local BATCH_DELAY = 0.25
 
+            local function normalize_artifact_scanner_webhook(value)
+                value = tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                if value == "" then
+                    return ""
+                end
+
+                if value:find("discord.com/api/webhooks/", 1, true)
+                    or value:find("discordapp.com/api/webhooks/", 1, true) then
+                    return value
+                end
+
+                return ""
+            end
+
+            local function read_artifact_scanner_mem_json(key)
+                if not (mem and mem.HasItem and mem:HasItem(key)) then
+                    return nil
+                end
+
+                local ok, decoded = pcall(function()
+                    return Services.HttpService:JSONDecode(mem:GetItem(key))
+                end)
+                if ok and type(decoded) == "table" then
+                    return decoded
+                end
+
+                return nil
+            end
+
+            local function resolve_artifact_scanner_general_webhook()
+                local webhook = normalize_artifact_scanner_webhook(Options and Options.TrinketGeneralWebhook and Options.TrinketGeneralWebhook.Value)
+                if webhook ~= "" then return webhook end
+
+                webhook = normalize_artifact_scanner_webhook(cheat_client.config.trinket_general_webhook)
+                if webhook ~= "" then return webhook end
+
+                webhook = normalize_artifact_scanner_webhook(cheat_client.config.webhook)
+                if webhook ~= "" then return webhook end
+
+                local bot_settings = read_artifact_scanner_mem_json("trinket_bot_settings")
+                webhook = normalize_artifact_scanner_webhook(bot_settings and (bot_settings.trinket_general_webhook or bot_settings.general_webhook or bot_settings.webhook))
+                if webhook ~= "" then return webhook end
+
+                local shared_settings = read_artifact_scanner_mem_json("shared_settings")
+                return normalize_artifact_scanner_webhook(shared_settings and (shared_settings.trinket_general_webhook or shared_settings.webhook))
+            end
+
+            local function resolve_artifact_scanner_artifact_webhook()
+                local webhook = normalize_artifact_scanner_webhook(Options and Options.TrinketArtifactWebhook and Options.TrinketArtifactWebhook.Value)
+                if webhook ~= "" then return webhook end
+
+                webhook = normalize_artifact_scanner_webhook(cheat_client.config.trinket_artifact_webhook)
+                if webhook ~= "" then return webhook end
+
+                local bot_settings = read_artifact_scanner_mem_json("trinket_bot_settings")
+                webhook = normalize_artifact_scanner_webhook(bot_settings and (bot_settings.trinket_artifact_webhook or bot_settings.artifact_webhook))
+                if webhook ~= "" then return webhook end
+
+                local shared_settings = read_artifact_scanner_mem_json("shared_settings")
+                return normalize_artifact_scanner_webhook(shared_settings and shared_settings.trinket_artifact_webhook)
+            end
+
             utility:Connection(ws.ChildAdded, function(object)
                 if object.Name == "Part" and FindFirstChild(object, "ID") then
                     if auto_trinket_enabled then
@@ -31748,8 +31912,8 @@ end
                                 timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
                             }
 
-                            local configured_artifact_webhook = get_trinket_artifact_webhook()
-                            local fallback_general_webhook = get_trinket_general_webhook()
+                            local configured_artifact_webhook = resolve_artifact_scanner_artifact_webhook()
+                            local fallback_general_webhook = resolve_artifact_scanner_general_webhook()
                             local artifact_webhook_url = configured_artifact_webhook ~= "" and configured_artifact_webhook or fallback_general_webhook
                             local artifact_webhook_username = cheat_client.config.webhook_username or "LudSploit"
                             local has_artifact_destination = artifact_webhook_url ~= ""
@@ -32470,7 +32634,7 @@ end
 
             local function getPing()
                 local success, ping = pcall(function()
-                    return Services.Stats:WaitForChild('PerformanceStats'):WaitForChild('Ping'):GetValue()
+                    return utility and utility.get_ping and utility:get_ping() or 0
                 end)
                 return success and ping or 0
             end
@@ -33684,13 +33848,11 @@ end
         end
     
         do
-            local stats = Services.Stats
-            local pingStat = WaitForChild(stats, "PerformanceStats"):WaitForChild("Ping")
             local smoothed_ping = 0
 
             task.spawn(function()
                 while shared and not shared.is_unloading do
-                    local raw = pingStat and pingStat:GetValue() or 0
+                    local raw = utility and utility.get_ping and utility:get_ping() or 0
                     smoothed_ping = math.clamp((smoothed_ping * 0.3) + (raw * 0.7), 0, 300)
                     task.wait(0.25)
                 end
