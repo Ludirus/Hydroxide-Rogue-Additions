@@ -11414,7 +11414,7 @@ if is_hydroxide_supported_place() then
                                 or not (Toggles and Toggles.AutoChestOpen and Toggles.AutoChestOpen.Value)
                                 or shared.is_unloading
 
-                            local wait_deadline = tick() + 2.5
+                            local wait_deadline = tick() + 3.5
                             while tick() < wait_deadline
                                 and Toggles
                                 and Toggles.AutoChestOpen
