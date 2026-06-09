@@ -1664,6 +1664,70 @@ if is_hydroxide_supported_place() then
         window_active = true,
     }
 
+    local ARTIFACT_ALERT_TTL_SECONDS = 30 * 60
+    cheat_client.artifact_alert_seen = cheat_client.artifact_alert_seen or {}
+
+    function cheat_client:normalize_artifact_alert_name(item_name)
+        item_name = tostring(item_name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if item_name == "Lannis Amulet" then
+            item_name = "Lannis's Amulet"
+        end
+        return item_name:lower():gsub("%s+", " ")
+    end
+
+    function cheat_client:get_artifact_alert_key(item_name, pickup_id, object)
+        local id = tostring(pickup_id or "")
+        if id == "" and object then
+            local id_value = FindFirstChild(object, "ID")
+            if id_value then
+                id = tostring(id_value.Value or "")
+            end
+        end
+
+        if id ~= "" then
+            return "id:" .. id
+        end
+
+        if object and object:IsA("BasePart") then
+            local pos = object.Position
+            return string.format(
+                "pos:%s:%d:%d:%d",
+                self:normalize_artifact_alert_name(item_name),
+                math.floor(pos.X * 10),
+                math.floor(pos.Y * 10),
+                math.floor(pos.Z * 10)
+            )
+        end
+
+        return "name:" .. self:normalize_artifact_alert_name(item_name)
+    end
+
+    function cheat_client:reserve_artifact_alert(kind, item_name, pickup_id, object)
+        local now = tick()
+        local seen = self.artifact_alert_seen
+        local checked = 0
+        for key, seen_at in pairs(seen) do
+            checked += 1
+            if now - seen_at > ARTIFACT_ALERT_TTL_SECONDS or checked > 500 then
+                seen[key] = nil
+            end
+        end
+
+        local key = tostring(kind or "found") .. ":" .. self:get_artifact_alert_key(item_name, pickup_id, object)
+        if seen[key] then
+            return false, key
+        end
+
+        seen[key] = now
+        return true, key
+    end
+
+    function cheat_client:has_artifact_alert(kind, item_name, pickup_id, object)
+        local key = tostring(kind or "found") .. ":" .. self:get_artifact_alert_key(item_name, pickup_id, object)
+        local seen_at = self.artifact_alert_seen[key]
+        return seen_at ~= nil and tick() - seen_at <= ARTIFACT_ALERT_TTL_SECONDS
+    end
+
     local friends_file = "HYDROXIDE/friends.json"
     local whitelist_file = "HYDROXIDE/whitelist.json"
     local WHITELIST_SYNC_KEY = "ludsploit_whitelist_sync"
@@ -3569,7 +3633,7 @@ if is_hydroxide_supported_place() then
             local MyAccount = RAMAccount.new(plr.Name)
 
             if MyAccount then
-                local req = http_request or request or syn.request
+                local req = http_request or request or (syn and syn.request)
                 if req then
                     local success, response = pcall(function()
                         return req({
@@ -3648,8 +3712,8 @@ if is_hydroxide_supported_place() then
                 return false
             end
 
-            local function is_server_blocked_for_hop(jobId, history)
-                if bot_account_api.is_server_looted_recently(jobId) then
+            local function is_server_blocked_for_hop(jobId, history, ignore_looted)
+                if not ignore_looted and bot_account_api.is_server_looted_recently(jobId) then
                     return true
                 end
                 return is_server_recent(jobId, history)
@@ -3700,13 +3764,13 @@ if is_hydroxide_supported_place() then
                 return nil
             end
 
-            local function is_public_server_folder_joinable(serverFolder, min_players, history)
+            local function is_public_server_folder_joinable(serverFolder, min_players, history, ignore_looted)
                 if not serverFolder or not serverFolder:IsA("Folder") then
                     return false
                 end
 
                 local jobId = serverFolder.Name
-                if jobId == game.JobId or is_server_blocked_for_hop(jobId, history or {}) then
+                if jobId == game.JobId or is_server_blocked_for_hop(jobId, history or {}, ignore_looted) then
                     return false
                 end
 
@@ -3736,7 +3800,7 @@ if is_hydroxide_supported_place() then
                 return min_player_count
             end
 
-            function utility:get_serverhop_candidates(min_players, ignore_history)
+            function utility:get_serverhop_candidates(min_players, ignore_history, ignore_looted)
                 local serverInfo = FindFirstChild(rps, "ServerInfo")
                 if not serverInfo then
                     return {}
@@ -3745,9 +3809,78 @@ if is_hydroxide_supported_place() then
                 local history = ignore_history and {} or get_server_history()
                 local candidates = {}
                 for _, server in ipairs(serverInfo:GetChildren()) do
-                    if is_public_server_folder_joinable(server, min_players or 0, history) then
+                    if is_public_server_folder_joinable(server, min_players or 0, history, ignore_looted) then
                         table.insert(candidates, server.Name)
                     end
+                end
+
+                return candidates
+            end
+
+            function utility:get_public_server_api_candidates(min_players, ignore_history, ignore_looted, max_pages)
+                local req = http_request or request or (syn and syn.request)
+                if not req then
+                    return {}
+                end
+
+                min_players = tonumber(min_players) or 0
+                max_pages = math.max(1, math.min(tonumber(max_pages) or 4, 10))
+
+                local history = ignore_history and {} or get_server_history()
+                local candidates = {}
+                local seen = {}
+                local cursor = nil
+
+                for _ = 1, max_pages do
+                    local url = string.format(ROBLOX_GAMES_API .. "?sortOrder=2&excludeFullGames=true&limit=100", game.PlaceId)
+                    if cursor and cursor ~= "" then
+                        url = url .. "&cursor=" .. httpService:UrlEncode(cursor)
+                    end
+
+                    local success, response = pcall(function()
+                        return req({
+                            Url = url,
+                            Method = "GET",
+                            Headers = {
+                                ["Accept"] = "application/json"
+                            }
+                        })
+                    end)
+
+                    if not success or not response or not response.Success or response.StatusCode ~= 200 then
+                        break
+                    end
+
+                    local decode_success, data = pcall(function()
+                        return httpService:JSONDecode(response.Body)
+                    end)
+
+                    if not decode_success or type(data) ~= "table" or type(data.data) ~= "table" then
+                        break
+                    end
+
+                    for _, server in ipairs(data.data) do
+                        local jobId = server.id
+                        local playerCount = tonumber(server.playing) or 0
+                        local maxPlayers = tonumber(server.maxPlayers) or 23
+
+                        if jobId
+                            and jobId ~= game.JobId
+                            and not seen[jobId]
+                            and playerCount >= min_players
+                            and playerCount < maxPlayers
+                            and not is_server_blocked_for_hop(jobId, history, ignore_looted) then
+                            seen[jobId] = true
+                            table.insert(candidates, jobId)
+                        end
+                    end
+
+                    cursor = data.nextPageCursor
+                    if not cursor or cursor == "" then
+                        break
+                    end
+
+                    task.wait(0.05)
                 end
 
                 return candidates
@@ -3969,72 +4102,21 @@ if is_hydroxide_supported_place() then
             	end
             end
 
-            local function joinServerWithMinPlayers(min_players)
-                local placeId = game.PlaceId
-                local ROBLOX_GAMES_API = "https://games.roblox.com/v1/games/%s/servers/Public"
-                local url = string.format(ROBLOX_GAMES_API .. "?sortOrder=2&excludeFullGames=true&limit=100", placeId)
-
-                local success, response = pcall(function()
-                    local req = http_request or request or syn.request
-                    return req({
-                        Url = url,
-                        Method = "GET",
-                        Headers = {
-                            ["Accept"] = "application/json"
-                        }
-                    })
-                end)
-
-                if not success or not response or not response.Success or response.StatusCode ~= 200 then
-                    return nil
-                end
-
-                local decode_success, data = pcall(function()
-                    return httpService:JSONDecode(response.Body)
-                end)
-
-                if not decode_success or not data or not data.data then
-                    return nil
-                end
-
-                local SERVER_HISTORY_KEY = "RecentServers_" .. game.PlaceId
-                local history = {}
-                pcall(function()
-                    local stored = mem:GetItem(SERVER_HISTORY_KEY)
-                    if stored then
-                        local decoded = httpService:JSONDecode(stored)
-                        if type(decoded) == "table" then
-                            history = decoded
-                        end
-                    end
-                end)
-
-                local valid_servers = {}
-                for _, server in ipairs(data.data) do
-                    local jobId = server.id
-                    local playerCount = server.playing or 0
-                    local maxPlayers = server.maxPlayers or 23
-
-                    local is_recent = bot_account_api.is_server_looted_recently(jobId)
-                    if not is_recent then
-                        for _, recentJobId in ipairs(history) do
-                            if recentJobId == jobId then
-                                is_recent = true
-                                break
-                            end
-                        end
-                    end
-
-                    if jobId and jobId ~= game.JobId and not is_recent and playerCount >= min_players and playerCount < maxPlayers then
-                        table.insert(valid_servers, jobId)
-                    end
-                end
-
+            local function joinServerWithMinPlayers(min_players, ignore_history, ignore_looted, max_pages)
+                local valid_servers = utility:get_public_server_api_candidates(min_players, ignore_history, ignore_looted, max_pages)
                 if #valid_servers > 0 then
                     local max_server_attempts = math.min(12, #valid_servers)
                     for attempt = 1, max_server_attempts do
                         local randomJobId = valid_servers[math.random(1, #valid_servers)]
-                        print(string.format("[API JOIN] Attempting server %d/%d: %s", attempt, max_server_attempts, randomJobId))
+                        print(string.format(
+                            "[API JOIN] Attempting server %d/%d: %s (min=%d ignore_history=%s ignore_looted=%s)",
+                            attempt,
+                            max_server_attempts,
+                            randomJobId,
+                            tonumber(min_players) or 0,
+                            tostring(ignore_history == true),
+                            tostring(ignore_looted == true)
+                        ))
 
                         if attemptTeleport(randomJobId, 1) then
                             return true
@@ -4069,7 +4151,7 @@ if is_hydroxide_supported_place() then
                 end
 
                 if min_player_count > 0 then
-                    local api_success = joinServerWithMinPlayers(min_player_count)
+                    local api_success = joinServerWithMinPlayers(min_player_count, false, false, 5)
                     if api_success then
                         return true
                     end
@@ -4166,8 +4248,13 @@ if is_hydroxide_supported_place() then
                             warn("[SERVERHOP FALLBACK] No non-full servers available at all")
                         end
 
-                        local api_fallback_success = joinServerWithMinPlayers(min_player_count) == true
-                        if api_fallback_success then
+                        if joinServerWithMinPlayers(min_player_count, false, false, 5) then
+                            return true
+                        end
+                        if min_player_count > 0 and joinServerWithMinPlayers(0, false, false, 6) then
+                            return true
+                        end
+                        if joinServerWithMinPlayers(0, true, true, 8) then
                             return true
                         end
 
@@ -4182,7 +4269,13 @@ if is_hydroxide_supported_place() then
                         if blockTarget then
                             blockPlayer(blockTarget)
                         end
-                        if joinServerWithMinPlayers(min_player_count) then
+                        if joinServerWithMinPlayers(min_player_count, false, false, 5) then
+                            return true
+                        end
+                        if min_player_count > 0 and joinServerWithMinPlayers(0, false, false, 6) then
+                            return true
+                        end
+                        if joinServerWithMinPlayers(0, true, true, 8) then
                             return true
                         end
                         return false
@@ -4192,7 +4285,13 @@ if is_hydroxide_supported_place() then
                     if blockTarget then
                         blockPlayer(blockTarget)
                     end
-                    if joinServerWithMinPlayers(min_player_count) then
+                    if joinServerWithMinPlayers(min_player_count, false, false, 5) then
+                        return true
+                    end
+                    if min_player_count > 0 and joinServerWithMinPlayers(0, false, false, 6) then
+                        return true
+                    end
+                    if joinServerWithMinPlayers(0, true, true, 8) then
                         return true
                     end
                     return false
@@ -14633,26 +14732,15 @@ if is_hydroxide_supported_place() then
             end
 
             local function get_artifact_alert_key(item_name, pickup_id, object)
-                local id = tostring(pickup_id or "")
-                if id == "" then
-                    id = get_artifact_object_id(object)
+                if cheat_client and cheat_client.get_artifact_alert_key then
+                    return cheat_client:get_artifact_alert_key(item_name, pickup_id, object)
                 end
+
+                local id = tostring(pickup_id or get_artifact_object_id(object) or "")
                 if id ~= "" then
                     return "id:" .. id
                 end
-
-                if object and object:IsA("BasePart") then
-                    local pos = object.Position
-                    return string.format(
-                        "pos:%s:%d:%d:%d",
-                        session_loot_key(item_name),
-                        math.floor(pos.X * 10),
-                        math.floor(pos.Y * 10),
-                        math.floor(pos.Z * 10)
-                    )
-                end
-
-                return "pickup:" .. session_loot_key(item_name) .. ":" .. tostring(math.floor(tick() / 10))
+                return "pickup:" .. session_loot_key(item_name)
             end
 
             local function send_artifact_pickup_webhook(item_name, quantity, pickup_id)
@@ -14661,7 +14749,8 @@ if is_hydroxide_supported_place() then
                 end
 
                 local alert_key = get_artifact_alert_key(item_name, pickup_id, nil)
-                if artifact_found_alert_ids[alert_key] then
+                if artifact_found_alert_ids[alert_key]
+                    or (cheat_client and cheat_client.has_artifact_alert and cheat_client:has_artifact_alert("found", item_name, pickup_id, nil)) then
                     return
                 end
                 if artifact_pickup_alert_ids[alert_key] then
@@ -15270,8 +15359,12 @@ if is_hydroxide_supported_place() then
                         local object = record.object
                         local pickup_id = tostring(record.id or get_artifact_object_id(object) or "")
                         local alert_key = get_artifact_alert_key(item_name, pickup_id, object)
+                        local should_alert = not artifact_found_alert_ids[alert_key]
+                        if should_alert and cheat_client and cheat_client.reserve_artifact_alert then
+                            should_alert = cheat_client:reserve_artifact_alert("found", item_name, pickup_id, object)
+                        end
 
-                        if not artifact_found_alert_ids[alert_key] then
+                        if should_alert then
                             artifact_found_alert_ids[alert_key] = tick()
                             table.insert(names, item_name)
                             sent_any = true
@@ -17687,15 +17780,21 @@ if is_hydroxide_supported_place() then
                     queue_hydroxide_loader_for_teleport((getgenv and getgenv().HYDROXIDE_TRINKET_QUEUE_PAYLOAD) or build_trinket_resume_payload_from_mem())
                 end
 
-                local function attempt_confirmed_trinket_serverhop_candidates(label, ignore_history)
+                local function attempt_confirmed_trinket_serverhop_candidates(label, ignore_history, min_players_override, ignore_looted)
                     local min_player_count = 0
                     if utility and utility.get_serverhop_min_player_count then
                         min_player_count = utility:get_serverhop_min_player_count()
                     end
+                    if min_players_override ~= nil then
+                        min_player_count = tonumber(min_players_override) or 0
+                    end
 
                     local candidates = {}
                     if utility and utility.get_serverhop_candidates then
-                        candidates = utility:get_serverhop_candidates(min_player_count, ignore_history) or {}
+                        candidates = utility:get_serverhop_candidates(min_player_count, ignore_history, ignore_looted) or {}
+                    end
+                    if #candidates <= 0 and utility and utility.get_public_server_api_candidates then
+                        candidates = utility:get_public_server_api_candidates(min_player_count, ignore_history, ignore_looted, ignore_looted and 8 or 5) or {}
                     end
 
                     if #candidates <= 0 then
@@ -17756,6 +17855,12 @@ if is_hydroxide_supported_place() then
                             utility:clear_server_history()
                         end
                         hop_ok = attempt_confirmed_trinket_serverhop_candidates(label .. ":cleared_history", true)
+                    end
+                    if not hop_ok then
+                        hop_ok = attempt_confirmed_trinket_serverhop_candidates(label .. ":relaxed_min_players", true, 0, false)
+                    end
+                    if not hop_ok then
+                        hop_ok = attempt_confirmed_trinket_serverhop_candidates(label .. ":emergency_escape", true, 0, true)
                     end
                     if not hop_ok and utility then
                         hop_ok = utility:Serverhop() == true
@@ -31779,7 +31884,14 @@ end
 
                             local valid_artifacts = {}
                             for _, artifact in ipairs(artifact_batch) do
-                                if artifact.object and artifact.object.Parent then
+                                local object = artifact.object
+                                local id_value = object and FindFirstChild(object, "ID")
+                                local pickup_id = id_value and tostring(id_value.Value or "") or ""
+                                local should_alert = object and object.Parent
+                                if should_alert and cheat_client and cheat_client.reserve_artifact_alert then
+                                    should_alert = cheat_client:reserve_artifact_alert("found", artifact.name, pickup_id, object)
+                                end
+                                if should_alert then
                                     table.insert(valid_artifacts, artifact)
                                 end
                             end
@@ -31969,6 +32081,7 @@ end
                                 return true
                             end
 
+                            local artifact_payload_sent = false
                             if has_artifact_destination then
                                 local artifact_payload = {
                                     username = artifact_webhook_username,
@@ -31989,12 +32102,14 @@ end
                                         library:Notify("Artifact webhook failed; check artifact/general webhook config.")
                                     end)
                                     has_artifact_destination = false
+                                else
+                                    artifact_payload_sent = true
                                 end
                             else
                                 warn("[LudSploit] No artifact or general webhook configured; artifact alert was not sent.")
                             end
 
-                            if has_artifact_destination and not player_has_artifact and should_show_in_stream and not (Toggles.StayInServer and Toggles.StayInServer.Value) then
+                            if not artifact_payload_sent and has_artifact_destination and not player_has_artifact and should_show_in_stream and not (Toggles.StayInServer and Toggles.StayInServer.Value) then
                                 local unpicked_list = table.concat(unpicked_artifact_names, ", ")
                                 local stream_embed = {
                                     title = string.format("LudSploit | Artifact Found: %s%s", unpicked_list, area_text),
@@ -32010,18 +32125,38 @@ end
                                 }
 
                                 if cheat_client.trinket_bot and cheat_client.trinket_bot.pending_artifact_logs then
-                                    table.insert(cheat_client.trinket_bot.pending_artifact_logs, {
-                                        webhook_url = artifact_webhook_url,
-                                        username = artifact_webhook_username,
-                                        embed = stream_embed,
-                                        artifact_names = unpicked_artifact_names,
-                                        artifact_ids = unpicked_artifact_ids
-                                    })
+                                    local already_queued = false
+                                    for _, queued_log in ipairs(cheat_client.trinket_bot.pending_artifact_logs) do
+                                        if queued_log.artifact_ids then
+                                            for _, queued_id in ipairs(queued_log.artifact_ids) do
+                                                for _, artifact_id in ipairs(unpicked_artifact_ids) do
+                                                    if artifact_id ~= "" and queued_id == artifact_id then
+                                                        already_queued = true
+                                                        break
+                                                    end
+                                                end
+                                                if already_queued then break end
+                                            end
+                                        end
+                                        if already_queued then break end
+                                    end
+
+                                    if not already_queued then
+                                        table.insert(cheat_client.trinket_bot.pending_artifact_logs, {
+                                            webhook_url = artifact_webhook_url,
+                                            username = artifact_webhook_username,
+                                            embed = stream_embed,
+                                            artifact_names = unpicked_artifact_names,
+                                            artifact_ids = unpicked_artifact_ids
+                                        })
+                                    end
                                     if #cheat_client.trinket_bot.pending_artifact_logs > 50 then
                                         warn("Artifact log queue exceeded 50, removing oldest")
                                         table.remove(cheat_client.trinket_bot.pending_artifact_logs, 1)
                                     end
-                                    library:Notify(string.format("Artifact log queued: %s (%d total)", unpicked_list, #cheat_client.trinket_bot.pending_artifact_logs))
+                                    if not already_queued then
+                                        library:Notify(string.format("Artifact log queued: %s (%d total)", unpicked_list, #cheat_client.trinket_bot.pending_artifact_logs))
+                                    end
                                 end
                             end
 
