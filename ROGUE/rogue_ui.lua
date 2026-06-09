@@ -1288,6 +1288,8 @@ if is_hydroxide_supported_place() then
             better_flight = false,
 
             auto_dialogue = false,
+            auto_idol_of_war = false,
+            auto_chest_open = false,
             auto_bard = false,
             hide_bard = false,
             anti_afk = false,
@@ -11169,6 +11171,299 @@ if is_hydroxide_supported_place() then
                         cheat_client.config.double_jump = value
                     end
                 })
+            end
+
+            do
+                local auto_idol_loop_active = false
+                local auto_chest_loop_active = false
+
+                local function get_live_humanoid()
+                    local character = plr.Character
+                    local humanoid = character and FindFirstChildOfClass(character, "Humanoid")
+                    if not character or not humanoid or humanoid.Health <= 0 then
+                        return nil, nil
+                    end
+                    return character, humanoid
+                end
+
+                local function get_tool_quantity(tool)
+                    if not tool or not tool:IsA("Tool") then
+                        return 0
+                    end
+
+                    local quantity = FindFirstChild(tool, "Quantity")
+                    if quantity and quantity:IsA("IntValue") then
+                        return math.max(0, tonumber(quantity.Value) or 0)
+                    end
+
+                    return 1
+                end
+
+                local function find_inventory_tool(tool_name)
+                    local containers = {plr.Character, plr.Backpack}
+                    for _, container in ipairs(containers) do
+                        if container then
+                            for _, child in ipairs(container:GetChildren()) do
+                                if child:IsA("Tool") and child.Name == tool_name then
+                                    return child
+                                end
+                            end
+                        end
+                    end
+                    return nil
+                end
+
+                local function count_inventory_tool(tool_name)
+                    local total = 0
+                    local containers = {plr.Character, plr.Backpack}
+                    for _, container in ipairs(containers) do
+                        if container then
+                            for _, child in ipairs(container:GetChildren()) do
+                                if child:IsA("Tool") and child.Name == tool_name then
+                                    total += get_tool_quantity(child)
+                                end
+                            end
+                        end
+                    end
+                    return total
+                end
+
+                local function set_misc_toggle_off(toggle_name)
+                    if Toggles and Toggles[toggle_name] and Toggles[toggle_name].Value then
+                        Toggles[toggle_name]:SetValue(false)
+                    end
+                end
+
+                local function start_auto_idol_of_war()
+                    if auto_idol_loop_active then
+                        return
+                    end
+
+                    auto_idol_loop_active = true
+                    task.spawn(function()
+                        while shared and not shared.is_unloading and Toggles and Toggles.AutoIdolOfWar and Toggles.AutoIdolOfWar.Value do
+                            local before_count = count_inventory_tool("Idol of War")
+                            if before_count <= 0 then
+                                break
+                            end
+
+                            local idol = find_inventory_tool("Idol of War")
+                            local character, humanoid = get_live_humanoid()
+                            if not idol or not character or not humanoid then
+                                task.wait(0.35)
+                                continue
+                            end
+
+                            if idol.Parent ~= character then
+                                pcall(function()
+                                    humanoid:EquipTool(idol)
+                                end)
+
+                                local equip_deadline = tick() + 2
+                                while idol.Parent ~= character
+                                    and idol.Parent
+                                    and tick() < equip_deadline
+                                    and Toggles
+                                    and Toggles.AutoIdolOfWar
+                                    and Toggles.AutoIdolOfWar.Value
+                                    and not shared.is_unloading do
+                                    task.wait(0.05)
+                                end
+                            end
+
+                            if idol.Parent ~= character then
+                                task.wait(0.25)
+                                continue
+                            end
+
+                            local use_deadline = tick() + 7
+                            repeat
+                                pcall(function()
+                                    idol:Activate()
+                                end)
+                                task.wait(0.25)
+                            until count_inventory_tool("Idol of War") < before_count
+                                or count_inventory_tool("Idol of War") <= 0
+                                or not (Toggles and Toggles.AutoIdolOfWar and Toggles.AutoIdolOfWar.Value)
+                                or shared.is_unloading
+                                or tick() >= use_deadline
+
+                            task.wait(0.15)
+                        end
+
+                        auto_idol_loop_active = false
+                        if shared and not shared.is_unloading then
+                            set_misc_toggle_off("AutoIdolOfWar")
+                        end
+                    end)
+                end
+
+                local function get_object_position(object)
+                    if not object then
+                        return nil
+                    end
+                    if object:IsA("BasePart") then
+                        return object.Position
+                    end
+                    if object:IsA("Model") then
+                        local root = FindFirstChild(object, "HumanoidRootPart") or object.PrimaryPart or FindFirstChildWhichIsA(object, "BasePart", true)
+                        return root and root.Position or nil
+                    end
+                    local part = FindFirstChildWhichIsA(object, "BasePart", true)
+                    return part and part.Position or nil
+                end
+
+                local function find_nearby_war_chest()
+                    local root = plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart")
+                    if not root then
+                        return nil
+                    end
+
+                    local search_roots = {}
+                    if FindFirstChild(ws, "NPCs") then
+                        table.insert(search_roots, ws.NPCs)
+                    end
+                    table.insert(search_roots, ws)
+
+                    local closest = nil
+                    local closest_detector = nil
+                    local closest_distance = math.huge
+
+                    for _, search_root in ipairs(search_roots) do
+                        for _, object in ipairs(search_root:GetDescendants()) do
+                            if object.Name == "War Chest" and (object:IsA("Model") or object:IsA("BasePart")) then
+                                local click_detector = FindFirstChildWhichIsA(object, "ClickDetector", true)
+                                local position = get_object_position(click_detector and click_detector.Parent or object)
+                                if position then
+                                    local distance = (root.Position - position).Magnitude
+                                    local range = click_detector and click_detector.MaxActivationDistance or 14
+                                    if distance <= range + 2 and distance < closest_distance then
+                                        closest = object
+                                        closest_detector = click_detector
+                                        closest_distance = distance
+                                    end
+                                end
+                            end
+                        end
+                        if closest then
+                            break
+                        end
+                    end
+
+                    return closest, closest_detector, closest_distance
+                end
+
+                local function get_dialogue_choice_remote()
+                    if dialogue_remote and dialogue_remote.Parent then
+                        return dialogue_remote
+                    end
+
+                    local requests = FindFirstChild(rps, "Requests")
+                    local dialogue = requests and FindFirstChild(requests, "Dialogue")
+                    if dialogue and dialogue:IsA("RemoteEvent") then
+                        dialogue_remote = dialogue
+                        return dialogue_remote
+                    end
+
+                    return nil
+                end
+
+                local function choose_war_chest_open()
+                    local remote = get_dialogue_choice_remote()
+                    if not remote then
+                        return false
+                    end
+
+                    local ok = pcall(function()
+                        remote:FireServer({choice = "Open (30 WP)"})
+                    end)
+                    return ok
+                end
+
+                local function start_auto_chest_open()
+                    if auto_chest_loop_active then
+                        return
+                    end
+
+                    auto_chest_loop_active = true
+                    task.spawn(function()
+                        while shared and not shared.is_unloading and Toggles and Toggles.AutoChestOpen and Toggles.AutoChestOpen.Value do
+                            local chest, click_detector = find_nearby_war_chest()
+                            if not chest then
+                                break
+                            end
+
+                            if click_detector and fireclickdetector then
+                                pcall(function()
+                                    fireclickdetector(click_detector)
+                                end)
+                            end
+
+                            local choice_deadline = tick() + 1.5
+                            repeat
+                                if not find_nearby_war_chest() then
+                                    set_misc_toggle_off("AutoChestOpen")
+                                    break
+                                end
+
+                                if choose_war_chest_open() then
+                                    break
+                                end
+                                task.wait(0.1)
+                            until tick() >= choice_deadline
+                                or not (Toggles and Toggles.AutoChestOpen and Toggles.AutoChestOpen.Value)
+                                or shared.is_unloading
+
+                            local wait_deadline = tick() + 2.5
+                            while tick() < wait_deadline
+                                and Toggles
+                                and Toggles.AutoChestOpen
+                                and Toggles.AutoChestOpen.Value
+                                and not shared.is_unloading do
+                                if not find_nearby_war_chest() then
+                                    set_misc_toggle_off("AutoChestOpen")
+                                    break
+                                end
+                                task.wait(0.2)
+                            end
+                        end
+
+                        auto_chest_loop_active = false
+                        if shared and not shared.is_unloading then
+                            set_misc_toggle_off("AutoChestOpen")
+                        end
+                    end)
+                end
+
+                group_misc:AddToggle("AutoIdolOfWar", {
+                    Text = "Auto Idol of War",
+                    Default = cheat_client.config.auto_idol_of_war,
+                    Callback = function(value)
+                        cheat_client.config.auto_idol_of_war = value
+                        if value then
+                            task.defer(start_auto_idol_of_war)
+                        end
+                    end
+                })
+
+                group_misc:AddToggle("AutoChestOpen", {
+                    Text = "Auto Chest Open",
+                    Default = cheat_client.config.auto_chest_open,
+                    Callback = function(value)
+                        cheat_client.config.auto_chest_open = value
+                        if value then
+                            task.defer(start_auto_chest_open)
+                        end
+                    end
+                })
+
+                if Toggles and Toggles.AutoIdolOfWar and Toggles.AutoIdolOfWar.Value then
+                    task.defer(start_auto_idol_of_war)
+                end
+
+                if Toggles and Toggles.AutoChestOpen and Toggles.AutoChestOpen.Value then
+                    task.defer(start_auto_chest_open)
+                end
             end
             
             group_misc:AddButton({
