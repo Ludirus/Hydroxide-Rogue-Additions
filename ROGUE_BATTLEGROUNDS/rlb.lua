@@ -13592,7 +13592,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         end
                     end
                 end)
-
+            end
 
             local teleport_debounce = false
             local function TrinketBotServerhop(reason, skip_test_mode_check)
