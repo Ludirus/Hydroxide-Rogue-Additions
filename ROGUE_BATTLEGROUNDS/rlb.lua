@@ -13562,27 +13562,37 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         end
                     end
 
-                    local menu_sent = false
-                    if rps.Requests and FindFirstChild(rps.Requests, "ReturnToMenu") and plr.Character then
-                        local ok = pcall(function()
-                            rps.Requests.ReturnToMenu:InvokeServer()
-                        end)
-                        if ok then
-                            menu_sent = true
+                    local function try_menu()
+                        if rps.Requests and FindFirstChild(rps.Requests, "ReturnToMenu") and plr.Character then
+                            local ok = pcall(function()
+                                rps.Requests.ReturnToMenu:InvokeServer()
+                            end)
+                            return ok
                         end
+                        return false
                     end
+
+                    local menu_sent = try_menu()
 
                     if not menu_sent then
                         task.wait(1)
-                        plr:Kick("Menu on NON-23: ReturnToMenu failed - kicked for safety")
-                    else
-                        task.wait(3)
+                        menu_sent = try_menu()
+                        if not menu_sent then
+                            plr:Kick("Menu on NON-23: ReturnToMenu failed twice - kicked for safety")
+                            return
+                        end
+                    end
+
+                    task.wait(3)
+                    if plr and plr.Character then
+                        try_menu()
+                        task.wait(1)
                         if plr and plr.Character then
-                            plr:Kick("Menu on NON-23: still in-game after menu - kicked for safety")
+                            plr:Kick("Menu on NON-23: still in-game after menu retries - kicked for safety")
                         end
                     end
                 end)
-            end
+
 
             local teleport_debounce = false
             local function TrinketBotServerhop(reason, skip_test_mode_check)
