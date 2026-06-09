@@ -13549,11 +13549,39 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                 library:Notify(string.format("Menu on NON-23 triggered (%d/23)", player_count))
 
-                if rps.Requests and FindFirstChild(rps.Requests, "ReturnToMenu") and plr.Character then
-                    pcall(function()
-                        rps.Requests.ReturnToMenu:InvokeServer()
-                    end)
-                end
+                task.spawn(function()
+                    local humanoid = plr.Character and FindFirstChildOfClass(plr.Character, "Humanoid")
+                    if humanoid then
+                        local deadline = tick() + 6
+                        while tick() < deadline do
+                            local state = humanoid:GetState()
+                            if state ~= Enum.HumanoidStateType.Freefall and state ~= Enum.HumanoidStateType.Flying and state ~= Enum.HumanoidStateType.Jumping then
+                                break
+                            end
+                            task.wait(0.1)
+                        end
+                    end
+
+                    local menu_sent = false
+                    if rps.Requests and FindFirstChild(rps.Requests, "ReturnToMenu") and plr.Character then
+                        local ok = pcall(function()
+                            rps.Requests.ReturnToMenu:InvokeServer()
+                        end)
+                        if ok then
+                            menu_sent = true
+                        end
+                    end
+
+                    if not menu_sent then
+                        task.wait(1)
+                        plr:Kick("Menu on NON-23: ReturnToMenu failed - kicked for safety")
+                    else
+                        task.wait(3)
+                        if plr and plr.Character then
+                            plr:Kick("Menu on NON-23: still in-game after menu - kicked for safety")
+                        end
+                    end
+                end)
             end
 
             local teleport_debounce = false
@@ -14438,7 +14466,8 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 local critical_serverhop_sent = false
                 local menu_on_non_23_triggered = false
                 local last_non_23_check = 0
-                local non_23_strike = 0   
+                local non_23_strike = 0 
+                local last_non_23_count = 23  
 
                 local emergency_serverhop_connection
                 local emergency_conditions = Options.EmergencyServerhopConditions and Options.EmergencyServerhopConditions.Value or {}
@@ -14641,20 +14670,20 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 end
 
                 proximity_connection = track_connection("proximity", utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
-                    if not test_mode and not menu_on_non_23_triggered and Toggles.MenuOnNon23 and Toggles.MenuOnNon23.Value and trinket_bot.path_running and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                    if not test_mode and Toggles.MenuOnNon23 and Toggles.MenuOnNon23.Value and trinket_bot.path_running and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
                         local now = tick()
                         if now - last_non_23_check >= 1 then
                             last_non_23_check = now
                             local player_count = get_current_server_player_count()
+                            last_non_23_count = player_count
                             if player_count < 23 then
-                                non_23_strike = non_23_strike + 1
-                                if non_23_strike >= 2 then
+                                if not menu_on_non_23_triggered then
                                     menu_on_non_23_triggered = true
                                     menu_on_non_23(player_count)
                                     return
                                 end
                             else
-                                non_23_strike = 0
+                                menu_on_non_23_triggered = false
                             end
                         end
                     end
