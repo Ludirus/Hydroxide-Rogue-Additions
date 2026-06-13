@@ -17755,6 +17755,40 @@ if is_hydroxide_supported_place() then
             end
 
             local teleport_debounce = false
+            local function is_trinket_serverhop_urgent(reason)
+                local reason_text = tostring(reason or ""):lower()
+                if reason_text:find("danger", 1, true)
+                    or reason_text:find("critical", 1, true)
+                    or reason_text:find("within", 1, true)
+                    or reason_text:find("emergency", 1, true)
+                    or reason_text:find("blocked or failed", 1, true)
+                    or reason_text:find("snapcool", 1, true) then
+                    return true
+                end
+
+                local character = plr.Character
+                if character and (cs:HasTag(character, "Danger") or cs:HasTag(character, "Knocked") or cs:HasTag(character, "Unconscious")) then
+                    return true
+                end
+
+                local root = character and FindFirstChild(character, "HumanoidRootPart")
+                if root then
+                    local critical_distance = get_effective_critical_distance(60)
+                    if critical_distance > 0 then
+                        for _, other_player in ipairs(plrs:GetPlayers()) do
+                            if other_player ~= plr and other_player.Character and FindFirstChild(other_player.Character, "HumanoidRootPart") then
+                                local distance = (other_player.Character.HumanoidRootPart.Position - root.Position).Magnitude
+                                if distance <= critical_distance then
+                                    return true
+                                end
+                            end
+                        end
+                    end
+                end
+
+                return false
+            end
+
             local function TrinketBotServerhop(reason, skip_test_mode_check, skip_return_to_menu, force_serverhop)
                 if not skip_test_mode_check and trinket_bot.test_mode then
                     library:Notify(string.format("Serverhop blocked (test mode): %s", reason or "Unknown"))
@@ -17773,6 +17807,20 @@ if is_hydroxide_supported_place() then
                     end
                     return
                 end
+
+                local urgent_hop = is_trinket_serverhop_urgent(reason)
+                if trinket_bot.serverhop_in_progress then
+                    if urgent_hop then
+                        trinket_bot.serverhop_urgent = true
+                    end
+                    persist_trinket_resume_state_for_hop(reason)
+                    trinket_bot_debug_log("SERVERHOP_JOIN", "already in progress; updated reason=" .. tostring(reason))
+                    return false
+                end
+
+                trinket_bot.serverhop_in_progress = true
+                trinket_bot.serverhop_urgent = urgent_hop
+                trinket_bot.serverhop_active_reason = tostring(reason or "")
 
                 if trinket_bot.current_path_name and trinket_bot.current_path_name ~= "" then
                     mem:SetItem("trinket_bot_path", trinket_bot.current_path_name)
@@ -18109,13 +18157,14 @@ if is_hydroxide_supported_place() then
                         trinket_bot_debug_log(
                             "SERVERHOP_CONFIRM",
                             string.format(
-                                "%s attempt=%d/%d job=%s min_players=%d ignore_history=%s",
+                                "%s attempt=%d/%d job=%s min_players=%d ignore_history=%s urgent=%s",
                                 tostring(label),
                                 attempt,
                                 max_attempts,
                                 tostring(job_id),
                                 min_player_count,
-                                tostring(ignore_history == true)
+                                tostring(ignore_history == true),
+                                tostring(trinket_bot.serverhop_urgent == true)
                             )
                         )
 
@@ -18123,7 +18172,7 @@ if is_hydroxide_supported_place() then
                             and utility.confirmed_join_public_server
                             and utility:confirmed_join_public_server(job_id, 1, {
                                 label = "TRINKET_SERVERHOP",
-                                wait_seconds = 10,
+                                wait_seconds = trinket_bot.serverhop_urgent and 3 or 10,
                                 start_job_id = serverhop_start_job,
                                 resume_after_hop = true,
                             }) then
@@ -18137,12 +18186,12 @@ if is_hydroxide_supported_place() then
                 local function attempt_standard_hydroxide_serverhop(label)
                     queue_resume_for_retry(label)
 
-                    local returned, return_reason = invoke_return_to_menu_for_hop(5)
+                    local returned, return_reason = invoke_return_to_menu_for_hop(trinket_bot.serverhop_urgent and 2 or 5)
                     if not returned then
                         warn(string.format("[SERVERHOP] ReturnToMenu failed before %s: %s", tostring(label), tostring(return_reason)))
                     end
 
-                    task.wait(returned and 0.65 or 0.2)
+                    task.wait(returned and (trinket_bot.serverhop_urgent and 0.2 or 0.65) or 0.05)
 
                     local hop_ok = attempt_confirmed_trinket_serverhop_candidates(label, false)
                     if not hop_ok then
