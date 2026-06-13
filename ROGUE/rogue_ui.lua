@@ -878,6 +878,8 @@ if is_hydroxide_supported_place() then
     local original_days = {}
     local original_materials = {}
     local dialogue_remote = nil
+    local last_dialogue_data = nil
+    local last_dialogue_received_at = 0
     local mana_remote = nil
     local old_remote = nil
     local old_hastag = nil
@@ -1372,9 +1374,11 @@ if is_hydroxide_supported_place() then
             webhook = "",
             trinket_general_webhook = "",
             trinket_artifact_webhook = "",
+            trinket_rare_artifact_webhook = "",
             webhook_username = "LudSploit",
             dayfarm_webhook = "",
             show_in_artifact_stream = false,
+            auto_bank_arti = false,
 
             custom_name_spoof = "",
             custom_day_spoof = 1,
@@ -14010,6 +14014,17 @@ if is_hydroxide_supported_place() then
             return webhook
         end
 
+        local function set_trinket_rare_artifact_webhook(value)
+            local webhook = normalize_trinket_webhook_url(value)
+            cheat_client.config.trinket_rare_artifact_webhook = webhook
+
+            update_hydroxide_shared_settings(function(shared_settings)
+                shared_settings.trinket_rare_artifact_webhook = webhook
+            end)
+
+            return webhook
+        end
+
         local function get_trinket_general_webhook()
             local option_value = Options and Options.TrinketGeneralWebhook and Options.TrinketGeneralWebhook.Value
             local webhook = normalize_trinket_webhook_url(option_value)
@@ -14059,6 +14074,28 @@ if is_hydroxide_supported_place() then
             return normalize_trinket_webhook_url(shared_settings and shared_settings.trinket_artifact_webhook)
         end
 
+        local function get_trinket_rare_artifact_webhook()
+            local option_value = Options and Options.TrinketRareArtifactWebhook and Options.TrinketRareArtifactWebhook.Value
+            local webhook = normalize_trinket_webhook_url(option_value)
+            if webhook ~= "" then
+                return webhook
+            end
+
+            webhook = normalize_trinket_webhook_url(cheat_client.config.trinket_rare_artifact_webhook)
+            if webhook ~= "" then
+                return webhook
+            end
+
+            local bot_settings = read_hydroxide_mem_json("trinket_bot_settings")
+            webhook = normalize_trinket_webhook_url(bot_settings and (bot_settings.trinket_rare_artifact_webhook or bot_settings.rare_artifact_webhook))
+            if webhook ~= "" then
+                return webhook
+            end
+
+            local shared_settings = read_hydroxide_mem_json("shared_settings")
+            return normalize_trinket_webhook_url(shared_settings and shared_settings.trinket_rare_artifact_webhook)
+        end
+
         local function hydroxide_setup_trinket_bot()
             local trinket_bot = {
                 path_points = {},
@@ -14081,7 +14118,12 @@ if is_hydroxide_supported_place() then
                 one_life_cautious_since = nil,
                 end_deadline = nil,
                 end_watchdog_token = nil,
-                end_timer_handled = false
+                end_timer_handled = false,
+                rare_artifact_banked_this_session = false,
+                rare_artifact_bank_in_progress = false,
+                rare_artifact_bank_started_at = nil,
+                last_world_pickup_context = nil,
+                suppress_auto_dialogue_until = 0
             }
 
             cheat_client.trinket_bot = trinket_bot
@@ -14089,6 +14131,8 @@ if is_hydroxide_supported_place() then
             local ONE_LIFE_CAUTION_CRITICAL_DISTANCE = 350
             local ONE_LIFE_CAUTION_PROXIMITY_DISTANCE = 500
             local DEEPFOREST_RESTART_GATE = "Deepforest 5"
+            local RARE_ARTIFACT_BANK_GATE = "Shore 4"
+            local RARE_ARTIFACT_BANK_POINT = Vector3.new(1360.0775146484375, 423.16217041015625, 2814.27734375)
             local DEEPFOREST_PREP_MIN_DISTANCE = 600
             local RESTART_AT_POINT_ONE_DISTANCE = 75
             local RESTART_POINT_ONE_MAX_DISTANCE = 750
@@ -15018,6 +15062,61 @@ if is_hydroxide_supported_place() then
                     or item_name == "Howler Friend"
             end
 
+            local function artifact_compare_key(item_name)
+                return normalize_session_loot_name(item_name):lower():gsub("[^%w]", "")
+            end
+
+            local function selected_kick_artifact_name(item_name)
+                if not Options or not Options.KickTrinketList or not Options.KickTrinketList.Value then
+                    return nil
+                end
+
+                local item_key = artifact_compare_key(item_name)
+                for selected_name, enabled in next, Options.KickTrinketList.Value do
+                    if enabled and artifact_compare_key(selected_name) == item_key then
+                        return normalize_session_loot_name(selected_name)
+                    end
+                end
+
+                return nil
+            end
+
+            local function should_route_to_rare_artifact_webhook(item_name)
+                local normalized_name = normalize_session_loot_name(item_name)
+                if normalized_name == "Rift Gem" or normalized_name == "Mysterious Artifact" then
+                    return true
+                end
+
+                return is_trinket_artifact_item(normalized_name) and selected_kick_artifact_name(normalized_name) ~= nil
+            end
+
+            local function is_auto_bank_artifact_candidate(item_name)
+                return Toggles
+                    and Toggles.AutoBankArti
+                    and Toggles.AutoBankArti.Value == true
+                    and is_trinket_artifact_item(item_name)
+                    and selected_kick_artifact_name(item_name) ~= nil
+            end
+
+            local function get_days_survived_text()
+                local days
+                pcall(function()
+                    if Get then
+                        days = Get("DaysSurvived")
+                    end
+                end)
+                if days == nil and utility and utility.getPlayerDays then
+                    pcall(function()
+                        days = utility:getPlayerDays()
+                    end)
+                end
+
+                if days == nil or days == "" then
+                    return "Unknown"
+                end
+                return tostring(days)
+            end
+
             local function get_artifact_object_id(object)
                 local id_value = object and FindFirstChild(object, "ID")
                 if id_value then
@@ -15061,17 +15160,20 @@ if is_hydroxide_supported_place() then
                     end
                 end
 
+                local use_rare_webhook = should_route_to_rare_artifact_webhook(item_name)
+                local configured_rare_webhook = use_rare_webhook and get_trinket_rare_artifact_webhook() or ""
                 local configured_artifact_webhook = get_trinket_artifact_webhook()
                 local fallback_general_webhook = get_trinket_general_webhook()
-                local target_webhook = configured_artifact_webhook ~= "" and configured_artifact_webhook or fallback_general_webhook
+                local target_webhook = configured_rare_webhook ~= "" and configured_rare_webhook or configured_artifact_webhook ~= "" and configured_artifact_webhook or fallback_general_webhook
                 if target_webhook == "" then
-                    warn("[LudSploit] No artifact or general webhook configured; artifact pickup alert was not sent.")
+                    warn("[LudSploit] No rare artifact, artifact, or general webhook configured; artifact pickup alert was not sent.")
                     return
                 end
 
                 local server_name, server_region = get_server_info()
                 local player_count = #plrs:GetPlayers()
                 local path_name = trinket_bot.current_path_name and trinket_bot.current_path_name ~= "" and trinket_bot.current_path_name or "None"
+                local days_text = get_days_survived_text()
                 local cached_location = artifact_location_cache[alert_key]
                 if not cached_location then
                     local root = plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart")
@@ -15119,9 +15221,10 @@ if is_hydroxide_supported_place() then
                 local embed = {
                     title = string.format("LudSploit | Artifact Collected: %s", normalize_session_loot_name(item_name)),
                     description = string.format(
-                        "**Item:** `%s`\n**Quantity:** `%d`\n**Path:** `%s`%s\n**Server:** `%s (%s)`",
+                        "**Item:** `%s`\n**Quantity:** `%d`\n**Days:** `%s`\n**Path:** `%s`%s\n**Server:** `%s (%s)`",
                         normalize_session_loot_name(item_name),
                         tonumber(quantity) or 1,
+                        days_text,
                         path_name,
                         location_line,
                         server_name ~= "" and server_name or "Unknown",
@@ -15146,8 +15249,18 @@ if is_hydroxide_supported_place() then
                     end)
 
                     if (not ok or result == false)
+                        and configured_rare_webhook ~= ""
                         and configured_artifact_webhook ~= ""
+                        and configured_artifact_webhook ~= configured_rare_webhook then
+                        warn("[LudSploit] Rare artifact pickup webhook failed, retrying artifact webhook fallback.")
+                        ok, result = pcall(function()
+                            return HXD_SEND_WEBHOOK(configured_artifact_webhook, payload)
+                        end)
+                    end
+
+                    if (not ok or result == false)
                         and fallback_general_webhook ~= ""
+                        and fallback_general_webhook ~= target_webhook
                         and fallback_general_webhook ~= configured_artifact_webhook then
                         warn("[LudSploit] Artifact pickup webhook failed, retrying general webhook fallback.")
                         ok, result = pcall(function()
@@ -15265,6 +15378,21 @@ if is_hydroxide_supported_place() then
                 if trinket_id_value ~= "" and logged_pickup_ids[trinket_id_value] then
                     return
                 end
+
+                local position = object and object:IsA("BasePart") and object.Position or nil
+                local nearest_index, nearest_distance = nil, nil
+                if position and get_nearest_path_point_for_position then
+                    nearest_index, nearest_distance = get_nearest_path_point_for_position(position)
+                end
+                trinket_bot.last_world_pickup_context = {
+                    name = item_name,
+                    id = trinket_id_value,
+                    position = position,
+                    area = position and detect_artifact_area_from_position and detect_artifact_area_from_position(position) or "None",
+                    nearest_point_index = nearest_index,
+                    nearest_point_distance = nearest_distance,
+                    picked_at = tick()
+                }
 
                 log_pickup(item_name, 1, trinket_id_value ~= "" and trinket_id_value or nil)
             end
@@ -15518,6 +15646,7 @@ if is_hydroxide_supported_place() then
                 local path_name = trinket_bot.current_path_name and trinket_bot.current_path_name ~= "" and trinket_bot.current_path_name or "None"
                 local time_left_text = format_trinket_time_left_text()
                 local time_left_line = time_left_text and string.format("\n**Time Left:** `%s`", time_left_text) or ""
+                local days_text = get_days_survived_text()
 
                 local footer_text
                 if cheat_client.config.webhook_show_username ~= false then
@@ -15534,9 +15663,10 @@ if is_hydroxide_supported_place() then
                         {
                             name = "Run Details",
                             value = string.format(
-                                "**Server:** `%s (%s)`\n**Path:** `%s`\n**Session:** `%s`%s",
+                                "**Server:** `%s (%s)`\n**Days:** `%s`\n**Path:** `%s`\n**Session:** `%s`%s",
                                 serverName ~= "" and serverName or "Unknown",
                                 serverRegion ~= "" and serverRegion or "Unknown",
+                                days_text,
                                 path_name,
                                 format_duration_text(hours, minutes, seconds),
                                 time_left_line
@@ -15647,6 +15777,7 @@ if is_hydroxide_supported_place() then
                 local names = {}
                 local first_position = nil
                 local sent_any = false
+                local use_rare_webhook = false
 
                 for _, record in ipairs(records) do
                     local item_name = normalize_session_loot_name(record.name)
@@ -15663,6 +15794,9 @@ if is_hydroxide_supported_place() then
                             artifact_found_alert_ids[alert_key] = tick()
                             table.insert(names, item_name)
                             sent_any = true
+                            if should_route_to_rare_artifact_webhook(item_name) then
+                                use_rare_webhook = true
+                            end
                         end
 
                         if object and object:IsA("BasePart") then
@@ -15683,11 +15817,12 @@ if is_hydroxide_supported_place() then
                     return false
                 end
 
+                local configured_rare_webhook = use_rare_webhook and get_trinket_rare_artifact_webhook() or ""
                 local configured_artifact_webhook = get_trinket_artifact_webhook()
                 local fallback_general_webhook = get_trinket_general_webhook()
-                local target_webhook = configured_artifact_webhook ~= "" and configured_artifact_webhook or fallback_general_webhook
+                local target_webhook = configured_rare_webhook ~= "" and configured_rare_webhook or configured_artifact_webhook ~= "" and configured_artifact_webhook or fallback_general_webhook
                 if target_webhook == "" then
-                    warn("[LudSploit] No artifact or general webhook configured; artifact found alert was not sent.")
+                    warn("[LudSploit] No rare artifact, artifact, or general webhook configured; artifact found alert was not sent.")
                     return false
                 end
 
@@ -15698,6 +15833,7 @@ if is_hydroxide_supported_place() then
                 local server_name, server_region = get_server_info()
                 local player_count = #plrs:GetPlayers()
                 local path_name = trinket_bot.current_path_name and trinket_bot.current_path_name ~= "" and trinket_bot.current_path_name or "None"
+                local days_text = get_days_survived_text()
 
                 local location_lines = ""
                 if area ~= "None" then
@@ -15725,9 +15861,10 @@ if is_hydroxide_supported_place() then
                 local embed = {
                     title = string.format("LudSploit | Artifact Found: %s%s", artifact_list, area_text),
                     description = string.format(
-                        "**Artifact%s:** `%s`\n**Path:** `%s`\n%s**Server:** `%s (%s)`\n\n%s",
+                        "**Artifact%s:** `%s`\n**Days:** `%s`\n**Path:** `%s`\n%s**Server:** `%s (%s)`\n\n%s",
                         #names > 1 and "s" or "",
                         artifact_list,
+                        days_text,
                         path_name,
                         location_lines,
                         server_name ~= "" and server_name or "Unknown",
@@ -15756,8 +15893,18 @@ if is_hydroxide_supported_place() then
                     end)
 
                     if (not ok or result == false)
+                        and configured_rare_webhook ~= ""
                         and configured_artifact_webhook ~= ""
+                        and configured_artifact_webhook ~= configured_rare_webhook then
+                        warn("[LudSploit] Rare artifact found webhook failed, retrying artifact webhook fallback.")
+                        ok, result = pcall(function()
+                            return HXD_SEND_WEBHOOK(configured_artifact_webhook, payload)
+                        end)
+                    end
+
+                    if (not ok or result == false)
                         and fallback_general_webhook ~= ""
+                        and fallback_general_webhook ~= target_webhook
                         and fallback_general_webhook ~= configured_artifact_webhook then
                         warn("[LudSploit] Artifact found webhook failed, retrying general webhook fallback.")
                         ok, result = pcall(function()
@@ -15778,10 +15925,12 @@ if is_hydroxide_supported_place() then
                 local idol_count = get_inventory_tool_quantity("Idol of War")
                 local time_left_text = format_trinket_time_left_text()
                 local time_left_line = time_left_text and ("\n**Time Left:** " .. time_left_text) or ""
+                local days_text = get_days_survived_text()
 
                 return string.format(
-                    "**Inventory Value:** %d\n**Idol of War:** %d\n**War Points:** %d-%d (avg %.1f)\n**Session:** %s%s\n**Last Looted:**\n%s\n%s",
+                    "**Inventory Value:** %d\n**Days:** %s\n**Idol of War:** %d\n**War Points:** %d-%d (avg %.1f)\n**Session:** %s%s\n**Last Looted:**\n%s\n%s",
                     get_inventory_value(),
+                    days_text,
                     idol_count,
                     idol_count * 3,
                     idol_count * 6,
