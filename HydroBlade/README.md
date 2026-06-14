@@ -25,6 +25,7 @@ The source, assets, and clean Lua client are tracked. Local account stores, sele
 - Store username, user id, and Rogue Lineage Gaia job id per account.
 - Launch a selected account toward a Gaia job id through the Roblox player protocol.
 - Start Sigils from all active Sigil/Rot accounts.
+- When Start Sigils launches a Sigil with no fixed Gaia job id, linked Rot Alts wait until that Sigil reports its live job id over WebSocket, then join that same job.
 - Run a local WebSocket server on `ws://127.0.0.1:8765` or the next open port through `8775`.
 - Keep the generated HydroBlade logo as an icon/favicon asset only, not as a large in-app UI element.
 - Prompt for the executor auto-execute folder before showing the main screen.

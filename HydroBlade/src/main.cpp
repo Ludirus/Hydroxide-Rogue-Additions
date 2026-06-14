@@ -154,6 +154,7 @@ struct RuntimeAccount {
 std::recursive_mutex g_runtimeMutex;
 std::unordered_map<std::wstring, RuntimeAccount> g_runtimeAccounts;
 std::unordered_set<std::wstring> g_failedGroups;
+std::unordered_map<std::wstring, std::vector<Account>> g_pendingRotLaunches;
 
 struct DragState {
     HWND source = nullptr;
@@ -1316,6 +1317,37 @@ std::optional<std::string> ReceiveWebSocketText(SOCKET socket) {
     return payload;
 }
 
+size_t LaunchPendingRotForParent(const std::wstring& parentId, const std::wstring& jobId, const std::wstring& role) {
+    if (parentId.empty() || jobId.empty() || role != L"sigil_alt") {
+        return 0;
+    }
+
+    std::vector<Account> pending;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_runtimeMutex);
+        const auto found = g_pendingRotLaunches.find(parentId);
+        if (found == g_pendingRotLaunches.end()) {
+            return 0;
+        }
+        pending = std::move(found->second);
+        g_pendingRotLaunches.erase(found);
+    }
+
+    size_t launched = 0;
+    RobloxClient client;
+    for (const Account& account : pending) {
+        const LaunchResult result = client.JoinRogueGaiaJob(account, jobId);
+        if (result.ok) {
+            ++launched;
+            Sleep(750);
+        }
+    }
+    if (launched > 0) {
+        SetStatus(L"Launched " + std::to_wstring(launched) + L" pending Rot account(s) into Sigil job.");
+    }
+    return launched;
+}
+
 RuntimeAccount RuntimeFromMessage(const std::string& message) {
     RuntimeAccount account;
     account.accountId = Widen(ExtractJsonString(message, "account_id").value_or(""));
@@ -1385,6 +1417,7 @@ std::string ExecuteWsCommand(const std::string& message) {
     if (method == "listen") {
         RuntimeAccount account = RuntimeFromMessage(message);
         UpsertRuntimeAccount(account);
+        LaunchPendingRotForParent(account.accountId, account.jobId, account.role);
         std::string reply = ClientRuntimeReply(account, "listening");
         reply.pop_back();
         return reply + ",\"events\":[\"accounts\",\"status\",\"workflow\"],\"snapshot\":" + AccountListJson() + "}";
@@ -1411,6 +1444,7 @@ std::string ExecuteWsCommand(const std::string& message) {
     if (method == "client_status") {
         RuntimeAccount account = RuntimeFromMessage(message);
         UpsertRuntimeAccount(account);
+        LaunchPendingRotForParent(account.accountId, account.jobId, account.role);
         return ClientRuntimeReply(account, "client_status");
     }
     if (method == "parent_job") {
@@ -2009,6 +2043,7 @@ void StartSigils() {
         {
             std::lock_guard<std::recursive_mutex> runtimeLock(g_runtimeMutex);
             g_failedGroups.clear();
+            g_pendingRotLaunches.clear();
         }
         SaveAccounts();
         SyncAutoExecuteFiles();
@@ -2017,6 +2052,7 @@ void StartSigils() {
 
     size_t launched = 0;
     size_t groups = 0;
+    size_t pendingRot = 0;
     RobloxClient client;
     for (const Account& sigil : accounts) {
         if (!sigil.active || sigil.role != Role::SigilAlt) {
@@ -2028,19 +2064,36 @@ void StartSigils() {
             ++launched;
             Sleep(750);
         }
+        std::vector<Account> rotChildren;
         for (const Account& rot : accounts) {
             if (rot.role != Role::RotAlt || rot.parentId != sigil.id) {
                 continue;
             }
-            const LaunchResult rotResult = client.JoinRogueGaiaJob(rot, sigil.gaiaJobId);
-            if (rotResult.ok) {
-                ++launched;
-                Sleep(750);
+            rotChildren.push_back(rot);
+        }
+        if (!sigilResult.ok || rotChildren.empty()) {
+            continue;
+        }
+        if (sigil.gaiaJobId.empty()) {
+            std::lock_guard<std::recursive_mutex> runtimeLock(g_runtimeMutex);
+            pendingRot += rotChildren.size();
+            g_pendingRotLaunches[sigil.id] = std::move(rotChildren);
+        } else {
+            for (const Account& rot : rotChildren) {
+                const LaunchResult rotResult = client.JoinRogueGaiaJob(rot, sigil.gaiaJobId);
+                if (rotResult.ok) {
+                    ++launched;
+                    Sleep(750);
+                }
             }
         }
     }
     RefreshLists();
-    SetStatus(L"Start Sigils launched " + std::to_wstring(launched) + L" account(s) across " + std::to_wstring(groups) + L" Sigil group(s).");
+    std::wstring status = L"Start Sigils launched " + std::to_wstring(launched) + L" account(s) across " + std::to_wstring(groups) + L" Sigil group(s).";
+    if (pendingRot > 0) {
+        status += L" Waiting for " + std::to_wstring(pendingRot) + L" Rot account(s) to receive parent job.";
+    }
+    SetStatus(status);
 }
 
 int ListIndexFromPoint(HWND hwnd, LPARAM lParam) {
