@@ -25456,9 +25456,9 @@ if is_hydroxide_supported_place() then
             end
 
             do
-            local bank = {}
+                trinket_bot.bank = trinket_bot.bank or {}
 
-            bank.find_inventory_tool_by_artifact_name = function(item_name)
+            trinket_bot.bank.find_inventory_tool_by_artifact_name = function(item_name)
                 local target_key = artifact_compare_key(item_name)
                 for _, container in ipairs({plr.Backpack, plr.Character}) do
                     if container then
@@ -25472,7 +25472,7 @@ if is_hydroxide_supported_place() then
                 return nil
             end
 
-            bank.get_dialogue_choices = function(dialog_data)
+            trinket_bot.bank.get_dialogue_choices = function(dialog_data)
                 local choices = {}
                 local seen = {}
                 local raw_choices = dialog_data and dialog_data.choices
@@ -25508,14 +25508,14 @@ if is_hydroxide_supported_place() then
                 return choices
             end
 
-            bank.find_recent_dialogue_choice = function(target_choice, max_age)
+            trinket_bot.bank.find_recent_dialogue_choice = function(target_choice, max_age)
                 max_age = max_age or 8
                 if not last_dialogue_data or tick() - last_dialogue_received_at > max_age then
                     return nil, last_dialogue_data
                 end
 
                 local target = tostring(target_choice or ""):gsub("^%s+", ""):gsub("%s+$", "")
-                for _, choice in ipairs(bank.get_dialogue_choices(last_dialogue_data)) do
+                for _, choice in ipairs(trinket_bot.bank.get_dialogue_choices(last_dialogue_data)) do
                     if choice == target then
                         return choice, last_dialogue_data
                     end
@@ -25524,14 +25524,14 @@ if is_hydroxide_supported_place() then
                 return nil, last_dialogue_data
             end
 
-            bank.recent_dialogue_has_text = function(fragment, max_age)
+            trinket_bot.bank.recent_dialogue_has_text = function(fragment, max_age)
                 max_age = max_age or 8
                 if not last_dialogue_data or tick() - last_dialogue_received_at > max_age then
                     return false
                 end
 
                 local needle = tostring(fragment or ""):lower()
-                for _, choice in ipairs(bank.get_dialogue_choices(last_dialogue_data)) do
+                for _, choice in ipairs(trinket_bot.bank.get_dialogue_choices(last_dialogue_data)) do
                     if choice:lower():find(needle, 1, true) then
                         return true
                     end
@@ -25541,10 +25541,10 @@ if is_hydroxide_supported_place() then
                 return msg:find(needle, 1, true) ~= nil
             end
 
-            bank.wait_for_dialogue_choice = function(choice, timeout)
+            trinket_bot.bank.wait_for_dialogue_choice = function(choice, timeout)
                 local deadline = tick() + (timeout or 8)
                 repeat
-                    local found = bank.find_recent_dialogue_choice(choice, 10)
+                    local found = trinket_bot.bank.find_recent_dialogue_choice(choice, 10)
                     if found then
                         return found
                     end
@@ -25554,7 +25554,7 @@ if is_hydroxide_supported_place() then
                 return nil
             end
 
-            bank.fire_dialogue_choice = function(choice)
+            trinket_bot.bank.fire_dialogue_choice = function(choice)
                 if not dialogue_remote or not dialogue_remote.Parent then
                     return false
                 end
@@ -25565,7 +25565,7 @@ if is_hydroxide_supported_place() then
                 return ok
             end
 
-            bank.find_banker_click_detector = function()
+            trinket_bot.bank.find_banker_click_detector = function()
                 local roots = {FindFirstChild(ws, "NPCs"), FindFirstChild(ws, "Live"), ws}
                 for _, root in ipairs(roots) do
                     if root then
@@ -25582,7 +25582,7 @@ if is_hydroxide_supported_place() then
                 return nil, nil
             end
 
-            bank.get_bank_survey_radius = function()
+            trinket_bot.bank.get_bank_survey_radius = function()
                 local radius = math.max(180, get_effective_critical_distance(180))
                 local proximity_radius = get_effective_proximity_distance(0)
                 if proximity_radius and proximity_radius > 0 then
@@ -25591,7 +25591,7 @@ if is_hydroxide_supported_place() then
                 return radius
             end
 
-            bank.get_bank_survey_positions = function()
+            trinket_bot.bank.get_bank_survey_positions = function()
                 local positions = {}
                 local shore_destination = get_gate_destination_for_location(RARE_ARTIFACT_BANK_GATE)
                 if shore_destination then
@@ -25607,9 +25607,9 @@ if is_hydroxide_supported_place() then
                 return positions
             end
 
-            bank.survey_bank_safety = function(context)
-                local radius = bank.get_bank_survey_radius()
-                for _, entry in ipairs(bank.get_bank_survey_positions()) do
+            trinket_bot.bank.survey_bank_safety = function(context)
+                local radius = trinket_bot.bank.get_bank_survey_radius()
+                for _, entry in ipairs(trinket_bot.bank.get_bank_survey_positions()) do
                     if entry.position and typeof(entry.position) == "Vector3" then
                         local has_player, player_name = IsPlayerNearPosition(entry.position, radius)
                         if has_player then
@@ -25627,7 +25627,7 @@ if is_hydroxide_supported_place() then
                 return true
             end
 
-            bank.start_bank_survey_token = function(item_name)
+            trinket_bot.bank.start_bank_survey_token = function(item_name)
                 local token = {
                     active = true,
                     unsafe = false,
@@ -25636,7 +25636,7 @@ if is_hydroxide_supported_place() then
 
                 task.spawn(function()
                     while token.active and not shared.is_unloading do
-                        local safe, reason = bank.survey_bank_safety("Auto Bank Arti survey")
+                        local safe, reason = trinket_bot.bank.survey_bank_safety("Auto Bank Arti survey")
                         if not safe then
                             token.unsafe = true
                             token.reason = reason
@@ -25654,13 +25654,13 @@ if is_hydroxide_supported_place() then
                 return token
             end
 
-            bank.stop_bank_survey_token = function(token)
+            trinket_bot.bank.stop_bank_survey_token = function(token)
                 if token then
                     token.active = false
                 end
             end
 
-            bank.send_bank_artifact_webhook = function(item_name, status, reason, pickup_context, extra)
+            trinket_bot.bank.send_bank_artifact_webhook = function(item_name, status, reason, pickup_context, extra)
                 local rare_webhook = get_trinket_rare_artifact_webhook()
                 local artifact_webhook = get_trinket_artifact_webhook()
                 local general_webhook = get_trinket_general_webhook()
@@ -25696,7 +25696,7 @@ if is_hydroxide_supported_place() then
                     location_lines = #parts > 0 and table.concat(parts, "\n") or location_lines
                 end
 
-                local inventory_tool = bank.find_inventory_tool_by_artifact_name(item_name)
+                local inventory_tool = trinket_bot.bank.find_inventory_tool_by_artifact_name(item_name)
                 local extra_text = ""
                 if extra then
                     local extra_lines = {}
@@ -25779,14 +25779,14 @@ if is_hydroxide_supported_place() then
                 return true
             end
 
-            bank.set_bank_fallback_kick_path = function(item_name, reason, pickup_context)
+            trinket_bot.bank.set_bank_fallback_kick_path = function(item_name, reason, pickup_context)
                 kick_debounce = true
                 kick_after_path = true
                 kick_trinket_name = normalize_session_loot_name(item_name)
-                bank.send_bank_artifact_webhook(item_name, "FALLBACK_KICK_PATH", reason, pickup_context, {
+                trinket_bot.bank.send_bank_artifact_webhook(item_name, "FALLBACK_KICK_PATH", reason, pickup_context, {
                     banked_this_session = tostring(trinket_bot.rare_artifact_banked_this_session),
-                    yes_present = tostring(bank.find_recent_dialogue_choice("Yes.", 10) ~= nil),
-                    could_have_back = tostring(bank.recent_dialogue_has_text("Could I have it back", 10))
+                    yes_present = tostring(trinket_bot.bank.find_recent_dialogue_choice("Yes.", 10) ~= nil),
+                    could_have_back = tostring(trinket_bot.bank.recent_dialogue_has_text("Could I have it back", 10))
                 })
 
                 local ok, message = prepare_restart_from_point_one()
@@ -25830,13 +25830,13 @@ if is_hydroxide_supported_place() then
                 task.spawn(function()
                     local survey_token
                     local function finish()
-                        bank.stop_bank_survey_token(survey_token)
+                        trinket_bot.bank.stop_bank_survey_token(survey_token)
                         trinket_bot.suppress_auto_dialogue_until = 0
                         trinket_bot.rare_artifact_bank_in_progress = false
                     end
 
                     local function fail_to_kick(reason)
-                        bank.set_bank_fallback_kick_path(item_name, reason, pickup_context)
+                        trinket_bot.bank.set_bank_fallback_kick_path(item_name, reason, pickup_context)
                         finish()
                     end
 
@@ -25846,13 +25846,13 @@ if is_hydroxide_supported_place() then
                             trinket_bot.record_debug_event("AUTO_BANK_START", item_name)
                         end
 
-                        local safe, safety_reason = bank.survey_bank_safety("Auto Bank Arti preflight")
+                        local safe, safety_reason = trinket_bot.bank.survey_bank_safety("Auto Bank Arti preflight")
                         if not safe then
                             fail_to_kick(safety_reason)
                             return
                         end
 
-                        survey_token = bank.start_bank_survey_token(item_name)
+                        survey_token = trinket_bot.bank.start_bank_survey_token(item_name)
 
                         trinket_bot.path_running = true
                         local shore_destination = get_gate_destination_for_location(RARE_ARTIFACT_BANK_GATE)
@@ -25875,7 +25875,7 @@ if is_hydroxide_supported_place() then
                             return
                         end
 
-                        local detector = bank.find_banker_click_detector()
+                        local detector = trinket_bot.bank.find_banker_click_detector()
                         if not detector or not fireclickdetector then
                             fail_to_kick("Banker ClickDetector unavailable")
                             return
@@ -25885,9 +25885,9 @@ if is_hydroxide_supported_place() then
                         last_dialogue_received_at = 0
                         fireclickdetector(detector)
 
-                        local yes_choice = bank.wait_for_dialogue_choice("Yes.", 8)
+                        local yes_choice = trinket_bot.bank.wait_for_dialogue_choice("Yes.", 8)
                         if not yes_choice then
-                            if bank.recent_dialogue_has_text("Could I have it back", 10) then
+                            if trinket_bot.bank.recent_dialogue_has_text("Could I have it back", 10) then
                                 fail_to_kick("Banker offered retrieval dialogue instead of deposit")
                             else
                                 fail_to_kick("Banker did not offer Yes.")
@@ -25895,14 +25895,14 @@ if is_hydroxide_supported_place() then
                             return
                         end
 
-                        bank.fire_dialogue_choice(yes_choice)
-                        local please_choice = bank.wait_for_dialogue_choice("Please.", 8)
+                        trinket_bot.bank.fire_dialogue_choice(yes_choice)
+                        local please_choice = trinket_bot.bank.wait_for_dialogue_choice("Please.", 8)
                         if not please_choice then
                             fail_to_kick("Banker did not offer Please.")
                             return
                         end
 
-                        bank.fire_dialogue_choice(please_choice)
+                        trinket_bot.bank.fire_dialogue_choice(please_choice)
                         trinket_bot.rare_artifact_banked_this_session = true
 
                         local minimum_wait_until = tick() + 5
@@ -25916,14 +25916,14 @@ if is_hydroxide_supported_place() then
                         until (tick() >= minimum_wait_until and not (plr.Character and FindFirstChildOfClass(plr.Character, "ForceField"))) or tick() >= deadline
 
                         local inventory_deadline = tick() + 5
-                        while tick() < inventory_deadline and bank.find_inventory_tool_by_artifact_name(item_name) do
+                        while tick() < inventory_deadline and trinket_bot.bank.find_inventory_tool_by_artifact_name(item_name) do
                             task.wait(0.25)
                         end
 
-                        if bank.find_inventory_tool_by_artifact_name(item_name) then
-                            bank.send_bank_artifact_webhook(item_name, "BANK_VERIFY_FAILED", "artifact still in inventory after banker flow; kicking instead of resuming", pickup_context, {
+                        if trinket_bot.bank.find_inventory_tool_by_artifact_name(item_name) then
+                            trinket_bot.bank.send_bank_artifact_webhook(item_name, "BANK_VERIFY_FAILED", "artifact still in inventory after banker flow; kicking instead of resuming", pickup_context, {
                                 dialogue_age = tostring(tick() - last_dialogue_received_at),
-                                choices = table.concat(bank.get_dialogue_choices(last_dialogue_data), ", "),
+                                choices = table.concat(trinket_bot.bank.get_dialogue_choices(last_dialogue_data), ", "),
                                 bank_started_at = tostring(trinket_bot.rare_artifact_bank_started_at)
                             })
                             task.wait(0.5)
@@ -25931,7 +25931,7 @@ if is_hydroxide_supported_place() then
                             return
                         end
 
-                        bank.send_bank_artifact_webhook(item_name, "BANKED", "Banker flow completed and inventory verification passed", pickup_context, {
+                        trinket_bot.bank.send_bank_artifact_webhook(item_name, "BANKED", "Banker flow completed and inventory verification passed", pickup_context, {
                             forcefield = tostring(plr.Character and FindFirstChildOfClass(plr.Character, "ForceField") ~= nil),
                             waited_seconds = tostring(math.floor(tick() - (trinket_bot.rare_artifact_bank_started_at or tick())))
                         })
@@ -25969,10 +25969,10 @@ if is_hydroxide_supported_place() then
                     end)
 
                     if not ok then
-                        bank.send_bank_artifact_webhook(item_name, "BANK_ERROR", tostring(err), pickup_context, {
+                        trinket_bot.bank.send_bank_artifact_webhook(item_name, "BANK_ERROR", tostring(err), pickup_context, {
                             bank_started_at = tostring(trinket_bot.rare_artifact_bank_started_at)
                         })
-                        bank.set_bank_fallback_kick_path(item_name, "Auto Bank Arti error: " .. tostring(err), pickup_context)
+                        trinket_bot.bank.set_bank_fallback_kick_path(item_name, "Auto Bank Arti error: " .. tostring(err), pickup_context)
                         finish()
                     end
                 end)
