@@ -259,6 +259,15 @@ local function legit_flag_enabled()
     return flag_truthy(env.HYDROGEN_LEGIT) or flag_truthy(env.HYDROXIDE_LEGIT) or tostring(env.HYDROGEN_MODE or ""):lower() == "legit"
 end
 
+local function hydroblade_flag_enabled()
+    if not getgenv then
+        return false
+    end
+
+    local env = getgenv()
+    return flag_truthy(env.HYDROBLADE_CLIENT) or flag_truthy(env.HYDROBLADE) or flag_truthy(env.HYDROXIDE_HYDROBLADE)
+end
+
 local function get_explicit_entrypoint()
     if not getgenv then
         return nil
@@ -411,6 +420,12 @@ end
 local gameId = game.GameId
 local placeId = game.PlaceId
 normalize_loader_flags()
+if hydroblade_flag_enabled() then
+    set_loader_stage("loader_route_hydroblade", tostring(placeId))
+    load_repo_script("hydroblade", "HydroBlade/hydroblade_client.lua", { quiet = true, visible_errors = true })
+    return
+end
+
 local legit = legit_flag_enabled()
 if not legit then
     debug_print(string.format("[HYDROXIDE] Loader (place=%s game=%s)", tostring(placeId), tostring(gameId)))

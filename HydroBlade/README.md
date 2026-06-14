@@ -29,6 +29,8 @@ The source, assets, and clean Lua client are tracked. Local account stores, sele
 - Keep the generated HydroBlade logo as an icon/favicon asset only, not as a large in-app UI element.
 - Prompt for the executor auto-execute folder before showing the main screen.
 - Copy `HydroBladeClient.lua` and generate per-account boot files into the selected auto-execute folder without writing cookies.
+- Load the no-UI Lua client through `loader.lua` by setting `getgenv().HYDROBLADE_CLIENT = true` before running the loader.
+- Provide client methods for bypass setup, dialogue choice snapshots, click/dialogue helpers, path movement, and `InnTeleport`.
 
 ## WebSocket Methods
 
@@ -44,6 +46,8 @@ The local server accepts simple JSON messages:
 - `{"method":"start_sigils"}`
 
 Account list responses do not include cookies.
+
+The in-game Lua client listens on the configured HydroBlade WebSocket URL and supports messages such as `dialogue_choices`, `inn_teleport`, `InnTeleport`, `enable_bypasses`, and `aa_bypass` in addition to the existing path, dialogue, movement, and menu helpers.
 
 ## Build
 

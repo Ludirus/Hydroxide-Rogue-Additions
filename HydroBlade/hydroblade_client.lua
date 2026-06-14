@@ -15,6 +15,10 @@ local HttpService = Services.HttpService
 local Players = Services.Players
 local RunService = Services.RunService
 local TweenService = Services.TweenService
+local ReplicatedStorage = Services.ReplicatedStorage
+local Workspace = Services.Workspace
+local CollectionService = Services.CollectionService
+local VirtualUser = game:GetService("VirtualUser")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local env = getgenv and getgenv() or _G
@@ -34,6 +38,27 @@ HydroBlade.ws_url = tostring(env.HYDROBLADE_WS_URL or "ws://127.0.0.1:8765")
 HydroBlade.connected = false
 HydroBlade.socket = nil
 HydroBlade.methods = {}
+HydroBlade.connections = {}
+
+local last_dialogue_data = nil
+local last_dialogue_received_at = 0
+
+local function connect(signal, callback)
+    local connection = signal and signal.Connect and signal:Connect(callback)
+    if connection then
+        table.insert(HydroBlade.connections, connection)
+    end
+    return connection
+end
+
+local function disconnect_all()
+    for _, connection in ipairs(HydroBlade.connections) do
+        pcall(function()
+            connection:Disconnect()
+        end)
+    end
+    table.clear(HydroBlade.connections)
+end
 
 local function encode(payload)
     local ok, result = pcall(function()
@@ -116,6 +141,71 @@ local function humanoid()
     return character and character:FindFirstChildOfClass("Humanoid")
 end
 
+local function find_dialogue_remote()
+    local requests = ReplicatedStorage:FindFirstChild("Requests")
+    local dialogue = requests and requests:FindFirstChild("Dialogue")
+    if dialogue and dialogue:IsA("RemoteEvent") then
+        return dialogue
+    end
+    for _, descendant in ipairs(ReplicatedStorage:GetDescendants()) do
+        if descendant:IsA("RemoteEvent") and descendant.Name == "Dialogue" then
+            return descendant
+        end
+    end
+    return nil
+end
+
+local function find_npc(name)
+    name = tostring(name or "")
+    local roots = {
+        Workspace:FindFirstChild("NPCs"),
+        Workspace:FindFirstChild("Live"),
+        Workspace,
+    }
+    for _, root in ipairs(roots) do
+        if root then
+            local direct = root:FindFirstChild(name)
+            if direct then
+                return direct
+            end
+            local deep = root:FindFirstChild(name, true)
+            if deep then
+                return deep
+            end
+        end
+    end
+    return nil
+end
+
+local function find_click_detector(instance)
+    if typeof(instance) ~= "Instance" then
+        return nil
+    end
+    if instance:IsA("ClickDetector") then
+        return instance
+    end
+    return instance:FindFirstChildWhichIsA("ClickDetector", true)
+end
+
+local function find_tool(container, names)
+    if not container then
+        return nil
+    end
+    if type(names) == "string" then
+        names = { names }
+    end
+    local wanted = {}
+    for _, name in ipairs(names or {}) do
+        wanted[tostring(name)] = true
+    end
+    for _, tool in ipairs(container:GetChildren()) do
+        if tool:IsA("Tool") and wanted[tool.Name] then
+            return tool
+        end
+    end
+    return nil
+end
+
 local function vector_from(value)
     if typeof(value) == "Vector3" then
         return value
@@ -191,6 +281,57 @@ function HydroBlade.movement.tween_to(target, seconds)
     return true
 end
 
+function HydroBlade.movement.InnTeleport(point, npcName)
+    local character = local_character()
+    if not character then
+        return false, "missing character"
+    end
+
+    local target = cframe_from(point)
+    if not target then
+        return false, "missing inn teleport point"
+    end
+
+    npcName = tostring(npcName or "Inn Keeper")
+    local choice = "Sure."
+    if npcName == "Ria" then
+        choice = "A room, please."
+    elseif npcName == "Fungkeeper" then
+        choice = "Sure."
+    end
+
+    local function is_alive()
+        local hum = character:FindFirstChildOfClass("Humanoid")
+        return hum and hum.Health > 0
+    end
+
+    -- Fire the choice before clicking, then click the NPC. This mirrors the safer
+    -- Rogue flow where the dialogue remote can be ahead of the physical prompt.
+    HydroBlade.dialogue.fire_choice(choice)
+
+    character:PivotTo(target)
+    local hum = character:FindFirstChildOfClass("Humanoid")
+    if hum then
+        hum:ChangeState(Enum.HumanoidStateType.Jumping)
+    end
+
+    local npc = find_npc(npcName)
+    local detector = find_click_detector(npc)
+    if detector and fireclickdetector then
+        pcall(fireclickdetector, detector)
+    end
+
+    task.wait(0.1)
+    HydroBlade.dialogue.fire_choice(choice)
+
+    if is_alive() then
+        character:BreakJoints()
+    end
+    return true
+end
+
+HydroBlade.movement.inn_teleport = HydroBlade.movement.InnTeleport
+
 HydroBlade.paths = {}
 
 function HydroBlade.paths.follow(points, options)
@@ -227,6 +368,121 @@ end
 
 HydroBlade.dialogue = {}
 
+function HydroBlade.dialogue.get_choices(dialog_data)
+    local choices = {}
+    local seen = {}
+    local raw_choices = dialog_data and dialog_data.choices
+
+    local function add_choice(choice)
+        local text = nil
+        if type(choice) == "string" then
+            text = choice
+        elseif type(choice) == "table" then
+            text = choice.text or choice.Text or choice.choice or choice.Choice or choice.name or choice.Name
+        end
+        if text then
+            text = tostring(text):gsub("^%s+", ""):gsub("%s+$", "")
+            if text ~= "" and not seen[text] then
+                seen[text] = true
+                table.insert(choices, text)
+            end
+        end
+    end
+
+    if type(raw_choices) == "table" then
+        for _, choice in ipairs(raw_choices) do
+            add_choice(choice)
+        end
+        for key, choice in pairs(raw_choices) do
+            if type(key) ~= "number" then
+                add_choice(choice)
+            end
+        end
+    end
+
+    return choices
+end
+
+function HydroBlade.dialogue.latest(max_age)
+    max_age = max_age or 8
+    if last_dialogue_data and os.clock() - last_dialogue_received_at <= max_age then
+        return last_dialogue_data
+    end
+    return nil
+end
+
+function HydroBlade.dialogue.find_recent_choice(target_choice, max_age)
+    local data = HydroBlade.dialogue.latest(max_age)
+    if not data then
+        return nil, last_dialogue_data
+    end
+    local target = tostring(target_choice or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    for _, choice in ipairs(HydroBlade.dialogue.get_choices(data)) do
+        if choice == target then
+            return choice, data
+        end
+    end
+    return nil, data
+end
+
+function HydroBlade.dialogue.wait_for_choice(choice, timeout)
+    local deadline = os.clock() + (tonumber(timeout) or 8)
+    repeat
+        local found = HydroBlade.dialogue.find_recent_choice(choice, 10)
+        if found then
+            return found
+        end
+        task.wait(0.1)
+    until os.clock() >= deadline
+    return nil
+end
+
+function HydroBlade.dialogue.fire_choice(choice)
+    local remote = find_dialogue_remote()
+    if not remote then
+        return false, "dialogue remote not found"
+    end
+    local ok, err = pcall(function()
+        remote:FireServer({ choice = choice })
+    end)
+    return ok, err
+end
+
+function HydroBlade.dialogue.fire_exit()
+    local remote = find_dialogue_remote()
+    if not remote then
+        return false, "dialogue remote not found"
+    end
+    local ok, err = pcall(function()
+        remote:FireServer({ exit = true })
+    end)
+    return ok, err
+end
+
+function HydroBlade.dialogue.setup_listener()
+    if HydroBlade.dialogue._listening then
+        return true
+    end
+    local remote = find_dialogue_remote()
+    if not remote then
+        return false, "dialogue remote not found"
+    end
+    HydroBlade.dialogue._listening = true
+    connect(remote.OnClientEvent, function(dialog_data)
+        if type(dialog_data) == "table" then
+            last_dialogue_data = dialog_data
+            last_dialogue_received_at = os.clock()
+            HydroBlade.send({
+                type = "dialogue",
+                speaker = dialog_data.speaker,
+                msg = dialog_data.msg,
+                choices = HydroBlade.dialogue.get_choices(dialog_data),
+            })
+        end
+    end)
+    return true
+end
+
 function HydroBlade.dialogue.find_choice(text)
     text = tostring(text or "")
     for _, gui in ipairs(Services.CoreGui:GetDescendants()) do
@@ -246,6 +502,11 @@ function HydroBlade.dialogue.find_choice(text)
 end
 
 function HydroBlade.dialogue.choose(text)
+    local remote_choice = HydroBlade.dialogue.find_recent_choice(text, 10)
+    if remote_choice then
+        return HydroBlade.dialogue.fire_choice(remote_choice)
+    end
+
     local choice = HydroBlade.dialogue.find_choice(text)
     if not choice then
         return false, "choice not found"
@@ -273,6 +534,392 @@ function HydroBlade.dialogue.fire_click_detector(instance)
         return true
     end
     return false
+end
+
+HydroBlade.bypasses = {
+    config = {
+        anti_afk = true,
+        anti_globus = true,
+        auto_dialogue = true,
+        better_unequip = true,
+        anti_hystericus = true,
+        no_insanity = true,
+        no_stun = true,
+        no_fall = true,
+        gate_anti_backfire = true,
+        anti_backfire_viribus = true,
+    },
+}
+
+HydroBlade.bypasses.stuns = {
+    ManaStop = true,
+    Sprinting = true,
+    Action = true,
+    NoJump = true,
+    HeavyAttack = true,
+    LightAttack = true,
+    ForwardDash = true,
+    RecentDash = true,
+    ClimbCoolDown = true,
+    NoDam = true,
+    NoDash = true,
+    Casting = true,
+    BeingExecuted = true,
+    IsClimbing = true,
+    Blocking = true,
+    NoControl = true,
+    MustSprint = true,
+    AttackExcept = true,
+    Poisoned = true,
+    BarrierCD = true,
+    TimeStop = true,
+    TimeStopped = true,
+    JumpCool = true,
+    Danger = true,
+}
+
+HydroBlade.bypasses.mental_injuries = {
+    Hallucinations = true,
+    PsychoInjury = true,
+    AttackExcept = true,
+    Whispering = true,
+    Quivering = true,
+    NoControl = true,
+    Careless = true,
+    Maniacal = true,
+    Fearful = true,
+}
+
+function HydroBlade.bypasses.enable_anti_afk()
+    if HydroBlade.bypasses._anti_afk then
+        return true
+    end
+    HydroBlade.bypasses._anti_afk = connect(Players.LocalPlayer.Idled, function()
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:Button2Down(Vector2.new())
+            task.wait(0.1)
+            VirtualUser:Button2Up(Vector2.new())
+        end)
+    end)
+    return true
+end
+
+function HydroBlade.bypasses.enable_anti_globus()
+    if HydroBlade.bypasses._anti_globus then
+        return true
+    end
+    local thrown = Workspace:FindFirstChild("Thrown")
+    if not thrown then
+        return false, "Thrown folder not found"
+    end
+    HydroBlade.bypasses._anti_globus = connect(thrown.ChildAdded, function(child)
+        if child.Name == "OrderBubble" then
+            task.defer(function()
+                pcall(function()
+                    child.CanTouch = false
+                end)
+            end)
+        end
+    end)
+    return true
+end
+
+function HydroBlade.bypasses.enable_better_unequip()
+    if HydroBlade.bypasses._better_unequip then
+        return true
+    end
+
+    local current_character_connection
+    local function bypass_tool_for(removed_name)
+        if removed_name == "Dagger" then
+            return find_tool(Players.LocalPlayer.Backpack, { "Owl Slash" })
+        elseif removed_name == "Rapier" then
+            return find_tool(Players.LocalPlayer.Backpack, { "Dagger Throw" })
+        end
+        return find_tool(Players.LocalPlayer.Backpack, { "Action Surge" })
+    end
+
+    local function setup(character)
+        if current_character_connection then
+            pcall(function()
+                current_character_connection:Disconnect()
+            end)
+        end
+        current_character_connection = connect(character.ChildRemoved, function(child)
+            if not child:IsA("Tool") then
+                return
+            end
+            if child.Name ~= "Dagger" and child.Name ~= "Sword" and child.Name ~= "Rapier" then
+                return
+            end
+            task.defer(function()
+                local char = local_character()
+                local hum = humanoid()
+                if not char or not hum then
+                    return
+                end
+                local current_tool = char:FindFirstChildOfClass("Tool")
+                local skill_name = current_tool and current_tool.Name
+                local bypass = bypass_tool_for(child.Name)
+                if bypass then
+                    hum:EquipTool(bypass)
+                    task.wait(0.04)
+                end
+                hum:UnequipTools()
+                if skill_name then
+                    local skill = find_tool(Players.LocalPlayer.Backpack, { skill_name })
+                    if skill then
+                        task.wait(0.01)
+                        hum:EquipTool(skill)
+                    end
+                end
+            end)
+        end)
+    end
+
+    if Players.LocalPlayer.Character then
+        setup(Players.LocalPlayer.Character)
+    end
+    HydroBlade.bypasses._better_unequip = connect(Players.LocalPlayer.CharacterAdded, setup)
+    return true
+end
+
+function HydroBlade.bypasses.enable_anti_hystericus()
+    if HydroBlade.bypasses._anti_hystericus then
+        return true
+    end
+
+    local current_character_connection
+    local current_boosts_connection
+    local function should_destroy_character_child(child)
+        if child.Name == "Confused" and HydroBlade.bypasses.config.anti_hystericus then
+            return true
+        end
+        if HydroBlade.bypasses.config.no_insanity and HydroBlade.bypasses.mental_injuries[child.Name] then
+            return true
+        end
+        if HydroBlade.bypasses.config.no_stun and HydroBlade.bypasses.stuns[child.Name] then
+            return true
+        end
+        return false
+    end
+
+    local function should_destroy_boost(child)
+        if child.Name == "MusicianBuff" and child.Value ~= "Symphony of Horses" and child.Value ~= "Song of Lethargy" then
+            return true
+        end
+        return child.Name == "SpeedBoost" and HydroBlade.bypasses.config.no_stun
+    end
+
+    local function setup(character)
+        if current_character_connection then
+            pcall(function()
+                current_character_connection:Disconnect()
+            end)
+        end
+        if current_boosts_connection then
+            pcall(function()
+                current_boosts_connection:Disconnect()
+            end)
+        end
+
+        for _, child in ipairs(character:GetChildren()) do
+            if should_destroy_character_child(child) then
+                task.defer(child.Destroy, child)
+            end
+        end
+        current_character_connection = connect(character.ChildAdded, function(child)
+            if should_destroy_character_child(child) then
+                task.defer(child.Destroy, child)
+            end
+        end)
+
+        local boosts = character:FindFirstChild("Boosts")
+        if boosts then
+            for _, child in ipairs(boosts:GetChildren()) do
+                if should_destroy_boost(child) then
+                    task.defer(child.Destroy, child)
+                end
+            end
+            current_boosts_connection = connect(boosts.ChildAdded, function(child)
+                if should_destroy_boost(child) then
+                    task.defer(child.Destroy, child)
+                end
+            end)
+        else
+            current_boosts_connection = connect(character.ChildAdded, function(child)
+                if child.Name ~= "Boosts" then
+                    return
+                end
+                for _, boost in ipairs(child:GetChildren()) do
+                    if should_destroy_boost(boost) then
+                        task.defer(boost.Destroy, boost)
+                    end
+                end
+                connect(child.ChildAdded, function(boost)
+                    if should_destroy_boost(boost) then
+                        task.defer(boost.Destroy, boost)
+                    end
+                end)
+            end)
+        end
+    end
+
+    if Players.LocalPlayer.Character then
+        setup(Players.LocalPlayer.Character)
+    end
+    HydroBlade.bypasses._anti_hystericus = connect(Players.LocalPlayer.CharacterAdded, setup)
+    return true
+end
+
+function HydroBlade.bypasses.enable_debuff_bypasses()
+    return HydroBlade.bypasses.enable_anti_hystericus()
+end
+
+function HydroBlade.bypasses.enable_auto_dialogue()
+    local ok, err = HydroBlade.dialogue.setup_listener()
+    if not ok then
+        return ok, err
+    end
+    if HydroBlade.bypasses._auto_dialogue then
+        return true
+    end
+    local remote = find_dialogue_remote()
+    local speakers = {
+        ["Doctor"] = true,
+        ["Engineer"] = true,
+        ["Miner John"] = true,
+        ["Mysterious Stranger"] = true,
+        ["Vinifera"] = true,
+        ["Gary"] = true,
+        ["Yeti"] = true,
+        ["Inn Keeper"] = true,
+        ["Fallion"] = true,
+        ["Kyley"] = true,
+    }
+    HydroBlade.bypasses._auto_dialogue = connect(remote.OnClientEvent, function(dialog_data)
+        if type(dialog_data) ~= "table" then
+            return
+        end
+        local speaker = dialog_data.speaker
+        local msg = dialog_data.msg
+        if msg == "_The Obelisk radiates a great power._" then
+        elseif speaker == "..." then
+            local choices = dialog_data.choices
+            if not (msg and msg:find("drop back to your inn") and choices and choices[1] == "Take me away.") then
+                return
+            end
+        elseif not speakers[speaker] then
+            return
+        end
+        task.wait(0.1)
+        local choices = HydroBlade.dialogue.get_choices(dialog_data)
+        if choices[1] then
+            HydroBlade.dialogue.fire_choice(choices[1])
+        else
+            HydroBlade.dialogue.fire_exit()
+        end
+    end)
+    return true
+end
+
+function HydroBlade.bypasses.enable_remote_bypasses()
+    if HydroBlade.bypasses._remote_hooked or not hookmetamethod or not getnamecallmethod or not newcclosure then
+        return HydroBlade.bypasses._remote_hooked == true
+    end
+
+    local old
+    old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        if method == "FireServer" and typeof(self) == "Instance" and self:IsA("RemoteEvent") then
+            local args = { ... }
+            local character = local_character()
+            local requests = ReplicatedStorage:FindFirstChild("Requests")
+            local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+
+            if HydroBlade.bypasses.config.no_fall and remotes and self.Parent == remotes and #args == 2 and type(args[2]) == "table" then
+                return nil
+            end
+
+            if HydroBlade.bypasses.config.gate_anti_backfire and tostring(self):match("RightClick") and character and character:FindFirstChild("Gate") then
+                local artifacts = character:FindFirstChild("Artifacts")
+                if artifacts and artifacts:FindFirstChild("PhilosophersStone") then
+                    return old(self, ...)
+                end
+                local mana = character:FindFirstChild("Mana")
+                if mana then
+                    local mana_value = mana.Value
+                    if (mana_value > 75 and mana_value < 80)
+                        or (not CollectionService:HasTag(character, "Danger") and character:FindFirstChild("AzaelHorn")) then
+                        return old(self, ...)
+                    end
+                    return nil
+                end
+            end
+
+            if HydroBlade.bypasses.config.anti_backfire_viribus and tostring(self) == "RightClick" and character and character:FindFirstChild("Viribus") then
+                if CollectionService:HasTag(character, "SnapCool") then
+                    return old(self, ...)
+                end
+                local artifacts = character:FindFirstChild("Artifacts")
+                if not (artifacts and artifacts:FindFirstChild("PhilosophersStone")) then
+                    local mana = character:FindFirstChild("Mana")
+                    if mana and ((mana.Value > 0 and mana.Value < 60) or mana.Value > 70) then
+                        return nil
+                    end
+                end
+            end
+
+            if requests and self.Parent == requests and self.Name == "FallDamage" and HydroBlade.bypasses.config.no_fall then
+                return nil
+            end
+        end
+        return old(self, ...)
+    end))
+    HydroBlade.bypasses._remote_hooked = true
+    return true
+end
+
+function HydroBlade.bypasses.aa_bypass()
+    local character = local_character()
+    local root = root_part()
+    local eagle = find_npc("The Eagle")
+    local detector = find_click_detector(eagle)
+    if not character or not root or not eagle or not detector or not fireclickdetector then
+        return false, "AA bypass prerequisites missing"
+    end
+    for _ = 1, 10 do
+        local eagle_root = eagle:FindFirstChild("HumanoidRootPart")
+        if not eagle_root then
+            break
+        end
+        root.CFrame = eagle_root.CFrame
+        fireclickdetector(detector)
+        task.wait(0.1)
+    end
+    return true
+end
+
+function HydroBlade.bypasses.enable_all()
+    HydroBlade.dialogue.setup_listener()
+    if HydroBlade.bypasses.config.anti_afk then
+        HydroBlade.bypasses.enable_anti_afk()
+    end
+    if HydroBlade.bypasses.config.anti_globus then
+        HydroBlade.bypasses.enable_anti_globus()
+    end
+    if HydroBlade.bypasses.config.better_unequip then
+        HydroBlade.bypasses.enable_better_unequip()
+    end
+    if HydroBlade.bypasses.config.anti_hystericus or HydroBlade.bypasses.config.no_insanity or HydroBlade.bypasses.config.no_stun then
+        HydroBlade.bypasses.enable_anti_hystericus()
+    end
+    if HydroBlade.bypasses.config.auto_dialogue then
+        HydroBlade.bypasses.enable_auto_dialogue()
+    end
+    HydroBlade.bypasses.enable_remote_bypasses()
+    return true
 end
 
 function HydroBlade.leave_menu()
@@ -318,6 +965,33 @@ end
 HydroBlade.methods.dialogue_choice = function(message)
     local ok, err = HydroBlade.dialogue.choose(message.text or message.choice)
     HydroBlade.send({ type = "dialogue_choice", ok = ok == true, error = err })
+end
+
+HydroBlade.methods.dialogue_choices = function(message)
+    local data = HydroBlade.dialogue.latest(message.max_age or 10) or last_dialogue_data
+    HydroBlade.send({
+        type = "dialogue_choices",
+        choices = HydroBlade.dialogue.get_choices(data),
+        speaker = data and data.speaker,
+        msg = data and data.msg,
+    })
+end
+
+HydroBlade.methods.inn_teleport = function(message)
+    local ok, err = HydroBlade.movement.InnTeleport(message.point or message.position or message.target, message.npcName or message.npc or "Inn Keeper")
+    HydroBlade.send({ type = "inn_teleport", ok = ok == true, error = err })
+end
+
+HydroBlade.methods.InnTeleport = HydroBlade.methods.inn_teleport
+
+HydroBlade.methods.enable_bypasses = function()
+    local ok, err = HydroBlade.bypasses.enable_all()
+    HydroBlade.send({ type = "enable_bypasses", ok = ok == true, error = err })
+end
+
+HydroBlade.methods.aa_bypass = function()
+    local ok, err = HydroBlade.bypasses.aa_bypass()
+    HydroBlade.send({ type = "aa_bypass", ok = ok == true, error = err })
 end
 
 HydroBlade.methods.state = function()
@@ -395,11 +1069,17 @@ function HydroBlade.disconnect()
             socket:close()
         end
     end)
+    disconnect_all()
 end
 
 env.HydroBlade = HydroBlade
 
 task.defer(function()
+    if env.HYDROBLADE_ENABLE_BYPASSES ~= false then
+        pcall(HydroBlade.bypasses.enable_all)
+    else
+        HydroBlade.dialogue.setup_listener()
+    end
     local ok, err = HydroBlade.connect()
     if not ok and warn then
         warn("[HydroBlade] websocket connect failed:", err)
