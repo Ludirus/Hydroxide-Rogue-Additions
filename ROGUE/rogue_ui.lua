@@ -24966,8 +24966,8 @@ if is_hydroxide_supported_place() then
             end
             end
 
-            do
-            local function character_has_spawn_forcefield()
+            local function setup_trinket_bot_auto_drop_bank()
+                local function character_has_spawn_forcefield()
                 local character = plr.Character
                 return character and FindFirstChildOfClass(character, "ForceField") ~= nil
             end
@@ -26072,6 +26072,7 @@ if is_hydroxide_supported_place() then
                 trinket_bot.setup_backpack_monitoring()
             end)
             end
+            setup_trinket_bot_auto_drop_bank()
         end
         hydroxide_setup_trinket_bot()
 
