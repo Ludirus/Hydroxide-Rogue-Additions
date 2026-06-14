@@ -1,1 +1,5 @@
 local_raknet_lab.lua
+HydroBlade/build/
+HydroBlade/**/hydroblade_accounts.json
+HydroBlade/**/hydroblade_settings.json
+HydroBlade/generated_autoexec/

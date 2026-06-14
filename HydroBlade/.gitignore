@@ -1,0 +1,5 @@
+build/
+generated_autoexec/
+hydroblade_accounts.json
+hydroblade_settings.json
+*.local.*
