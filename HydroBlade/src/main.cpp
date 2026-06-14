@@ -137,6 +137,7 @@ std::recursive_mutex g_accountsMutex;
 std::atomic_uint64_t g_idCounter{1};
 std::wstring g_autoExecuteFolder;
 std::wstring g_failureWebhook;
+bool g_failureWebhookEnabled = false;
 bool g_sigilsRunning = false;
 uint64_t g_sigilsRunId = 0;
 
@@ -599,7 +600,8 @@ void SaveSettings() {
     }
     out << "{\n";
     out << "  \"autoExecuteFolder\": \"" << EscapeJson(g_autoExecuteFolder) << "\",\n";
-    out << "  \"failureWebhook\": \"" << EscapeJson(g_failureWebhook) << "\"\n";
+    out << "  \"failureWebhook\": \"" << EscapeJson(g_failureWebhook) << "\",\n";
+    out << "  \"failureWebhookEnabled\": " << (g_failureWebhookEnabled ? "true" : "false") << "\n";
     out << "}\n";
 }
 
@@ -607,6 +609,15 @@ void LoadSettings() {
     const std::string text = ReadWholeFile(SettingsPath());
     g_autoExecuteFolder = Widen(ExtractJsonString(text, "autoExecuteFolder").value_or(""));
     g_failureWebhook = Widen(ExtractJsonString(text, "failureWebhook").value_or(""));
+    if (text.find("\"failureWebhookEnabled\"") != std::string::npos) {
+        g_failureWebhookEnabled = ExtractJsonBool(text, "failureWebhookEnabled");
+    } else {
+        g_failureWebhookEnabled = !g_failureWebhook.empty();
+    }
+}
+
+std::wstring EffectiveFailureWebhook() {
+    return g_failureWebhookEnabled ? g_failureWebhook : L"";
 }
 
 std::optional<std::wstring> BrowseForFolder(const std::wstring& title) {
@@ -648,15 +659,74 @@ void EnsureAutoExecuteFolder() {
 }
 
 void OpenSettings() {
+    LoadSettings();
+    bool changed = false;
+    const std::wstring currentFolder = g_autoExecuteFolder.empty() ? L"(unset)" : g_autoExecuteFolder;
+    const std::wstring folderMessage =
+        L"Current auto execute folder:\n" + currentFolder +
+        L"\n\nClick OK to select your executor's auto execute folder, or Cancel to keep the current path.";
+    const int folderChoice = MessageBoxW(
+        g_main,
+        folderMessage.c_str(),
+        L"HydroBlade Settings",
+        MB_OKCANCEL | MB_ICONINFORMATION);
+
+    if (folderChoice == IDOK) {
+        const auto folder = BrowseForFolder(L"Select executor auto execute folder");
+        if (folder.has_value()) {
+            const std::wstring selected = Trim(folder.value());
+            if (!selected.empty() && selected != g_autoExecuteFolder) {
+                g_autoExecuteFolder = selected;
+                changed = true;
+            }
+        }
+    }
+
     const auto webhook = PromptForText(L"HydroBlade Settings", L"Failure webhook URL", false, g_failureWebhook, true);
-    if (!webhook.has_value()) {
+    if (webhook.has_value()) {
+        const std::wstring selected = Trim(webhook.value());
+        if (selected != g_failureWebhook) {
+            g_failureWebhook = selected;
+            changed = true;
+        }
+    }
+
+    const std::wstring webhookState = g_failureWebhookEnabled ? L"enabled" : L"disabled";
+    const std::wstring webhookMessage =
+        L"Failure webhook screenshot sending is currently " + webhookState +
+        L".\n\nChoose Yes to enable it, No to disable it, or Cancel to keep the current setting.";
+    const int webhookChoice = MessageBoxW(
+        g_main,
+        webhookMessage.c_str(),
+        L"HydroBlade Settings",
+        MB_YESNOCANCEL | MB_ICONQUESTION);
+    if (webhookChoice == IDYES && !g_failureWebhookEnabled) {
+        g_failureWebhookEnabled = true;
+        changed = true;
+    } else if (webhookChoice == IDNO && g_failureWebhookEnabled) {
+        g_failureWebhookEnabled = false;
+        changed = true;
+    }
+
+    if (!changed) {
         SetStatus(L"Settings unchanged.");
         return;
     }
-    g_failureWebhook = Trim(webhook.value());
+
     SaveSettings();
     SyncAutoExecuteFiles();
-    SetStatus(g_failureWebhook.empty() ? L"Failure webhook cleared." : L"Failure webhook saved.");
+    std::wstring status = L"Settings saved.";
+    if (!g_autoExecuteFolder.empty()) {
+        status += L" Auto execute folder: " + g_autoExecuteFolder;
+    }
+    if (!g_failureWebhookEnabled) {
+        status += L" Failure webhook disabled.";
+    } else if (g_failureWebhook.empty()) {
+        status += L" Failure webhook cleared.";
+    } else {
+        status += L" Failure webhook enabled.";
+    }
+    SetStatus(status);
 }
 
 void LoadAccounts() {
@@ -761,7 +831,8 @@ void WriteAccountAutoExecuteFile(const Account& account) {
     out << "getgenv().HYDROBLADE_ACTIVE = " << (account.active ? "true" : "false") << "\n";
     out << "getgenv().HYDROBLADE_GAIA_JOB_ID = \"" << EscapeLua(account.gaiaJobId) << "\"\n";
     out << "getgenv().HYDROBLADE_WORKFLOW = \"" << EscapeLua(WorkflowForAccount(account)) << "\"\n";
-    out << "getgenv().HYDROBLADE_FAILURE_WEBHOOK = \"" << EscapeLua(g_failureWebhook) << "\"\n";
+    out << "getgenv().HYDROBLADE_FAILURE_WEBHOOK = \"" << EscapeLua(EffectiveFailureWebhook()) << "\"\n";
+    out << "getgenv().HYDROBLADE_FAILURE_WEBHOOK_ENABLED = " << (g_failureWebhookEnabled ? "true" : "false") << "\n";
     out << "getgenv().HYDROBLADE_CLIENT = true\n";
     out << "getgenv().HYDROBLADE_BOOT_MODE = \"account\"\n";
     out << "getgenv().HYDROBLADE_DIST_ENTRYPOINT = \"dist/hydroblade_client.lua\"\n";
@@ -1515,7 +1586,8 @@ std::string ClientRuntimeReply(const RuntimeAccount& account, const std::string&
     std::ostringstream out;
     out << "{\"type\":\"" << type << "\","
         << "\"workflow\":\"" << EscapeJsonUtf8(Narrow(WorkflowForAccountId(account.accountId))) << "\","
-        << "\"failure_webhook\":\"" << EscapeJsonUtf8(Narrow(g_failureWebhook)) << "\","
+        << "\"failure_webhook\":\"" << EscapeJsonUtf8(Narrow(EffectiveFailureWebhook())) << "\","
+        << "\"failure_webhook_enabled\":" << (g_failureWebhookEnabled ? "true" : "false") << ","
         << "\"parent_job\":\"" << EscapeJsonUtf8(Narrow(parentJob)) << "\","
         << "\"rot_requested\":" << (rotRequested ? "true" : "false") << ","
         << "\"kick\":" << (kick ? "true" : "false") << ","

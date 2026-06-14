@@ -35,6 +35,7 @@ HydroBlade.account = {
     gaia_job_id = tostring(env.HYDROBLADE_GAIA_JOB_ID or ""),
     workflow = tostring(env.HYDROBLADE_WORKFLOW or ""),
     failure_webhook = tostring(env.HYDROBLADE_FAILURE_WEBHOOK or ""),
+    failure_webhook_enabled = env.HYDROBLADE_FAILURE_WEBHOOK_ENABLED == true,
 }
 
 HydroBlade.ws_url = tostring(env.HYDROBLADE_WS_URL or "ws://127.0.0.1:8765")
@@ -1072,6 +1073,7 @@ HydroBlade.Reporter.__index = HydroBlade.Reporter
 function HydroBlade.Reporter.new()
     return setmetatable({
         webhook = HydroBlade.account.failure_webhook,
+        enabled = HydroBlade.account.failure_webhook_enabled,
     }, HydroBlade.Reporter)
 end
 
@@ -1096,11 +1098,20 @@ function HydroBlade.Reporter:capture()
 end
 
 function HydroBlade.Reporter:send(reason, detail)
+    self.webhook = HydroBlade.account.failure_webhook
+    self.enabled = HydroBlade.account.failure_webhook_enabled
+    if not self.enabled then
+        return false, "webhook disabled"
+    end
     if not self.webhook or self.webhook == "" then
         return false, "webhook unset"
     end
     local position = HydroBlade.paths.current_position()
     local screenshot = self:capture()
+    local screenshot_value = "unavailable"
+    if screenshot and screenshot ~= "" then
+        screenshot_value = screenshot
+    end
     local embed = {
         title = "HydroBlade Rot Failure",
         description = tostring(reason or "unknown"),
@@ -1110,7 +1121,7 @@ function HydroBlade.Reporter:send(reason, detail)
             { name = "Job", value = tostring(game.JobId), inline = false },
             { name = "Position", value = position and string.format("%.1f, %.1f, %.1f", position.x, position.y, position.z) or "unknown", inline = false },
             { name = "Detail", value = tostring(detail or "none"), inline = false },
-            { name = "Screenshot", value = screenshot and "captured by executor" or "unavailable", inline = false },
+            { name = "Screenshot Path", value = tostring(screenshot_value):sub(1, 1024), inline = false },
         },
     }
     if screenshot and screenshot:match("^https?://") then
@@ -2030,6 +2041,9 @@ end
 HydroBlade.methods.listening = function(message)
     HydroBlade.runtime.workflow = tostring(message.workflow or HydroBlade.runtime.workflow or "")
     HydroBlade.account.failure_webhook = tostring(message.failure_webhook or HydroBlade.account.failure_webhook or "")
+    if type(message.failure_webhook_enabled) == "boolean" then
+        HydroBlade.account.failure_webhook_enabled = message.failure_webhook_enabled
+    end
     HydroBlade.methods.client_status(message)
     if HydroBlade.runtime.workflow ~= "" and not HydroBlade.runtime.running then
         HydroBlade.methods.run_workflow({ workflow = HydroBlade.runtime.workflow })
@@ -2045,6 +2059,12 @@ HydroBlade.methods.client_status = function(message)
     end
     if type(message.rot_requested) == "boolean" then
         HydroBlade.runtime.rot_requested = message.rot_requested
+    end
+    if type(message.failure_webhook) == "string" then
+        HydroBlade.account.failure_webhook = message.failure_webhook
+    end
+    if type(message.failure_webhook_enabled) == "boolean" then
+        HydroBlade.account.failure_webhook_enabled = message.failure_webhook_enabled
     end
 end
 
