@@ -14805,17 +14805,16 @@ if is_hydroxide_supported_place() then
                 collected_trinket_ids[trinket_id_value] = true
             end
 
-            local PENDING_PICKUP_MAX_SIZE = 100
             local function queue_pending_pickup(trinket_id_value)
                 table.insert(pending_pickup_ids, trinket_id_value)
-                while #pending_pickup_ids > PENDING_PICKUP_MAX_SIZE do
+                while #pending_pickup_ids > 100 do
                     table.remove(pending_pickup_ids, 1)
                 end
             end
 
-            local kick_debounce = false
-            local kick_after_path = false
-            local kick_trinket_name = ""
+            kick_debounce = false
+            kick_after_path = false
+            kick_trinket_name = ""
 
             local proximity_warnings = {}
             local mana_initialized = false
@@ -19295,7 +19294,16 @@ if is_hydroxide_supported_place() then
 
                 return false
             end
-
+            local kick_debounce = false
+            local kick_after_path = false
+            local kick_trinket_name = ""
+            local proximity_warnings = {}
+            local mana_initialized = false
+            local emergency_gate_requested = nil
+            local current_gate_section = 0
+            local player_encounters = {}
+            local emergency_resume_mode = false
+            local INPUT_BLOCKED = false
             local function ExecutePath(test_mode)
                 if not cheat_client or not cheat_client.config then
                     trinket_bot_debug_log("EXECUTE_PATH_ABORT", "cheat_client.config missing")
