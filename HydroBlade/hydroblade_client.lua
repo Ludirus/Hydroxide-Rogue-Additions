@@ -155,26 +155,63 @@ local function find_dialogue_remote()
     return nil
 end
 
-local function find_npc(name)
+local function instance_position(instance)
+    if typeof(instance) ~= "Instance" then
+        return nil
+    end
+    if instance:IsA("BasePart") then
+        return instance.Position
+    end
+    if instance:IsA("Model") then
+        local root = instance:FindFirstChild("HumanoidRootPart") or instance.PrimaryPart or instance:FindFirstChildWhichIsA("BasePart", true)
+        return root and root.Position or nil
+    end
+    local part = instance:FindFirstChildWhichIsA("BasePart", true)
+    return part and part.Position or nil
+end
+
+local function find_npc(name, near_position)
     name = tostring(name or "")
     local roots = {
         Workspace:FindFirstChild("NPCs"),
         Workspace:FindFirstChild("Live"),
         Workspace,
     }
+    local best = nil
+    local best_distance = math.huge
+
+    local function consider(candidate)
+        if not candidate or candidate.Name ~= name then
+            return
+        end
+        if typeof(near_position) ~= "Vector3" then
+            best = best or candidate
+            return
+        end
+        local position = instance_position(candidate)
+        if not position then
+            best = best or candidate
+            return
+        end
+        local distance = (position - near_position).Magnitude
+        if distance < best_distance then
+            best = candidate
+            best_distance = distance
+        end
+    end
+
     for _, root in ipairs(roots) do
         if root then
             local direct = root:FindFirstChild(name)
             if direct then
-                return direct
+                consider(direct)
             end
-            local deep = root:FindFirstChild(name, true)
-            if deep then
-                return deep
+            for _, descendant in ipairs(root:GetDescendants()) do
+                consider(descendant)
             end
         end
     end
-    return nil
+    return best
 end
 
 local function find_click_detector(instance)
@@ -232,6 +269,86 @@ end
 
 HydroBlade.movement = {}
 
+HydroBlade.movement.inns = {
+    Oresfall = {
+        position = Vector3.new(2967.634, 288.85, -16),
+        npc = "Inn Keeper",
+        choice = "Sure.",
+    },
+    Southern = {
+        position = Vector3.new(-1255.422, 145.093, 340.663),
+        npc = "Inn Keeper",
+        choice = "Sure.",
+    },
+    Wayside = {
+        position = Vector3.new(1336.531, 196.3, 931.763),
+        npc = "Inn Keeper",
+        choice = "Sure.",
+    },
+    Santorini = {
+        position = Vector3.new(1341.703, 432.766, 2976.65),
+        npc = "Inn Keeper",
+        choice = "Sure.",
+    },
+    Alana = {
+        position = Vector3.new(2253.484, 61.801, 552.427),
+        npc = "Inn Keeper",
+        choice = "Sure.",
+    },
+    Tundra5 = {
+        position = Vector3.new(6168.783, 1345.494, 88.494),
+        npc = "Inn Keeper",
+        choice = "Sure.",
+    },
+    Snail = {
+        position = Vector3.new(5759.284, 1115.494, 938.868),
+        npc = "Inn Keeper",
+        choice = "Sure.",
+    },
+    Renova = {
+        position = Vector3.new(-2115.639, 610.454, -705.018),
+        npc = "Inn Keeper",
+        choice = "Sure.",
+    },
+    Flowerlight = {
+        position = Vector3.new(3317.394, 202.368, -2520.07),
+        npc = "Ria",
+        choice = "A room, please.",
+    },
+    SigilTree = {
+        position = Vector3.new(1879.793, 223.325, -795.055),
+        npc = "Knight Orodin",
+        choice = "May I reserve a room?",
+    },
+}
+
+HydroBlade.movement.inn_aliases = {
+    ["flowerlight town"] = "Flowerlight",
+    ["sigil tree"] = "SigilTree",
+    ["tundra 5"] = "Tundra5",
+}
+
+function HydroBlade.movement.resolve_inn(value)
+    if type(value) ~= "string" then
+        return nil
+    end
+    local key = tostring(value):gsub("^%s+", ""):gsub("%s+$", "")
+    if HydroBlade.movement.inns[key] then
+        return key, HydroBlade.movement.inns[key]
+    end
+    local normalized = key:gsub("[%s_%-%p]+", ""):lower()
+    for name, inn in pairs(HydroBlade.movement.inns) do
+        if name:gsub("[%s_%-%p]+", ""):lower() == normalized then
+            return name, inn
+        end
+    end
+    local alias = HydroBlade.movement.inn_aliases[key:lower()]
+    if alias then
+        return alias, HydroBlade.movement.inns[alias]
+    end
+    return nil
+end
+
 function HydroBlade.movement.teleport(target)
     local root = root_part()
     local cf = cframe_from(target)
@@ -281,10 +398,23 @@ function HydroBlade.movement.tween_to(target, seconds)
     return true
 end
 
-function HydroBlade.movement.InnTeleport(point, npcName)
+function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
     local character = local_character()
     if not character then
         return false, "missing character"
+    end
+
+    local inn_name, inn
+    if type(point) == "table" and point.inn then
+        inn_name, inn = HydroBlade.movement.resolve_inn(point.inn)
+    elseif type(point) == "string" then
+        inn_name, inn = HydroBlade.movement.resolve_inn(point)
+    end
+
+    if inn then
+        point = inn.position
+        npcName = npcName or inn.npc
+        choiceOverride = choiceOverride or inn.choice
     end
 
     local target = cframe_from(point)
@@ -293,11 +423,13 @@ function HydroBlade.movement.InnTeleport(point, npcName)
     end
 
     npcName = tostring(npcName or "Inn Keeper")
-    local choice = "Sure."
-    if npcName == "Ria" then
-        choice = "A room, please."
-    elseif npcName == "Fungkeeper" then
-        choice = "Sure."
+    local choice = tostring(choiceOverride or "Sure.")
+    if not choiceOverride then
+        if npcName == "Ria" then
+            choice = "A room, please."
+        elseif npcName == "Knight Orodin" then
+            choice = "May I reserve a room?"
+        end
     end
 
     local function is_alive()
@@ -315,7 +447,7 @@ function HydroBlade.movement.InnTeleport(point, npcName)
         hum:ChangeState(Enum.HumanoidStateType.Jumping)
     end
 
-    local npc = find_npc(npcName)
+    local npc = find_npc(npcName, target.Position)
     local detector = find_click_detector(npc)
     if detector and fireclickdetector then
         pcall(fireclickdetector, detector)
@@ -327,7 +459,7 @@ function HydroBlade.movement.InnTeleport(point, npcName)
     if is_alive() then
         character:BreakJoints()
     end
-    return true
+    return true, inn_name
 end
 
 HydroBlade.movement.inn_teleport = HydroBlade.movement.InnTeleport
@@ -978,8 +1110,12 @@ HydroBlade.methods.dialogue_choices = function(message)
 end
 
 HydroBlade.methods.inn_teleport = function(message)
-    local ok, err = HydroBlade.movement.InnTeleport(message.point or message.position or message.target, message.npcName or message.npc or "Inn Keeper")
-    HydroBlade.send({ type = "inn_teleport", ok = ok == true, error = err })
+    local ok, result = HydroBlade.movement.InnTeleport(
+        message.inn or message.name or message.point or message.position or message.target,
+        message.npcName or message.npc,
+        message.choice
+    )
+    HydroBlade.send({ type = "inn_teleport", ok = ok == true, inn = ok and result or nil, error = ok and nil or result })
 end
 
 HydroBlade.methods.InnTeleport = HydroBlade.methods.inn_teleport

@@ -47,7 +47,7 @@ The local server accepts simple JSON messages:
 
 Account list responses do not include cookies.
 
-The in-game Lua client listens on the configured HydroBlade WebSocket URL and supports messages such as `dialogue_choices`, `inn_teleport`, `InnTeleport`, `enable_bypasses`, and `aa_bypass` in addition to the existing path, dialogue, movement, and menu helpers.
+The in-game Lua client listens on the configured HydroBlade WebSocket URL and supports messages such as `dialogue_choices`, `inn_teleport`, `InnTeleport`, `enable_bypasses`, and `aa_bypass` in addition to the existing path, dialogue, movement, and menu helpers. `inn_teleport` accepts an `inn` name for `Oresfall`, `Southern`, `Wayside`, `Santorini`, `Alana`, `Tundra5`, `Snail`, `Renova`, `Flowerlight`, or `SigilTree`.
 
 ## Build
 
