@@ -23,6 +23,11 @@ TARGETS = {
         "entrypoint": "dist/hydrogen.lua",
         "quiet": True,
     },
+    "hydroblade_client.lua": {
+        "source": ROOT / "HydroBlade" / "hydroblade_client.lua",
+        "entrypoint": "dist/hydroblade_client.lua",
+        "quiet": True,
+    },
 }
 
 
@@ -292,6 +297,11 @@ def main() -> None:
         default=TARGETS["hydrogen.lua"]["entrypoint"],
         help="Repo-relative or absolute URL for the Hydrogen legit scaffold.",
     )
+    parser.add_argument(
+        "--hydroblade-entrypoint",
+        default=TARGETS["hydroblade_client.lua"]["entrypoint"],
+        help="Repo-relative or absolute URL for the HydroBlade client.",
+    )
     args = parser.parse_args()
     repo_base = normalize_repo_base(args.repo_base)
 
@@ -304,6 +314,7 @@ def main() -> None:
         "rogue_lineage.lua": args.rogue_entrypoint,
         "rogue_battlegrounds.lua": args.battlegrounds_entrypoint,
         "hydrogen.lua": args.hydrogen_entrypoint,
+        "hydroblade_client.lua": args.hydroblade_entrypoint,
     }
 
     for output_name, target in TARGETS.items():

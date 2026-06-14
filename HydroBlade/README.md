@@ -29,10 +29,11 @@ The source, assets, and clean Lua client are tracked. Local account stores, sele
 - Run a local WebSocket server on `ws://127.0.0.1:8765` or the next open port through `8775`.
 - Keep the generated HydroBlade logo as an icon/favicon asset only, not as a large in-app UI element.
 - Prompt for the executor auto-execute folder before showing the main screen.
-- Copy `HydroBladeClient.lua` and generate per-account boot files into the selected auto-execute folder without writing cookies.
+- Generate per-account boot files into the selected auto-execute folder without writing cookies or client source.
 - Generated account boot files exit unless `LocalPlayer.UserId` matches that file's account.
+- Generated account boot files set HydroBlade loader settings and execute `loader.lua`; the loader routes to `dist/hydroblade_client.lua`.
 - Before Start Sigils launches Roblox, add the launched account usernames to `koro.luau` `blockedUsers` or `BlockUsers` when that file exists in the selected auto-execute folder.
-- Load the no-UI Lua client through `loader.lua` by setting `getgenv().HYDROBLADE_CLIENT = true` before running the loader.
+- Load the no-UI Lua client through encrypted dist by setting `getgenv().HYDROBLADE_CLIENT = true` before running `loader.lua`.
 - Provide client methods for bypass setup, dialogue choice snapshots, click/dialogue helpers, path movement, `InnTeleport`, ingredient lookup, ingredient pickup, and Sigil/Rot workflows.
 - After a Rot Alt gives Alana the Switch Witch, it returns to the Sigil's job, stays at menu, follows later Sigil server hops, and waits for a WS Rot request.
 

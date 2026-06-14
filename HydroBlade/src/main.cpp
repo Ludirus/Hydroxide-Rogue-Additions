@@ -762,16 +762,19 @@ void WriteAccountAutoExecuteFile(const Account& account) {
     out << "getgenv().HYDROBLADE_GAIA_JOB_ID = \"" << EscapeLua(account.gaiaJobId) << "\"\n";
     out << "getgenv().HYDROBLADE_WORKFLOW = \"" << EscapeLua(WorkflowForAccount(account)) << "\"\n";
     out << "getgenv().HYDROBLADE_FAILURE_WEBHOOK = \"" << EscapeLua(g_failureWebhook) << "\"\n";
+    out << "getgenv().HYDROBLADE_CLIENT = true\n";
+    out << "getgenv().HYDROBLADE_BOOT_MODE = \"account\"\n";
+    out << "getgenv().HYDROBLADE_DIST_ENTRYPOINT = \"dist/hydroblade_client.lua\"\n";
     out << "getgenv().HYDROBLADE_WS_URL = getgenv().HYDROBLADE_WS_URL or \"ws://127.0.0.1:8765\"\n";
+    out << "getgenv().HYDROXIDE_REPO = getgenv().HYDROXIDE_REPO or \"https://raw.githubusercontent.com/Ludirus/Hydroxide-Rogue-Additions/main/\"\n";
     out << "local ok, err = pcall(function()\n";
-    out << "    if loadfile and isfile and isfile(\"HydroBladeClient.lua\") then\n";
-    out << "        return loadfile(\"HydroBladeClient.lua\")()\n";
+    out << "    local repo = tostring(getgenv().HYDROXIDE_REPO)\n";
+    out << "    if repo:sub(-1) ~= \"/\" then\n";
+    out << "        repo = repo .. \"/\"\n";
     out << "    end\n";
-    out << "    if readfile and loadstring and isfile and isfile(\"HydroBladeClient.lua\") then\n";
-    out << "        return loadstring(readfile(\"HydroBladeClient.lua\"), \"HydroBladeClient\")()\n";
-    out << "    end\n";
+    out << "    return loadstring(game:HttpGet(repo .. \"loader.lua\", true))()\n";
     out << "end)\n";
-    out << "if not ok and warn then warn(\"[HydroBlade] client load failed\", err) end\n";
+    out << "if not ok and warn then warn(\"[HydroBlade] loader failed\", err) end\n";
 }
 
 bool ContainsLuaQuotedString(const std::string& text, const std::string& value) {
@@ -904,14 +907,6 @@ void SyncAutoExecuteFiles() {
     try {
         const std::filesystem::path folder = g_autoExecuteFolder;
         std::filesystem::create_directories(folder);
-
-        const std::filesystem::path source = ClientLuaSourcePath();
-        if (std::filesystem::exists(source)) {
-            std::filesystem::copy_file(
-                source,
-                folder / L"HydroBladeClient.lua",
-                std::filesystem::copy_options::overwrite_existing);
-        }
 
         for (const Account& account : g_accounts) {
             WriteAccountAutoExecuteFile(account);

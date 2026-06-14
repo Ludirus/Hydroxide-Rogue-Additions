@@ -422,7 +422,7 @@ local placeId = game.PlaceId
 normalize_loader_flags()
 if hydroblade_flag_enabled() then
     set_loader_stage("loader_route_hydroblade", tostring(placeId))
-    load_repo_script("hydroblade", "HydroBlade/hydroblade_client.lua", { quiet = true, visible_errors = true })
+    load_repo_script("hydroblade", "dist/hydroblade_client.lua", { quiet = true, visible_errors = true })
     return
 end
 
