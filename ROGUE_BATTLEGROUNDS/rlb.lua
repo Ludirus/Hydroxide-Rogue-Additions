@@ -12926,7 +12926,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 return LocationName
             end
 
-            local function Gate(where, expected_destination)
+            trinket_bot.Gate = function(where, expected_destination)
                 if not trinket_bot.path_running then
                     return false
                 end
@@ -13200,7 +13200,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 return false
             end
 
-            local function CheckForTrinkets()
+            trinket_bot.CheckForTrinkets = function()
                 local root = plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart")
                 if not root then return end
 
@@ -13595,7 +13595,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
             end
 
             local teleport_debounce = false
-            local function TrinketBotServerhop(reason, skip_test_mode_check)
+            trinket_bot.TrinketBotServerhop = function(reason, skip_test_mode_check)
                 if not skip_test_mode_check and trinket_bot.test_mode then
                     library:Notify(string.format("Serverhop blocked (test mode): %s", reason or "Unknown"))
                     return
@@ -13923,7 +13923,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 end
             end
 
-            local function SafeServerhop(reason, skip_test_mode_check, skip_gate_escape)
+            trinket_bot.SafeServerhop = function(reason, skip_test_mode_check, skip_gate_escape)
                 if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
                     local pos = plr.Character.HumanoidRootPart.Position
                     mem:SetItem("lastPlayerPosition", string.format("%s,%s,%s", pos.X, pos.Y, pos.Z))
@@ -13935,7 +13935,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     pcall(function()
                         rps.Requests.ReturnToMenu:InvokeServer()
                     end)
-                    TrinketBotServerhop(reason, skip_test_mode_check)
+                    trinket_bot.TrinketBotServerhop(reason, skip_test_mode_check)
                     return
                 end
 
@@ -13948,7 +13948,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         for idx, point in ipairs(trinket_bot.path_points) do
                             if point.is_gate_point then
                                 library:Notify(string.format("Escape: Gating to point %d", idx))
-                                local gate_success = Gate(point.gate_location)
+                                local gate_success = trinket_bot.Gate(point.gate_location)
                                 if gate_success then
                                     library:Notify("Escape gate successful!")
                                     escaped = true
@@ -14040,10 +14040,10 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 pcall(function()
                     rps.Requests.ReturnToMenu:InvokeServer()
                 end)
-                TrinketBotServerhop(reason .. (escaped and " (escaped)" or " (escape failed)"), skip_test_mode_check)
+                trinket_bot.TrinketBotServerhop(reason .. (escaped and " (escaped)" or " (escape failed)"), skip_test_mode_check)
             end
 
-            local function handle_moderator_detection(moderator_player)
+            trinket_bot.handle_moderator_detection = function(moderator_player)
                 if not moderator_player then return end
 
                 local mod_name = moderator_player.Name
@@ -14109,14 +14109,14 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                 else
                     library:Notify(string.format("!! MODERATOR %s DETECTED (encounter %d/3) - IMMEDIATE SERVERHOP !!", mod_name, encounter_count))
 
-                    TrinketBotServerhop(string.format("Moderator %s detected (encounter %d/3)", mod_name, encounter_count), true)
+                    trinket_bot.TrinketBotServerhop(string.format("Moderator %s detected (encounter %d/3)", mod_name, encounter_count), true)
                 end
             end
 
             local currently_dropping = false
             local droppedTools = {}
 
-            local function ExecutePath(test_mode)
+            trinket_bot.ExecutePath = function(test_mode)
                 if not cheat_client or not cheat_client.config then
                     return
                 end
@@ -14232,7 +14232,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                     trinket_bot.path_running = false
                                     library:Notify(string.format("Player %s is within %d studs! Cannot start path.", other_player.Name, math.floor(proximity_check_distance)))
                                     if not test_mode and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
-                                        TrinketBotServerhop(string.format("Player %s within %d studs at spawn! Cannot start path - Serverhopping", other_player.Name, math.floor(proximity_check_distance)))
+                                        trinket_bot.TrinketBotServerhop(string.format("Player %s within %d studs at spawn! Cannot start path - Serverhopping", other_player.Name, math.floor(proximity_check_distance)))
                                     end
                                     return
                                 end
@@ -14325,7 +14325,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                 for _, other_player in next, plrs:GetPlayers() do
                     if other_player ~= plr and is_moderator(other_player) then
-                        handle_moderator_detection(other_player)
+                        trinket_bot.handle_moderator_detection(other_player)
                         return
                     end
                 end
@@ -14334,7 +14334,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                     for _, other_player in next, plrs:GetPlayers() do
                         if other_player ~= plr and has_observe(other_player) then
                             library:Notify("Illusionist detected! Serverhopping.")
-                            TrinketBotServerhop(string.format("Illusionist in server; %s - Serverhopping", other_player.Name))
+                            trinket_bot.TrinketBotServerhop(string.format("Illusionist in server; %s - Serverhopping", other_player.Name))
                             return
                         end
                     end
@@ -14342,7 +14342,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                 mod_connection = track_connection("mod", utility:Connection(Services.Players.PlayerAdded, function(player)
                     if is_moderator(player) then
-                        handle_moderator_detection(player)
+                        trinket_bot.handle_moderator_detection(player)
                     end
                 end))
 
@@ -14383,7 +14383,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                             utility:plain_webhook(string.format("@everyone Fimbulvetr/Manus detected!\n\npossible opps:\n%s", player_list))
                                         end
 
-                                        SafeServerhop(string.format("Fimbulvetr/Manus Dei detected %.0f studs away", distance))
+                                        trinket_bot.SafeServerhop(string.format("Fimbulvetr/Manus Dei detected %.0f studs away", distance))
                                     end
                                 end
                             end
@@ -14408,14 +14408,14 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                                 if has_observe(other_player) then
                                     library:Notify("Illusionist in server! Serverhopping.")
-                                    TrinketBotServerhop(string.format("Illusionist in server; %s has Observe - Serverhopping", other_player.Name))
+                                    trinket_bot.TrinketBotServerhop(string.format("Illusionist in server; %s has Observe - Serverhopping", other_player.Name))
                                     return
                                 end
 
                                 local conn = utility:Connection(backpack.ChildAdded, function(child)
                                     if child.Name == "Observe" then
                                         library:Notify("Illusionist detected! Serverhopping.")
-                                        TrinketBotServerhop(string.format("Illusionist detected; %s acquired Observe - Serverhopping", other_player.Name))
+                                        trinket_bot.TrinketBotServerhop(string.format("Illusionist detected; %s acquired Observe - Serverhopping", other_player.Name))
                                     end
                                 end)
                                 table.insert(illu_connections, conn)
@@ -14425,7 +14425,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                 task.wait(0.5)
                                 if has_observe(other_player) then
                                     library:Notify("Illusionist respawned! Serverhopping.")
-                                    TrinketBotServerhop(string.format("Illusionist detected; %s respawned with Observe - Serverhopping", other_player.Name))
+                                    trinket_bot.TrinketBotServerhop(string.format("Illusionist detected; %s respawned with Observe - Serverhopping", other_player.Name))
                                 end
                             end)
                             table.insert(illu_connections, char_conn)
@@ -14446,14 +14446,14 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                             if has_observe(player) then
                                 library:Notify("Illusionist joined! Serverhopping.")
-                                TrinketBotServerhop(string.format("Illusionist joined; %s with Observe - Serverhopping", player.Name))
+                                trinket_bot.TrinketBotServerhop(string.format("Illusionist joined; %s with Observe - Serverhopping", player.Name))
                                 return
                             end
 
                             local bp_conn = utility:Connection(backpack.ChildAdded, function(child)
                                 if child.Name == "Observe" then
                                     library:Notify("Illusionist joined! Serverhopping.")
-                                    TrinketBotServerhop(string.format("Illusionist joined; %s acquired Observe - Serverhopping", player.Name))
+                                    trinket_bot.TrinketBotServerhop(string.format("Illusionist joined; %s acquired Observe - Serverhopping", player.Name))
                                 end
                             end)
                             table.insert(illu_connections, bp_conn)
@@ -14463,7 +14463,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             task.wait(0.5)
                             if has_observe(player) then
                                 library:Notify("Illusionist respawned! Serverhopping.")
-                                TrinketBotServerhop(string.format("Illusionist respawned; %s with Observe - Serverhopping", player.Name))
+                                trinket_bot.TrinketBotServerhop(string.format("Illusionist respawned; %s with Observe - Serverhopping", player.Name))
                             end
                         end)
                         table.insert(illu_connections, char_added_conn)
@@ -14491,7 +14491,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                     if tool:IsA("Tool") and emergency_conditions[tool.Name] then
                                         library:Notify(string.format("Player %s already has %s - instant serverhop!", other_player.Name, tool.Name))
                                         trinket_bot.path_running = false
-                                        TrinketBotServerhop(string.format("Player %s (%s) has dangerous item: %s - instant serverhop (detected on bot start)", other_player.Name, other_player.UserId, tool.Name))
+                                        trinket_bot.TrinketBotServerhop(string.format("Player %s (%s) has dangerous item: %s - instant serverhop (detected on bot start)", other_player.Name, other_player.UserId, tool.Name))
                                         break
                                     end
                                 end
@@ -14519,11 +14519,11 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             if owner_player and owner_player ~= plr then
                                 library:Notify(string.format("Player %s has %s - instant serverhop!", owner_player.Name, descendant.Name))
                                 trinket_bot.path_running = false
-                                TrinketBotServerhop(string.format("Player %s (%s) has dangerous item: %s - instant serverhop", owner_player.Name, owner_player.UserId, descendant.Name))
+                                trinket_bot.TrinketBotServerhop(string.format("Player %s (%s) has dangerous item: %s - instant serverhop", owner_player.Name, owner_player.UserId, descendant.Name))
                             elseif not owner_player then
                                 library:Notify(string.format("Dangerous item %s detected in server - instant serverhop!", descendant.Name))
                                 trinket_bot.path_running = false
-                                TrinketBotServerhop(string.format("Dangerous item %s detected in server - instant serverhop (no owner identified)", descendant.Name))
+                                trinket_bot.TrinketBotServerhop(string.format("Dangerous item %s detected in server - instant serverhop (no owner identified)", descendant.Name))
                             end
                         end
                     end))
@@ -14712,7 +14712,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                         critical_serverhop_sent = true
                                         library:Notify(string.format("!! CRITICAL DANGER: Player %s within %.0f studs - immediate serverhop !!", other_player.Name, distance))
                                         trinket_bot.path_running = false
-                                        SafeServerhop(string.format("Player %s within %.0f studs so am serverhopping instantly!!! (dangerously close)", other_player.Name, distance))
+                                        trinket_bot.SafeServerhop(string.format("Player %s within %.0f studs so am serverhopping instantly!!! (dangerously close)", other_player.Name, distance))
                                         return
                                     end
                                 end
@@ -14728,7 +14728,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                 critical_serverhop_sent = true
                                                 library:Notify(string.format("!! CRITICAL DANGER: Shrieker within %.0f studs - immediate serverhop !!", distance))
                                                 trinket_bot.path_running = false
-                                                SafeServerhop(string.format("Shrieker within %.0f studs - serverhopping instantly!!! (necromancer attack)", distance))
+                                                trinket_bot.SafeServerhop(string.format("Shrieker within %.0f studs - serverhopping instantly!!! (necromancer attack)", distance))
                                                 return
                                             end
                                         end
@@ -14846,7 +14846,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                             encounter_data.encounter_count = encounter_data.encounter_count + 1
                                             library:Notify(string.format("REPEAT encounter with %s - immediate serverhop (encounter #%d)", other_player.Name, encounter_data.encounter_count))
                                             trinket_bot.path_running = false
-                                            SafeServerhop(string.format("Repeat encounter with %s", other_player.Name))
+                                            trinket_bot.SafeServerhop(string.format("Repeat encounter with %s", other_player.Name))
                                             return
                                         else
                                             library:Notify(string.format("Player %s still in same section - emergency gating", other_player.Name))
@@ -15086,7 +15086,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                     end
                                 end
 
-                                local gate_success = Gate(trinket_bot.path_points[last_gate_index].gate_location)
+                                local gate_success = trinket_bot.Gate(trinket_bot.path_points[last_gate_index].gate_location)
                                 if stabilization_platform then
                                     stabilization_platform:Destroy()
                                     stabilization_platform = nil
@@ -15100,13 +15100,13 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                 else
                                     library:Notify("Gate to last point failed - serverhopping immediately")
                                     trinket_bot.path_running = false
-                                    TrinketBotServerhop(string.format("GNAV detected (%s) but gate failed", gnav_player_name))
+                                    trinket_bot.TrinketBotServerhop(string.format("GNAV detected (%s) but gate failed", gnav_player_name))
                                     return
                                 end
                             else
                                 library:Notify("No gate points in path - serverhopping immediately")
                                 trinket_bot.path_running = false
-                                TrinketBotServerhop(string.format("GNAV detected (%s) - no gates available", gnav_player_name))
+                                trinket_bot.TrinketBotServerhop(string.format("GNAV detected (%s) - no gates available", gnav_player_name))
                                 return
                             end
                         end
@@ -15142,7 +15142,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                 end
                             end
 
-                            local gate_success = Gate(trinket_bot.path_points[last_gate_index].gate_location)
+                            local gate_success = trinket_bot.Gate(trinket_bot.path_points[last_gate_index].gate_location)
                             if stabilization_platform then
                                 stabilization_platform:Destroy()
                                 stabilization_platform = nil
@@ -15167,7 +15167,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         if skip_point then
                             if skip_point.is_gate_point then
                                 library:Notify(string.format("Ice Dragon escape: gating to point %d", ice_dragon_skip_index))
-                                local gate_success = Gate(skip_point.gate_location)
+                                local gate_success = trinket_bot.Gate(skip_point.gate_location)
                                 if gate_success then
                                     i = ice_dragon_skip_index + 1
                                     ice_dragon_skip_index = nil
@@ -15268,7 +15268,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                         library:Notify(string.format("Emergency gate attempted but SnapCool active + player in critical range (%.0f studs) - instant serverhop to escape %s", closest_player_dist, player_name))
                                         emergency_gate_in_progress = false
                                         trinket_bot.path_running = false
-                                        TrinketBotServerhop(string.format("Emergency gate with SnapCool + player in critical range while escaping %s", player_name))
+                                        trinket_bot.TrinketBotServerhop(string.format("Emergency gate with SnapCool + player in critical range while escaping %s", player_name))
                                         return
                                     else
                                         library:Notify(string.format("SnapCool active but player not in critical range (%.0f studs) - waiting for SnapCool to expire", closest_player_dist))
@@ -15300,7 +15300,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                             if snapcool_wait_platform then snapcool_wait_platform:Destroy() end
                                                             emergency_gate_in_progress = false
                                                             trinket_bot.path_running = false
-                                                            TrinketBotServerhop(string.format("Player entered critical range during SnapCool wait while escaping %s", player_name))
+                                                            trinket_bot.TrinketBotServerhop(string.format("Player entered critical range during SnapCool wait while escaping %s", player_name))
                                                             return
                                                         end
                                                     end
@@ -15322,7 +15322,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                             library:Notify("SnapCool wait timeout (10s) - serverhopping")
                                             emergency_gate_in_progress = false
                                             trinket_bot.path_running = false
-                                            TrinketBotServerhop("SnapCool wait timeout during emergency gate")
+                                            trinket_bot.TrinketBotServerhop("SnapCool wait timeout during emergency gate")
                                             return
                                         end
 
@@ -15353,7 +15353,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                     end
                                 end
 
-                                local gate_success = Gate(next_gate_point.gate_location)
+                                local gate_success = trinket_bot.Gate(next_gate_point.gate_location)
 
                                 if stabilization_platform then
                                     stabilization_platform:Destroy()
@@ -15387,7 +15387,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                             if (tick() - wait_start) >= max_wait then
                                                 library:Notify("SnapCool/Danger wait timeout (30s) - serverhopping")
                                                 emergency_gate_in_progress = false
-                                                TrinketBotServerhop("SnapCool/Danger timeout during emergency gate")
+                                                trinket_bot.TrinketBotServerhop("SnapCool/Danger timeout during emergency gate")
                                                 return
                                             end
 
@@ -15431,7 +15431,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                 task.wait(0.5)
                                             end
 
-                                            gate_success = Gate(next_gate_point.gate_location)
+                                            gate_success = trinket_bot.Gate(next_gate_point.gate_location)
 
                                             if gate_success then
                                                 library:Notify(string.format("Successfully emergency gated to point %d (stay in server retry)", next_gate_index))
@@ -15509,7 +15509,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                     task.wait(0.5)
                                                 end
 
-                                                gate_success = Gate(next_gate_point.gate_location)
+                                                gate_success = trinket_bot.Gate(next_gate_point.gate_location)
 
                                                 if gate_success then
                                                     library:Notify(string.format("Successfully emergency gated to point %d (after SnapCool wait)", next_gate_index))
@@ -15525,7 +15525,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                     library:Notify(string.format("Emergency gate retry failed - serverhopping to escape %s", player_name))
                                                     emergency_gate_in_progress = false
                                                     trinket_bot.path_running = false
-                                                    TrinketBotServerhop(string.format("Emergency gate retry failed while escaping %s", player_name))
+                                                    trinket_bot.TrinketBotServerhop(string.format("Emergency gate retry failed while escaping %s", player_name))
                                                     return
                                                 end
                                             else
@@ -15541,7 +15541,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                     library:Notify(string.format("SnapCool timeout or Danger detected - serverhopping to escape %s", player_name))
                                                     emergency_gate_in_progress = false
                                                     trinket_bot.path_running = false
-                                                    TrinketBotServerhop(string.format("Emergency gate failed (SnapCool timeout) while escaping %s", player_name))
+                                                    trinket_bot.TrinketBotServerhop(string.format("Emergency gate failed (SnapCool timeout) while escaping %s", player_name))
                                                 else
                                                     emergency_gate_in_progress = false
                                                 end
@@ -15565,7 +15565,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                 library:Notify(string.format("Emergency gate failed - serverhopping to escape %s", player_name))
                                                 emergency_gate_in_progress = false
                                                 trinket_bot.path_running = false
-                                                TrinketBotServerhop(string.format("Emergency gate failed while escaping %s", player_name))
+                                                trinket_bot.TrinketBotServerhop(string.format("Emergency gate failed while escaping %s", player_name))
                                             else
                                                 emergency_gate_in_progress = false
                                             end
@@ -15623,13 +15623,13 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                                         emergency_gate_in_progress = false
                                         trinket_bot.path_running = false
-                                        TrinketBotServerhop(string.format("Escaped %s via path traversal (no gates)", player_name))
+                                        trinket_bot.TrinketBotServerhop(string.format("Escaped %s via path traversal (no gates)", player_name))
                                         return
                                     else
                                         library:Notify(string.format("No clear gate point available - serverhopping to escape %s", player_name))
                                         emergency_gate_in_progress = false
                                         trinket_bot.path_running = false
-                                        TrinketBotServerhop(string.format("No clear gate point while escaping %s", player_name))
+                                        trinket_bot.TrinketBotServerhop(string.format("No clear gate point while escaping %s", player_name))
                                         return
                                     end
                                 else
@@ -15745,7 +15745,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         if someone_camping then
                             library:Notify(string.format("Player %s camping last point - serverhopping", camper_name))
                             trinket_bot.path_running = false
-                            SafeServerhop(string.format("Player %s camping last point", camper_name))
+                            trinket_bot.SafeServerhop(string.format("Player %s camping last point", camper_name))
                             return
                         end
                     end
@@ -15822,7 +15822,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                     if distance <= critical_distance then
                                                         library:Notify(string.format("!! PRE-GATE CHECK: Player %s within %.0f studs - serverhopping instead of gating !!", other_player.Name, distance))
                                                         trinket_bot.path_running = false
-                                                        SafeServerhop(string.format("Player %s within %.0f studs pre-gate - serverhopping instantly", other_player.Name, distance))
+                                                        trinket_bot.SafeServerhop(string.format("Player %s within %.0f studs pre-gate - serverhopping instantly", other_player.Name, distance))
                                                         return
                                                     end
                                                 end
@@ -15923,7 +15923,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                         end
 
                                         local expected_dest = trinket_bot.path_points[gate_index + 1] and trinket_bot.path_points[gate_index + 1].position or nil
-                                        gate_success = Gate(gate_point.gate_location, expected_dest)
+                                        gate_success = trinket_bot.Gate(gate_point.gate_location, expected_dest)
                                     end
 
                                     if retry_platform then
@@ -15974,7 +15974,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                                 library:Notify("All gate points blocked or failed - serverhopping")
                                 trinket_bot.path_running = false
-                                TrinketBotServerhop("All gate points blocked or failed")
+                                trinket_bot.TrinketBotServerhop("All gate points blocked or failed")
                                 return
                             end
                         else
@@ -16041,7 +16041,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                 end
 
                                 local expected_dest = trinket_bot.path_points[i + 1] and trinket_bot.path_points[i + 1].position or nil
-                                gate_success = Gate(point.gate_location, expected_dest)
+                                gate_success = trinket_bot.Gate(point.gate_location, expected_dest)
                             end
 
                             if not gate_success then
@@ -16156,7 +16156,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                         library:Notify(string.format("Using gate to escape player (jumping to point %d)", next_gate_index))
                                     end
 
-                                    gate_success = Gate(next_gate_point.gate_location)
+                                    gate_success = trinket_bot.Gate(next_gate_point.gate_location)
                                 end
 
                                 if gate_success then
@@ -16182,7 +16182,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                         library:Notify(string.format("Emergency gate failed after retries - serverhopping to escape %s", player_name))
                                         emergency_gate_in_progress = false
                                         trinket_bot.path_running = false
-                                        TrinketBotServerhop(string.format("Emergency gate failed while escaping %s", player_name))
+                                        trinket_bot.TrinketBotServerhop(string.format("Emergency gate failed while escaping %s", player_name))
                                     else
                                         emergency_gate_in_progress = false
                                     end
@@ -16236,13 +16236,13 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                                     emergency_gate_in_progress = false
                                     trinket_bot.path_running = false
-                                    TrinketBotServerhop(string.format("Escaped %s via path traversal (no gates)", player_name))
+                                    trinket_bot.TrinketBotServerhop(string.format("Escaped %s via path traversal (no gates)", player_name))
                                     return
                                 else
                                     library:Notify(string.format("No clear gate point available - serverhopping to escape %s", player_name))
                                     emergency_gate_in_progress = false
                                     trinket_bot.path_running = false
-                                    TrinketBotServerhop(string.format("No gate available to escape %s", player_name))
+                                    trinket_bot.TrinketBotServerhop(string.format("No gate available to escape %s", player_name))
                                     return
                                 end
                             end
@@ -16265,7 +16265,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                     end
 
                                     trinket_bot.path_running = false
-                                    TrinketBotServerhop(string.format("Shrieker detected near point %d - returned to point 1", i))
+                                    trinket_bot.TrinketBotServerhop(string.format("Shrieker detected near point %d - returned to point 1", i))
                                     return
                                 else
                                     local next_gate_point = nil
@@ -16283,20 +16283,20 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                         if utility then
                                             utility:plain_webhook(string.format("Shrieker detected near point %d - gating to point %d to escape", i, next_gate_index))
                                         end
-                                        local gate_success = Gate(next_gate_point.gate_location)
+                                        local gate_success = trinket_bot.Gate(next_gate_point.gate_location)
                                         if gate_success then
                                             i = next_gate_index + 1
                                             continue
                                         else
                                             library:Notify("Gate failed during Shrieker escape - serverhopping")
                                             trinket_bot.path_running = false
-                                            TrinketBotServerhop(string.format("Shrieker at point %d, gate escape failed", i))
+                                            trinket_bot.TrinketBotServerhop(string.format("Shrieker at point %d, gate escape failed", i))
                                             return
                                         end
                                     else
                                         library:Notify("No more gate points to escape Shrieker - serverhopping")
                                         trinket_bot.path_running = false
-                                        TrinketBotServerhop(string.format("Shrieker at point %d, no gate available", i))
+                                        trinket_bot.TrinketBotServerhop(string.format("Shrieker at point %d, no gate available", i))
                                         return
                                     end
                                 end
@@ -16318,7 +16318,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         if trinket_bot.original_point_1_position then
                             local dist_to_original_p1 = (point.position - trinket_bot.original_point_1_position).Magnitude
                             if dist_to_original_p1 < 5 and i > 1 then
-                                TrinketBotServerhop("back to point 1!!!")
+                                trinket_bot.TrinketBotServerhop("back to point 1!!!")
                                 return
                             end
                         end
@@ -16331,7 +16331,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                         local player_distance = (other_player.Character.HumanoidRootPart.Position - point.position).Magnitude
                                         if player_distance <= 150 then
                                             library:Notify(string.format("Player %s at trinket check point %d! Serverhopping...", other_player.Name, i))
-                                            TrinketBotServerhop(string.format("Player %s at trinket check point %d", other_player.Name, i))
+                                            trinket_bot.TrinketBotServerhop(string.format("Player %s at trinket check point %d", other_player.Name, i))
                                             return
                                         end
                                     end
@@ -16550,7 +16550,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             elseif is_tundra2_danger then
                                 ScanTrinketsOnly()
                             else
-                                CheckForTrinkets()
+                                trinket_bot.CheckForTrinkets()
                             end
 
                             if is_tundra2_danger then
@@ -16582,7 +16582,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                     end
                                 end
 
-                                TrinketBotServerhop(string.format("Player %s blocking path so i traversed back to point 1!!", player_name))
+                                trinket_bot.TrinketBotServerhop(string.format("Player %s blocking path so i traversed back to point 1!!", player_name))
                                 return
                             end
                         end
@@ -16776,14 +16776,14 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         library:Notify("Restarting path...")
                         task.wait(1)
                         trinket_bot.path_running = false
-                        ExecutePath(false)
+                        trinket_bot.ExecutePath(false)
                     else
                         library:Notify("Path completed! Serverhopping...")
                         task.wait(0.5)
                         if not critical_serverhop_sent then
-                            TrinketBotServerhop("Server farmed, serverhopping")
+                            trinket_bot.TrinketBotServerhop("Server farmed, serverhopping")
                         else
-                            TrinketBotServerhop("Server farmed after critical event, serverhopping")
+                            trinket_bot.TrinketBotServerhop("Server farmed after critical event, serverhopping")
                         end
                         trinket_bot.path_running = false
                     end
@@ -17021,7 +17021,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                     library:Notify(string.format("Attempting to gate to %s...", gate_location))
                     task.spawn(function()
-                        local success = Gate(gate_location)
+                        local success = trinket_bot.Gate(gate_location)
                         if success then
                             library:Notify(string.format("Successfully gated to %s!", gate_location))
                         else
@@ -17419,7 +17419,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                         if other_player ~= plr and is_moderator(other_player) then
                             library:Notify("Moderator in server! Serverhopping...")
                             task.wait(0.5)
-                            TrinketBotServerhop(string.format("MODERATOR IN SERVER; %s - Serverhopping before spawn", other_player.Name))
+                            trinket_bot.TrinketBotServerhop(string.format("MODERATOR IN SERVER; %s - Serverhopping before spawn", other_player.Name))
                             return
                         end
                     end
@@ -17429,7 +17429,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                             if other_player ~= plr and has_observe(other_player) then
                                 library:Notify("Illusionist in server! Serverhopping...")
                                 task.wait(0.5)
-                                TrinketBotServerhop(string.format("ILLUSIONIST IN SERVER; %s - Serverhopping before spawn", other_player.Name))
+                                trinket_bot.TrinketBotServerhop(string.format("ILLUSIONIST IN SERVER; %s - Serverhopping before spawn", other_player.Name))
                                 return
                             end
                         end
@@ -17588,7 +17588,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                                                                 if distance <= proximity_check_distance then
                                                                     library:Notify(string.format("Player %s within %d studs after resume - serverhopping", other_player.Name, math.floor(distance)))
-                                                                    SafeServerhop(string.format("Player %s within %d studs after resume", other_player.Name, math.floor(proximity_check_distance)))
+                                                                    trinket_bot.SafeServerhop(string.format("Player %s within %d studs after resume", other_player.Name, math.floor(proximity_check_distance)))
                                                                     return
                                                                 end
                                                             end
@@ -17653,12 +17653,12 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                             auto_start_death_connection = nil
                                                         end
 
-                                                        ExecutePath(false)
+                                                        trinket_bot.ExecutePath(false)
                                                         return
                                                     else
                                                         library:Notify("Could not remove ForceField at saved position - serverhopping")
                                                         trinket_bot.path_running = false
-                                                        TrinketBotServerhop("Failed to remove ForceField for resume at saved position")
+                                                        trinket_bot.TrinketBotServerhop("Failed to remove ForceField for resume at saved position")
                                                         return
                                                     end
                                                 elseif path_has_gates then
@@ -17686,7 +17686,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                                                                     if distance <= proximity_check_distance then
                                                                         library:Notify(string.format("Player %s within %d studs after resume - serverhopping", other_player.Name, math.floor(distance)))
-                                                                        SafeServerhop(string.format("Player %s within %d studs after resume", other_player.Name, math.floor(proximity_check_distance)))
+                                                                        trinket_bot.SafeServerhop(string.format("Player %s within %d studs after resume", other_player.Name, math.floor(proximity_check_distance)))
                                                                         return
                                                                     end
                                                                 end
@@ -17727,7 +17727,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                         if forcefield_removed then
                                                             library:Notify("ForceField removed - gating to last gate point")
 
-                                                            local gate_success = Gate(last_gate_point.gate_location)
+                                                            local gate_success = trinket_bot.Gate(last_gate_point.gate_location)
 
                                                             if gate_success then
                                                                 library:Notify(string.format("Successfully gated to last gate point %d - continuing to end then serverhopping", last_gate_index))
@@ -17744,7 +17744,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                                 if #temp_path == 0 then
                                                                     library:Notify("Last gate point was final destination - serverhopping")
                                                                     trinket_bot.path_running = false
-                                                                    TrinketBotServerhop("Completed path after resume gate")
+                                                                    trinket_bot.TrinketBotServerhop("Completed path after resume gate")
                                                                     return
                                                                 end
 
@@ -17762,23 +17762,23 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                                     auto_start_death_connection = nil
                                                                 end
 
-                                                                ExecutePath(false)
+                                                                trinket_bot.ExecutePath(false)
                                                                 return
                                                             else
                                                                 library:Notify("Resume gate to last point failed - serverhopping")
                                                                 trinket_bot.path_running = false
-                                                                TrinketBotServerhop("Resume gate failed after ForceField removal")
+                                                                trinket_bot.TrinketBotServerhop("Resume gate failed after ForceField removal")
                                                                 return
                                                             end
                                                         else
                                                             library:Notify("Could not remove ForceField - serverhopping")
                                                             trinket_bot.path_running = false
-                                                            TrinketBotServerhop("Failed to remove ForceField for resume gate")
+                                                            trinket_bot.TrinketBotServerhop("Failed to remove ForceField for resume gate")
                                                             return
                                                         end
                                                     else
                                                         library:Notify("No gate points found in path - serverhopping")
-                                                        TrinketBotServerhop("No gate points in path for resume")
+                                                        trinket_bot.TrinketBotServerhop("No gate points in path for resume")
                                                         return
                                                     end
                                                 else
@@ -17825,7 +17825,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                             local dist = (other_player.Character.HumanoidRootPart.Position - char_pos).Magnitude
                                                             if dist <= prox_check_dist then
                                                                 library:Notify(string.format("Player %s within %d studs during far recovery - serverhopping", other_player.Name, math.floor(dist)))
-                                                                SafeServerhop(string.format("Player %s within %d studs during far path recovery", other_player.Name, math.floor(prox_check_dist)))
+                                                                trinket_bot.SafeServerhop(string.format("Player %s within %d studs during far path recovery", other_player.Name, math.floor(prox_check_dist)))
                                                                 return
                                                             end
                                                         end
@@ -17887,7 +17887,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                         auto_start_death_connection = nil
                                                     end
 
-                                                    ExecutePath(false)
+                                                    trinket_bot.ExecutePath(false)
                                                     return
                                                 else
                                                     library:Notify("Could not remove ForceField at saved position - falling back to gate recovery")
@@ -17927,7 +17927,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
 
                                                                 if dist <= prox_check_dist then
                                                                     library:Notify(string.format("Player %s within %d studs during far recovery - serverhopping", other_player.Name, math.floor(dist)))
-                                                                    SafeServerhop(string.format("Player %s within %d studs during far path recovery", other_player.Name, math.floor(prox_check_dist)))
+                                                                    trinket_bot.SafeServerhop(string.format("Player %s within %d studs during far path recovery", other_player.Name, math.floor(prox_check_dist)))
                                                                     return
                                                                 end
                                                             end
@@ -17967,7 +17967,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                     if gate_recovery_ff_removed then
                                                         library:Notify("ForceField removed - gating to last gate point for recovery")
 
-                                                        local recovery_gate_success = Gate(recovery_gate_point.gate_location)
+                                                        local recovery_gate_success = trinket_bot.Gate(recovery_gate_point.gate_location)
 
                                                         if recovery_gate_success then
                                                             library:Notify(string.format("Successfully gated to last gate point %d - continuing to end then serverhopping", recovery_gate_index))
@@ -17984,7 +17984,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                             if #recovery_temp_path == 0 then
                                                                 library:Notify("Last gate point was final destination - serverhopping")
                                                                 trinket_bot.path_running = false
-                                                                TrinketBotServerhop("Completed path after far recovery gate")
+                                                                trinket_bot.TrinketBotServerhop("Completed path after far recovery gate")
                                                                 return
                                                             end
 
@@ -18001,29 +18001,29 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                                 auto_start_death_connection = nil
                                                             end
 
-                                                            ExecutePath(false)
+                                                            trinket_bot.ExecutePath(false)
                                                             return
                                                         else
                                                             library:Notify("Far recovery gate failed - serverhopping")
                                                             trinket_bot.path_running = false
-                                                            TrinketBotServerhop("Far recovery gate failed after ForceField removal")
+                                                            trinket_bot.TrinketBotServerhop("Far recovery gate failed after ForceField removal")
                                                             return
                                                         end
                                                     else
                                                         library:Notify("Could not remove ForceField for far recovery - serverhopping")
                                                         trinket_bot.path_running = false
-                                                        TrinketBotServerhop("Failed to remove ForceField for far recovery gate")
+                                                        trinket_bot.TrinketBotServerhop("Failed to remove ForceField for far recovery gate")
                                                         return
                                                     end
                                                 else
                                                     library:Notify("No gate points found for far recovery - serverhopping")
-                                                    TrinketBotServerhop("No gate points in path for far recovery")
+                                                    trinket_bot.TrinketBotServerhop("No gate points in path for far recovery")
                                                     return
                                                 end
                                             else
                                                 library:Notify(string.format("Too far from path (%.1f studs) and no gates available - serverhopping", closest_distance))
                                                 utility:plain_webhook(string.format("Bot too far from path (%.1f studs) with no gates - serverhopping", closest_distance))
-                                                TrinketBotServerhop("Too far from path with no gates for recovery")
+                                                trinket_bot.TrinketBotServerhop("Too far from path with no gates for recovery")
                                                 return
                                             end
                                         end
@@ -18068,7 +18068,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                         if still_camping then
                                             library:Notify(string.format("Player %s still at point 1; Skipping server...", camper_name))
                                             task.wait(0.5)
-                                            TrinketBotServerhop(string.format("PLAYER CAMPING POINT 1: %s (%.0f studs) - Skipping server", camper_name, camper_distance))
+                                            trinket_bot.TrinketBotServerhop(string.format("PLAYER CAMPING POINT 1: %s (%.0f studs) - Skipping server", camper_name, camper_distance))
                                             return
                                         else
                                             library:Notify(string.format("Player %s moved away. Continuing...", camper_name))
@@ -18092,7 +18092,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                                         if player_distance <= 150 then
                                                             library:Notify(string.format("Player %s is on the trinket point %d (%.0f studs)! Skipping server...", other_player.Name, point_idx, player_distance))
                                                             task.wait(0.5)
-                                                            TrinketBotServerhop(string.format("Player is already on the trinket point %d: %s (%.0f studs) - Skipping server", point_idx, other_player.Name, player_distance))
+                                                            trinket_bot.TrinketBotServerhop(string.format("Player is already on the trinket point %d: %s (%.0f studs) - Skipping server", point_idx, other_player.Name, player_distance))
                                                             return
                                                         end
                                                     end
@@ -18111,7 +18111,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
                                 auto_start_death_connection = nil
                             end
 
-                            ExecutePath(false)
+                            trinket_bot.ExecutePath(false)
                         else
                             if auto_start_death_connection then
                                 pcall(function() auto_start_death_connection:Disconnect() end)
