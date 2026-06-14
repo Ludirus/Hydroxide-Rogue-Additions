@@ -1097,6 +1097,56 @@ function HydroBlade.Reporter:capture()
     return nil
 end
 
+function HydroBlade.Reporter:screenshot_file(path)
+    if type(path) ~= "string" or path == "" or path:match("^https?://") then
+        return nil
+    end
+    local reader = readfile
+    if type(reader) ~= "function" then
+        return nil
+    end
+    local ok, data = pcall(reader, path)
+    if ok and type(data) == "string" and data ~= "" then
+        return data
+    end
+    return nil
+end
+
+function HydroBlade.Reporter:send_json(embed)
+    return self:request({
+        Url = self.webhook,
+        Method = "POST",
+        Headers = { ["Content-Type"] = "application/json" },
+        Body = encode({ username = "HydroBlade", embeds = { embed } }),
+    })
+end
+
+function HydroBlade.Reporter:send_file(embed, file_data)
+    local boundary = "HydroBladeBoundary" .. tostring(math.floor(os.clock() * 1000000))
+    embed.image = { url = "attachment://hydroblade_screenshot.png" }
+    local payload = encode({ username = "HydroBlade", embeds = { embed }, attachments = { { id = 0, filename = "hydroblade_screenshot.png" } } })
+    local body = table.concat({
+        "--" .. boundary,
+        "Content-Disposition: form-data; name=\"payload_json\"",
+        "Content-Type: application/json",
+        "",
+        payload,
+        "--" .. boundary,
+        "Content-Disposition: form-data; name=\"files[0]\"; filename=\"hydroblade_screenshot.png\"",
+        "Content-Type: image/png",
+        "",
+        file_data,
+        "--" .. boundary .. "--",
+        "",
+    }, "\r\n")
+    return self:request({
+        Url = self.webhook,
+        Method = "POST",
+        Headers = { ["Content-Type"] = "multipart/form-data; boundary=" .. boundary },
+        Body = body,
+    })
+end
+
 function HydroBlade.Reporter:send(reason, detail)
     self.webhook = HydroBlade.account.failure_webhook
     self.enabled = HydroBlade.account.failure_webhook_enabled
@@ -1126,13 +1176,13 @@ function HydroBlade.Reporter:send(reason, detail)
     }
     if screenshot and screenshot:match("^https?://") then
         embed.image = { url = screenshot }
+        return self:send_json(embed)
     end
-    return self:request({
-        Url = self.webhook,
-        Method = "POST",
-        Headers = { ["Content-Type"] = "application/json" },
-        Body = encode({ username = "HydroBlade", embeds = { embed } }),
-    })
+    local file_data = self:screenshot_file(screenshot)
+    if file_data then
+        return self:send_file(embed, file_data)
+    end
+    return self:send_json(embed)
 end
 
 function HydroBlade.Reporter:fail(reason, detail)

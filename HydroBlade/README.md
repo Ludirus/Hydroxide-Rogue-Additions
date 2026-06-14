@@ -7,6 +7,7 @@ The source, assets, and clean Lua client are tracked. Local account stores, sele
 ## Features
 
 - Paste a `.ROBLOSECURITY` cookie and add the authenticated account directly to Active Accounts.
+- Clear the cookie intake field with one button after pasting or adding an account.
 - `Auth Only` authenticates the pasted cookie and adds the account to Inactive Accounts by default.
 - Assign accounts to:
   - Sigil Alt
@@ -18,6 +19,7 @@ The source, assets, and clean Lua client are tracked. Local account stores, sele
 - Set aliases for selected accounts from Operations.
 - Show Silver Bank accounts with `Silver: unset`.
 - Track Active Accounts and Inactive Accounts.
+- Expand or collapse Sigil Alt rows to show linked Rot Alts.
 - Drag accounts between Active and Inactive. Dragging a Sigil Alt also moves its linked Rot Alts.
 - Drag a Rot Alt onto another Sigil Alt to reassign it.
 - Right-click a Sigil Alt and choose `Insert Rot Alt`, then paste the Rot Alt cookie; username and user id are only read from cookie authentication.
@@ -30,14 +32,14 @@ The source, assets, and clean Lua client are tracked. Local account stores, sele
 - Keep the generated HydroBlade logo as an icon/favicon asset only, not as a large in-app UI element.
 - Prompt for the executor auto-execute folder before showing the main screen.
 - Reconfigure the executor auto-execute folder from Settings.
-- Configure and enable or disable Rot failure webhook screenshots from Settings.
+- Configure and enable or disable Discord Rot failure webhook screenshots from Settings.
 - Generate per-account boot files into the selected auto-execute folder without writing cookies or client source.
 - Generated account boot files exit unless `LocalPlayer.UserId` matches that file's account.
 - Generated account boot files set HydroBlade loader settings and execute `loader.lua`; the loader routes to `dist/hydroblade_client.lua`.
 - Before Start Sigils launches Roblox, add the launched account usernames to `koro.luau` `blockedUsers` or `BlockUsers` when that file exists in the selected auto-execute folder.
 - Load the no-UI Lua client through encrypted dist by setting `getgenv().HYDROBLADE_CLIENT = true` before running `loader.lua`.
 - Provide client methods for bypass setup, dialogue choice snapshots, click/dialogue helpers, path movement, `InnTeleport`, ingredient lookup, ingredient pickup, and Sigil/Rot workflows.
-- Send enabled Rot failure webhooks with account, job, position, detail, and executor screenshot path or URL.
+- Send enabled Rot failure webhooks with account, job, position, detail, executor screenshot path or URL, and screenshot attachment when the executor exposes a readable screenshot file.
 - After a Rot Alt gives Alana the Switch Witch, it returns to the Sigil's job, stays at menu, follows later Sigil server hops, and waits for a WS Rot request.
 
 ## WebSocket Methods

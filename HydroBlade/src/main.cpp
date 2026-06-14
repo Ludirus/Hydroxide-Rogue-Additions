@@ -41,6 +41,8 @@ constexpr UINT_PTR kActiveListSubclass = 41;
 constexpr UINT_PTR kInactiveListSubclass = 42;
 constexpr int kContextInsertRotAlt = 5001;
 constexpr int kContextRemoveAccount = 5002;
+constexpr int kContextToggleSigil = 5003;
+constexpr int kSettingsBrowseFolder = 6101;
 
 enum ControlId {
     IdAccountName = 1001,
@@ -65,6 +67,7 @@ enum ControlId {
     IdHint,
     IdDragBadge,
     IdSettings,
+    IdClearCookie,
 };
 
 enum class Role {
@@ -140,6 +143,7 @@ std::wstring g_failureWebhook;
 bool g_failureWebhookEnabled = false;
 bool g_sigilsRunning = false;
 uint64_t g_sigilsRunId = 0;
+std::unordered_set<std::wstring> g_collapsedSigils;
 
 struct RuntimeAccount {
     std::wstring accountId;
@@ -168,7 +172,9 @@ DragState g_drag;
 
 void SyncAutoExecuteFiles();
 std::wstring AccountShortName(const Account& account);
+size_t RotChildCountFor(size_t index);
 void SetStatus(const std::wstring& message);
+void HideDragBadge();
 
 std::wstring Trim(std::wstring text) {
     auto isSpace = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n'; };
@@ -399,6 +405,12 @@ struct PromptState {
     HWND edit = nullptr;
 };
 
+void ClearCookieInput() {
+    SetWindowString(g_cookie, L"");
+    SetWindowString(g_username, L"");
+    SetWindowString(g_userId, L"");
+}
+
 LRESULT CALLBACK PromptProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     PromptState* state = reinterpret_cast<PromptState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     switch (message) {
@@ -485,6 +497,8 @@ std::optional<std::wstring> PromptForText(const std::wstring& title, const std::
     EnableWindow(g_main, FALSE);
     ShowWindow(dialog, SW_SHOW);
     UpdateWindow(dialog);
+    SetForegroundWindow(dialog);
+    BringWindowToTop(dialog);
 
     MSG msg = {};
     while (!state.done && GetMessageW(&msg, nullptr, 0, 0) > 0) {
@@ -620,9 +634,9 @@ std::wstring EffectiveFailureWebhook() {
     return g_failureWebhookEnabled ? g_failureWebhook : L"";
 }
 
-std::optional<std::wstring> BrowseForFolder(const std::wstring& title) {
+std::optional<std::wstring> BrowseForFolder(const std::wstring& title, HWND owner = nullptr) {
     BROWSEINFOW browse = {};
-    browse.hwndOwner = g_main;
+    browse.hwndOwner = owner ? owner : g_main;
     browse.lpszTitle = title.c_str();
     browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_USENEWUI;
     PIDLIST_ABSOLUTE pidl = SHBrowseForFolderW(&browse);
@@ -637,6 +651,153 @@ std::optional<std::wstring> BrowseForFolder(const std::wstring& title) {
         return std::nullopt;
     }
     return std::wstring(path);
+}
+
+bool IsDiscordWebhookUrl(const std::wstring& value) {
+    std::wstring url = Trim(value);
+    std::transform(url.begin(), url.end(), url.begin(), [](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+    return url.rfind(L"https://discord.com/api/webhooks/", 0) == 0 ||
+           url.rfind(L"https://discordapp.com/api/webhooks/", 0) == 0 ||
+           url.rfind(L"https://canary.discord.com/api/webhooks/", 0) == 0 ||
+           url.rfind(L"https://ptb.discord.com/api/webhooks/", 0) == 0;
+}
+
+struct SettingsDialogState {
+    std::wstring autoExecuteFolder;
+    std::wstring failureWebhook;
+    bool failureWebhookEnabled = false;
+    bool accepted = false;
+    bool done = false;
+    HWND folderEdit = nullptr;
+    HWND webhookEdit = nullptr;
+    HWND webhookCheck = nullptr;
+};
+
+void SetChildFont(HWND hwnd, HFONT font) {
+    if (hwnd && font) {
+        SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    }
+}
+
+LRESULT CALLBACK SettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    SettingsDialogState* state = reinterpret_cast<SettingsDialogState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    switch (message) {
+        case WM_CREATE: {
+            auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            state = reinterpret_cast<SettingsDialogState*>(create->lpCreateParams);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
+            SetChildFont(CreateWindowExW(0, L"STATIC", L"Executor auto execute folder", WS_CHILD | WS_VISIBLE | SS_LEFT, 18, 18, 260, 22, hwnd, nullptr, g_instance, nullptr), g_font);
+            state->folderEdit = CreateWindowExW(0, L"EDIT", state->autoExecuteFolder.c_str(), WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | ES_READONLY, 18, 44, 438, 30, hwnd, nullptr, g_instance, nullptr);
+            SetChildFont(state->folderEdit, g_font);
+            SetChildFont(CreateWindowExW(0, L"BUTTON", L"Browse", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 466, 44, 100, 30, hwnd, reinterpret_cast<HMENU>(kSettingsBrowseFolder), g_instance, nullptr), g_font);
+            SetChildFont(CreateWindowExW(0, L"STATIC", L"Discord webhook URL", WS_CHILD | WS_VISIBLE | SS_LEFT, 18, 88, 220, 22, hwnd, nullptr, g_instance, nullptr), g_font);
+            state->webhookEdit = CreateWindowExW(0, L"EDIT", state->failureWebhook.c_str(), WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 18, 114, 548, 30, hwnd, nullptr, g_instance, nullptr);
+            SetChildFont(state->webhookEdit, g_font);
+            state->webhookCheck = CreateWindowExW(0, L"BUTTON", L"Enable Rot failure screenshot webhook", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 18, 154, 340, 26, hwnd, nullptr, g_instance, nullptr);
+            SetChildFont(state->webhookCheck, g_font);
+            SendMessageW(state->webhookCheck, BM_SETCHECK, state->failureWebhookEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
+            SetChildFont(CreateWindowExW(0, L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 374, 194, 90, 32, hwnd, reinterpret_cast<HMENU>(IDOK), g_instance, nullptr), g_font);
+            SetChildFont(CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE, 476, 194, 90, 32, hwnd, reinterpret_cast<HMENU>(IDCANCEL), g_instance, nullptr), g_font);
+            SetFocus(state->folderEdit);
+            return 0;
+        }
+        case WM_COMMAND:
+            if (LOWORD(wParam) == kSettingsBrowseFolder && state) {
+                const auto folder = BrowseForFolder(L"Select executor auto execute folder", hwnd);
+                if (folder.has_value()) {
+                    SetWindowString(state->folderEdit, folder.value());
+                }
+                return 0;
+            }
+            if (LOWORD(wParam) == IDOK && state) {
+                const bool webhookEnabled = SendMessageW(state->webhookCheck, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                const std::wstring webhook = Trim(GetWindowString(state->webhookEdit));
+                if (webhookEnabled && !IsDiscordWebhookUrl(webhook)) {
+                    MessageBoxW(hwnd, L"Enter a valid Discord webhook URL or disable webhook sending.", L"HydroBlade Settings", MB_OK | MB_ICONWARNING);
+                    return 0;
+                }
+                state->autoExecuteFolder = Trim(GetWindowString(state->folderEdit));
+                state->failureWebhook = webhook;
+                state->failureWebhookEnabled = webhookEnabled;
+                state->accepted = true;
+                state->done = true;
+                DestroyWindow(hwnd);
+                return 0;
+            }
+            if (LOWORD(wParam) == IDCANCEL && state) {
+                state->done = true;
+                DestroyWindow(hwnd);
+                return 0;
+            }
+            break;
+        case WM_CLOSE:
+            if (state) {
+                state->done = true;
+            }
+            DestroyWindow(hwnd);
+            return 0;
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+std::optional<SettingsDialogState> ShowSettingsDialog() {
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc = SettingsProc;
+        wc.hInstance = g_instance;
+        wc.lpszClassName = L"HydroBladeSettings";
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        RegisterClassW(&wc);
+        registered = true;
+    }
+
+    SettingsDialogState state;
+    state.autoExecuteFolder = g_autoExecuteFolder;
+    state.failureWebhook = g_failureWebhook;
+    state.failureWebhookEnabled = g_failureWebhookEnabled;
+    RECT parentRect = {};
+    GetWindowRect(g_main, &parentRect);
+    const int width = 600;
+    const int height = 276;
+    HWND dialog = CreateWindowExW(
+        WS_EX_DLGMODALFRAME,
+        L"HydroBladeSettings",
+        L"HydroBlade Settings",
+        WS_CAPTION | WS_POPUP | WS_SYSMENU,
+        parentRect.left + ((parentRect.right - parentRect.left) - width) / 2,
+        parentRect.top + ((parentRect.bottom - parentRect.top) - height) / 2,
+        width,
+        height,
+        g_main,
+        nullptr,
+        g_instance,
+        &state);
+    if (!dialog) {
+        return std::nullopt;
+    }
+
+    EnableWindow(g_main, FALSE);
+    ShowWindow(dialog, SW_SHOW);
+    UpdateWindow(dialog);
+    SetForegroundWindow(dialog);
+
+    MSG msg = {};
+    while (!state.done && GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (!IsDialogMessageW(dialog, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+    EnableWindow(g_main, TRUE);
+    SetForegroundWindow(g_main);
+    if (state.accepted) {
+        return state;
+    }
+    return std::nullopt;
 }
 
 void EnsureAutoExecuteFolder() {
@@ -660,59 +821,15 @@ void EnsureAutoExecuteFolder() {
 
 void OpenSettings() {
     LoadSettings();
-    bool changed = false;
-    const std::wstring currentFolder = g_autoExecuteFolder.empty() ? L"(unset)" : g_autoExecuteFolder;
-    const std::wstring folderMessage =
-        L"Current auto execute folder:\n" + currentFolder +
-        L"\n\nClick OK to select your executor's auto execute folder, or Cancel to keep the current path.";
-    const int folderChoice = MessageBoxW(
-        g_main,
-        folderMessage.c_str(),
-        L"HydroBlade Settings",
-        MB_OKCANCEL | MB_ICONINFORMATION);
-
-    if (folderChoice == IDOK) {
-        const auto folder = BrowseForFolder(L"Select executor auto execute folder");
-        if (folder.has_value()) {
-            const std::wstring selected = Trim(folder.value());
-            if (!selected.empty() && selected != g_autoExecuteFolder) {
-                g_autoExecuteFolder = selected;
-                changed = true;
-            }
-        }
-    }
-
-    const auto webhook = PromptForText(L"HydroBlade Settings", L"Failure webhook URL", false, g_failureWebhook, true);
-    if (webhook.has_value()) {
-        const std::wstring selected = Trim(webhook.value());
-        if (selected != g_failureWebhook) {
-            g_failureWebhook = selected;
-            changed = true;
-        }
-    }
-
-    const std::wstring webhookState = g_failureWebhookEnabled ? L"enabled" : L"disabled";
-    const std::wstring webhookMessage =
-        L"Failure webhook screenshot sending is currently " + webhookState +
-        L".\n\nChoose Yes to enable it, No to disable it, or Cancel to keep the current setting.";
-    const int webhookChoice = MessageBoxW(
-        g_main,
-        webhookMessage.c_str(),
-        L"HydroBlade Settings",
-        MB_YESNOCANCEL | MB_ICONQUESTION);
-    if (webhookChoice == IDYES && !g_failureWebhookEnabled) {
-        g_failureWebhookEnabled = true;
-        changed = true;
-    } else if (webhookChoice == IDNO && g_failureWebhookEnabled) {
-        g_failureWebhookEnabled = false;
-        changed = true;
-    }
-
-    if (!changed) {
+    const auto settings = ShowSettingsDialog();
+    if (!settings.has_value()) {
         SetStatus(L"Settings unchanged.");
         return;
     }
 
+    g_autoExecuteFolder = Trim(settings->autoExecuteFolder);
+    g_failureWebhook = Trim(settings->failureWebhook);
+    g_failureWebhookEnabled = settings->failureWebhookEnabled;
     SaveSettings();
     SyncAutoExecuteFiles();
     std::wstring status = L"Settings saved.";
@@ -1893,11 +2010,63 @@ void RefreshLists() {
     std::lock_guard<std::recursive_mutex> lock(g_accountsMutex);
     SendMessageW(g_activeList, LB_RESETCONTENT, 0, 0);
     SendMessageW(g_inactiveList, LB_RESETCONTENT, 0, 0);
-    for (size_t i = 0; i < g_accounts.size(); ++i) {
-        const std::wstring title = AccountTitle(g_accounts[i]);
-        HWND list = g_accounts[i].active ? g_activeList : g_inactiveList;
+
+    auto addRow = [](HWND list, size_t index, const std::wstring& title) {
         const LRESULT row = SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(title.c_str()));
-        SendMessageW(list, LB_SETITEMDATA, static_cast<WPARAM>(row), static_cast<LPARAM>(i));
+        SendMessageW(list, LB_SETITEMDATA, static_cast<WPARAM>(row), static_cast<LPARAM>(index));
+    };
+
+    auto renderList = [&](HWND list, bool active) {
+        for (size_t i = 0; i < g_accounts.size(); ++i) {
+            const Account& account = g_accounts[i];
+            if (account.active != active || account.role == Role::RotAlt) {
+                continue;
+            }
+
+            std::wstring title = AccountTitle(account);
+            if (account.role == Role::SigilAlt) {
+                const size_t children = RotChildCountFor(i);
+                if (children > 0) {
+                    const bool expanded = g_collapsedSigils.find(account.id) == g_collapsedSigils.end();
+                    title = (expanded ? L"[-] " : L"[+] ") + title + L"  Rot: " + std::to_wstring(children);
+                } else {
+                    title = L"    " + title;
+                }
+            } else {
+                title = L"    " + title;
+            }
+            addRow(list, i, title);
+
+            if (account.role == Role::SigilAlt && g_collapsedSigils.find(account.id) == g_collapsedSigils.end()) {
+                for (size_t childIndex = 0; childIndex < g_accounts.size(); ++childIndex) {
+                    const Account& child = g_accounts[childIndex];
+                    if (child.active == active && child.role == Role::RotAlt && child.parentId == account.id) {
+                        addRow(list, childIndex, AccountTitle(child));
+                    }
+                }
+            }
+        }
+
+        for (size_t i = 0; i < g_accounts.size(); ++i) {
+            const Account& account = g_accounts[i];
+            if (account.active != active || account.role != Role::RotAlt) {
+                continue;
+            }
+            const size_t parent = FindAccountIndexById(account.parentId);
+            if (parent == static_cast<size_t>(-1) || g_accounts[parent].active != active || g_accounts[parent].role != Role::SigilAlt) {
+                addRow(list, i, AccountTitle(account));
+            }
+        }
+    };
+
+    renderList(g_activeList, true);
+    renderList(g_inactiveList, false);
+    for (auto it = g_collapsedSigils.begin(); it != g_collapsedSigils.end();) {
+        if (FindAccountIndexById(*it) == static_cast<size_t>(-1)) {
+            it = g_collapsedSigils.erase(it);
+        } else {
+            ++it;
+        }
     }
     UpdateStats();
 }
@@ -2088,6 +2257,12 @@ void RemoveAccount(size_t index) {
 }
 
 void InsertRotAlt(size_t parentIndex) {
+    if (GetCapture()) {
+        ReleaseCapture();
+    }
+    HideDragBadge();
+    g_drag = {};
+
     Account parent;
     {
         std::lock_guard<std::recursive_mutex> lock(g_accountsMutex);
@@ -2150,6 +2325,7 @@ void InsertRotAlt(size_t parentIndex) {
     } else {
         g_accounts.push_back(std::move(child));
     }
+    g_collapsedSigils.erase(parent.id);
     SaveAccounts();
     RefreshLists();
     SetStatus(L"Inserted Rot Alt: " + result.username + L" (" + result.userId + L")");
@@ -2215,7 +2391,7 @@ void AddCookieToAccount(bool active) {
     }
 
     SetWindowString(g_name, result.username);
-    SetWindowString(g_cookie, L"");
+    ClearCookieInput();
     SaveAccounts();
     RefreshLists();
     SetStatus(std::wstring(active ? L"Added active account: " : L"Added inactive account: ") + result.username + L" (" + result.userId + L")");
@@ -2365,6 +2541,26 @@ size_t RotChildCountFor(size_t index) {
     return count;
 }
 
+void ToggleSigilExpanded(size_t index) {
+    std::lock_guard<std::recursive_mutex> lock(g_accountsMutex);
+    if (index >= g_accounts.size() || g_accounts[index].role != Role::SigilAlt) {
+        return;
+    }
+    if (RotChildCountFor(index) == 0) {
+        SetStatus(L"This Sigil has no Rot Alts.");
+        return;
+    }
+    const std::wstring id = g_accounts[index].id;
+    if (g_collapsedSigils.find(id) == g_collapsedSigils.end()) {
+        g_collapsedSigils.insert(id);
+        SetStatus(L"Collapsed " + AccountShortName(g_accounts[index]) + L".");
+    } else {
+        g_collapsedSigils.erase(id);
+        SetStatus(L"Expanded " + AccountShortName(g_accounts[index]) + L".");
+    }
+    RefreshLists();
+}
+
 std::wstring DragBadgeText(size_t index) {
     std::lock_guard<std::recursive_mutex> lock(g_accountsMutex);
     if (index >= g_accounts.size()) {
@@ -2404,14 +2600,27 @@ void HideDragBadge() {
 }
 
 void ShowAccountContextMenu(HWND hwnd, int row, POINT screenPoint) {
+    if (GetCapture()) {
+        ReleaseCapture();
+    }
+    HideDragBadge();
+    g_drag = {};
+
     SelectListRow(hwnd, row);
     const auto selected = SelectedAccountIndex();
     const bool canInsert =
         selected.has_value() &&
         *selected < g_accounts.size() &&
         g_accounts[*selected].role == Role::SigilAlt;
+    const bool canToggle =
+        canInsert &&
+        RotChildCountFor(*selected) > 0;
 
     HMENU menu = CreatePopupMenu();
+    if (canToggle && selected.has_value()) {
+        const bool expanded = g_collapsedSigils.find(g_accounts[*selected].id) == g_collapsedSigils.end();
+        AppendMenuW(menu, MF_STRING, kContextToggleSigil, expanded ? L"Collapse Rot Alts" : L"Expand Rot Alts");
+    }
     AppendMenuW(
         menu,
         MF_STRING | (canInsert ? MF_ENABLED : MF_GRAYED),
@@ -2421,6 +2630,9 @@ void ShowAccountContextMenu(HWND hwnd, int row, POINT screenPoint) {
     AppendMenuW(menu, MF_STRING, kContextRemoveAccount, L"Remove Account");
     const int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, g_main, nullptr);
     DestroyMenu(menu);
+    if (command == kContextToggleSigil && canToggle && selected.has_value()) {
+        ToggleSigilExpanded(*selected);
+    }
     if (command == kContextInsertRotAlt && canInsert && selected.has_value()) {
         InsertRotAlt(*selected);
     }
@@ -2649,7 +2861,8 @@ void BuildUi() {
     ShowWindow(g_name, SW_HIDE);
 
     CreatePanelLabel(L".ROBLOSECURITY Cookie", 34, 210, 210, 22);
-    g_cookie = CreateControl(L"EDIT", L"", WS_BORDER | ES_PASSWORD | ES_AUTOHSCROLL, 34, 236, 498, 34, IdCookie);
+    g_cookie = CreateControl(L"EDIT", L"", WS_BORDER | ES_PASSWORD | ES_AUTOHSCROLL, 34, 236, 408, 34, IdCookie);
+    CreateButton(L"Clear", 454, 236, 78, 34, IdClearCookie);
 
     CreatePanelLabel(L"Role", 34, 304, 90, 22);
     g_role = CreateControl(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, 34, 330, 236, 150, IdRole);
@@ -2667,7 +2880,7 @@ void BuildUi() {
     ShowWindow(g_username, SW_HIDE);
     ShowWindow(g_userId, SW_HIDE);
 
-    CreateButton(L"Authenticate + Add Active", 34, 390, 236, 34, IdAddAccount);
+    CreateButton(L"Add Account", 34, 390, 236, 34, IdAddAccount);
     CreateButton(L"Auth Only", 296, 390, 112, 34, IdAuthenticate);
     CreateButton(L"Start Sigils", 420, 390, 112, 34, IdStartSigils);
 
@@ -2789,6 +3002,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
         case WM_COMMAND: {
             const int id = LOWORD(wParam);
             const int notify = HIWORD(wParam);
+            if ((id == IdActiveList || id == IdInactiveList) && notify == LBN_DBLCLK) {
+                if (const auto selected = SelectedAccountIndex()) {
+                    ToggleSigilExpanded(*selected);
+                }
+                return 0;
+            }
             if ((id == IdActiveList || id == IdInactiveList) && notify == LBN_SELCHANGE) {
                 if (id == IdActiveList) {
                     SendMessageW(g_inactiveList, LB_SETCURSEL, static_cast<WPARAM>(-1), 0);
@@ -2809,6 +3028,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 case IdJoinGaia: JoinSelectedGaia(); return 0;
                 case IdStartSigils: StartSigils(); return 0;
                 case IdSettings: OpenSettings(); return 0;
+                case IdClearCookie: ClearCookieInput(); SetStatus(L"Cookie input cleared."); return 0;
                 case IdSetAlias: ApplyAliasToSelected(); return 0;
                 case IdSetActive: MoveSelected(true); return 0;
                 case IdSetInactive: MoveSelected(false); return 0;
