@@ -45,6 +45,8 @@ HydroBlade.connections = {}
 HydroBlade.runtime = {
     workflow = HydroBlade.account.workflow,
     parent_job_id = "",
+    rot_stage = tostring(env.HYDROBLADE_ROT_STAGE or ""),
+    rot_requested = env.HYDROBLADE_ROT_REQUESTED == true,
     kick_reason = "",
     running = false,
 }
@@ -90,6 +92,26 @@ local function decode(payload)
         return result
     end
     return { method = payload }
+end
+
+local function lua_value(value)
+    if type(value) == "boolean" then
+        return tostring(value)
+    end
+    return string.format("%q", tostring(value or ""))
+end
+
+function HydroBlade.queue_state(values)
+    local queue = queue_on_teleport or queueonteleport or queueteleport or (syn and syn.queue_on_teleport)
+    if type(queue) ~= "function" or type(values) ~= "table" then
+        return false
+    end
+    local lines = { "local env = getgenv and getgenv() or _G" }
+    for key, value in pairs(values) do
+        table.insert(lines, "env." .. tostring(key) .. " = " .. lua_value(value))
+    end
+    local ok = pcall(queue, table.concat(lines, "\n"))
+    return ok
 end
 
 local function send_raw(socket, text)
@@ -1020,7 +1042,14 @@ function HydroBlade.Session.new()
     return setmetatable({}, HydroBlade.Session)
 end
 
-function HydroBlade.Session:server_hop(job_id, reason)
+function HydroBlade.Session:server_hop(job_id, reason, options)
+    if type(options) == "table" and options.rot_stage then
+        HydroBlade.runtime.rot_stage = tostring(options.rot_stage)
+        HydroBlade.queue_state({
+            HYDROBLADE_ROT_STAGE = HydroBlade.runtime.rot_stage,
+            HYDROBLADE_ROT_REQUESTED = HydroBlade.runtime.rot_requested == true,
+        })
+    end
     HydroBlade.status("server_hop", { reason = reason or "", target_job = job_id or "" })
     local player = Players.LocalPlayer
     if job_id and job_id ~= "" then
@@ -1388,7 +1417,32 @@ function HydroBlade.RoleRunner:run_sigil()
     return true
 end
 
+function HydroBlade.RoleRunner:run_rot_idle()
+    if HydroBlade.runtime.running then
+        return false, "workflow already running"
+    end
+    HydroBlade.runtime.running = true
+    HydroBlade.runtime.rot_stage = "await_request"
+    self:send_status("rot_idle", { rot_stage = HydroBlade.runtime.rot_stage })
+    while HydroBlade.runtime.running do
+        local job = self:parent_job(5)
+        if job and job ~= "" and job ~= game.JobId then
+            return self.session:server_hop(job, "follow_sigil", { rot_stage = "await_request" })
+        end
+        if HydroBlade.runtime.rot_requested then
+            self:send_status("rot_requested", { rot_stage = HydroBlade.runtime.rot_stage })
+        else
+            self:send_status("rot_idle", { rot_stage = HydroBlade.runtime.rot_stage })
+        end
+        task.wait(5)
+    end
+    return true
+end
+
 function HydroBlade.RoleRunner:run_rot()
+    if HydroBlade.runtime.rot_stage == "await_request" then
+        return self:run_rot_idle()
+    end
     if HydroBlade.runtime.running then
         return false, "workflow already running"
     end
@@ -1423,7 +1477,7 @@ function HydroBlade.RoleRunner:run_rot()
     if not job then
         return self:fail("parent job unavailable", "sigil did not report a job id")
     end
-    return self.session:server_hop(job, "return_to_sigil")
+    return self.session:server_hop(job, "return_to_sigil", { rot_stage = "await_request" })
 end
 
 function HydroBlade.RoleRunner:run(workflow)
@@ -1976,6 +2030,7 @@ end
 HydroBlade.methods.listening = function(message)
     HydroBlade.runtime.workflow = tostring(message.workflow or HydroBlade.runtime.workflow or "")
     HydroBlade.account.failure_webhook = tostring(message.failure_webhook or HydroBlade.account.failure_webhook or "")
+    HydroBlade.methods.client_status(message)
     if HydroBlade.runtime.workflow ~= "" and not HydroBlade.runtime.running then
         HydroBlade.methods.run_workflow({ workflow = HydroBlade.runtime.workflow })
     end
@@ -1988,6 +2043,9 @@ HydroBlade.methods.client_status = function(message)
     if type(message.parent_job) == "string" and message.parent_job ~= "" then
         HydroBlade.runtime.parent_job_id = message.parent_job
     end
+    if type(message.rot_requested) == "boolean" then
+        HydroBlade.runtime.rot_requested = message.rot_requested
+    end
 end
 
 HydroBlade.methods.parent_job = function(message)
@@ -1996,6 +2054,17 @@ HydroBlade.methods.parent_job = function(message)
     elseif type(message.parent_job) == "string" and message.parent_job ~= "" then
         HydroBlade.runtime.parent_job_id = message.parent_job
     end
+end
+
+HydroBlade.methods.request_rots_ack = function(message)
+    if type(message.rot_requested) == "boolean" then
+        HydroBlade.runtime.rot_requested = message.rot_requested
+    end
+end
+
+HydroBlade.methods.rot_request = function()
+    HydroBlade.runtime.rot_requested = true
+    HydroBlade.status("rot_requested", { rot_stage = HydroBlade.runtime.rot_stage })
 end
 
 HydroBlade.methods.rot_failure_ack = function(message)
