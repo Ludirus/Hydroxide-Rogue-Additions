@@ -15090,6 +15090,8 @@ if is_hydroxide_supported_place() then
                 return is_trinket_artifact_item(normalized_name) and selected_kick_artifact_name(normalized_name) ~= nil
             end
 
+            cheat_client.should_route_to_rare_artifact_webhook = should_route_to_rare_artifact_webhook
+
             local function is_auto_bank_artifact_candidate(item_name)
                 return Toggles
                     and Toggles.AutoBankArti
@@ -18023,6 +18025,7 @@ if is_hydroxide_supported_place() then
                     join_oldest_server = Toggles.JoinOldestServer and Toggles.JoinOldestServer.Value or false,
                     auto_pop_pds = Toggles.AutoPopPDs and Toggles.AutoPopPDs.Value or false,
                     auto_drop_items = Options.AutoDropItems and Options.AutoDropItems.Value or {},
+                    auto_bank_arti = Toggles.AutoBankArti and Toggles.AutoBankArti.Value or false,
                     kick_on_trinket = Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value or false,
                     kick_trinket_list = Options.KickTrinketList and Options.KickTrinketList.Value or {},
                     stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false,
@@ -18034,6 +18037,7 @@ if is_hydroxide_supported_place() then
                     trinket_debug_ping_user_id = normalize_trinket_debug_ping_user_id(Options.TrinketDebugPingUserId and Options.TrinketDebugPingUserId.Value or cheat_client.config.trinket_debug_ping_user_id),
                     trinket_general_webhook = normalize_trinket_webhook_url(Options.TrinketGeneralWebhook and Options.TrinketGeneralWebhook.Value or ((cheat_client.config.trinket_general_webhook and cheat_client.config.trinket_general_webhook ~= "") and cheat_client.config.trinket_general_webhook or cheat_client.config.webhook)),
                     trinket_artifact_webhook = normalize_trinket_webhook_url(Options.TrinketArtifactWebhook and Options.TrinketArtifactWebhook.Value or cheat_client.config.trinket_artifact_webhook),
+                    trinket_rare_artifact_webhook = normalize_trinket_webhook_url(Options.TrinketRareArtifactWebhook and Options.TrinketRareArtifactWebhook.Value or cheat_client.config.trinket_rare_artifact_webhook),
                     trinket_end_in_hours = get_trinket_end_in_hours(),
                     trinket_end_deadline = get_trinket_end_deadline(),
                     time_between_looting = Options.TimeBetweenLooting and Options.TimeBetweenLooting.Value or 5,
@@ -20509,6 +20513,14 @@ if is_hydroxide_supported_place() then
 
                 local i = 1
                 while i <= #trinket_bot.path_points do
+                    while trinket_bot.rare_artifact_bank_in_progress and trinket_bot.path_running and not shared.is_unloading do
+                        task.wait(0.2)
+                    end
+
+                    if not trinket_bot.path_running or shared.is_unloading then
+                        return
+                    end
+
                     if stop_trinket_bot_for_end_deadline("path loop") then
                         return
                     end
@@ -22546,6 +22558,15 @@ if is_hydroxide_supported_place() then
                 Tooltip = "Kicks and webhooks when selected trinket is picked up"
             })
 
+            group_trinket_bot:AddToggle("AutoBankArti", {
+                Text = "Auto Bank Arti",
+                Default = cheat_client.config.auto_bank_arti == true,
+                Tooltip = "When a selected kick-list artifact is picked up, safely gates to Shore 4, banks once per session, then resumes/serverhops",
+                Callback = function(value)
+                    cheat_client.config.auto_bank_arti = value == true
+                end
+            })
+
             group_trinket_bot:AddDropdown("KickTrinketList", {
                 Text = "Trinkets to Kick On",
                 Values = {
@@ -22694,6 +22715,24 @@ if is_hydroxide_supported_place() then
                 end
             })
 
+            group_trinket_bot:AddInput("TrinketRareArtifactWebhook", {
+                Text = "Rare Artifact Pickup/Bank",
+                Default = normalize_trinket_webhook_url(cheat_client.config.trinket_rare_artifact_webhook),
+                Numeric = false,
+                Finished = false,
+                Placeholder = "https://discord.com/api/webhooks/...",
+                Tooltip = "Used for Auto Bank Arti, selected kick-list artifacts, Rift Gem, and Mysterious Artifact.",
+                Callback = function(value)
+                    local webhook = normalize_trinket_webhook_url(value)
+                    if not is_valid_discord_webhook_url(webhook) then
+                        library:Notify("Invalid rare artifact webhook URL format!")
+                        return
+                    end
+
+                    set_trinket_rare_artifact_webhook(webhook)
+                end
+            })
+
             group_trinket_bot:AddLabel("Auto Drop Items")
             group_trinket_bot:AddDropdown("AutoDropItems", {
                 Text = "Auto Drop",
@@ -22836,6 +22875,7 @@ if is_hydroxide_supported_place() then
                 if Toggles.JoinOldestServer then Toggles.JoinOldestServer:SetValue(settings.join_oldest_server or false) end
                 if Toggles.AutoPopPDs then Toggles.AutoPopPDs:SetValue(settings.auto_pop_pds or false) end
                 if Options.AutoDropItems then Options.AutoDropItems:SetValue(settings.auto_drop_items or {}) end
+                if Toggles.AutoBankArti then Toggles.AutoBankArti:SetValue(settings.auto_bank_arti or false) end
                 if Toggles.KickOnTrinket then Toggles.KickOnTrinket:SetValue(settings.kick_on_trinket or false) end
                 if Options.KickTrinketList then Options.KickTrinketList:SetValue(settings.kick_trinket_list or {}) end
                 if Toggles.StayInServer then Toggles.StayInServer:SetValue(settings.stay_in_server or false) end
@@ -22910,6 +22950,12 @@ if is_hydroxide_supported_place() then
                                 Options.TrinketArtifactWebhook:SetValue(cheat_client.config.trinket_artifact_webhook)
                             end
                         end
+                        if shared_settings.trinket_rare_artifact_webhook ~= nil then
+                            cheat_client.config.trinket_rare_artifact_webhook = normalize_trinket_webhook_url(shared_settings.trinket_rare_artifact_webhook)
+                            if Options.TrinketRareArtifactWebhook then
+                                Options.TrinketRareArtifactWebhook:SetValue(cheat_client.config.trinket_rare_artifact_webhook)
+                            end
+                        end
                         if shared_settings.webhook_username then
                             cheat_client.config.webhook_username = shared_settings.webhook_username
                             if Options.webhook_username then
@@ -22944,6 +22990,15 @@ if is_hydroxide_supported_place() then
                     end
                 elseif Options.TrinketArtifactWebhook then
                     Options.TrinketArtifactWebhook:SetValue(get_trinket_artifact_webhook())
+                end
+
+                if settings.trinket_rare_artifact_webhook ~= nil or settings.rare_artifact_webhook ~= nil then
+                    local webhook = set_trinket_rare_artifact_webhook(settings.trinket_rare_artifact_webhook or settings.rare_artifact_webhook)
+                    if Options.TrinketRareArtifactWebhook then
+                        Options.TrinketRareArtifactWebhook:SetValue(webhook)
+                    end
+                elseif Options.TrinketRareArtifactWebhook then
+                    Options.TrinketRareArtifactWebhook:SetValue(get_trinket_rare_artifact_webhook())
                 end
             end
 
@@ -24128,6 +24183,7 @@ if is_hydroxide_supported_place() then
                             join_oldest_server = Toggles.JoinOldestServer and Toggles.JoinOldestServer.Value or false,
                             auto_pop_pds = Toggles.AutoPopPDs and Toggles.AutoPopPDs.Value or false,
                             auto_drop_items = Options.AutoDropItems and Options.AutoDropItems.Value or {},
+                            auto_bank_arti = Toggles.AutoBankArti and Toggles.AutoBankArti.Value or false,
                             kick_on_trinket = Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value or false,
                             kick_trinket_list = Options.KickTrinketList and Options.KickTrinketList.Value or {},
                             stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false,
@@ -24139,6 +24195,7 @@ if is_hydroxide_supported_place() then
                             trinket_debug_ping_user_id = normalize_trinket_debug_ping_user_id(Options.TrinketDebugPingUserId and Options.TrinketDebugPingUserId.Value or cheat_client.config.trinket_debug_ping_user_id),
                             trinket_general_webhook = normalize_trinket_webhook_url(Options.TrinketGeneralWebhook and Options.TrinketGeneralWebhook.Value or ((cheat_client.config.trinket_general_webhook and cheat_client.config.trinket_general_webhook ~= "") and cheat_client.config.trinket_general_webhook or cheat_client.config.webhook)),
                             trinket_artifact_webhook = normalize_trinket_webhook_url(Options.TrinketArtifactWebhook and Options.TrinketArtifactWebhook.Value or cheat_client.config.trinket_artifact_webhook),
+                            trinket_rare_artifact_webhook = normalize_trinket_webhook_url(Options.TrinketRareArtifactWebhook and Options.TrinketRareArtifactWebhook.Value or cheat_client.config.trinket_rare_artifact_webhook),
                             trinket_end_in_hours = get_trinket_end_in_hours(),
                             time_between_looting = Options.TimeBetweenLooting and Options.TimeBetweenLooting.Value or 5,
                             proximity_check = Options.ProximityCheck and Options.ProximityCheck.Value or 0,
@@ -25390,6 +25447,532 @@ if is_hydroxide_supported_place() then
                 end
             end
 
+            do
+            local bank = {}
+
+            bank.find_inventory_tool_by_artifact_name = function(item_name)
+                local target_key = artifact_compare_key(item_name)
+                for _, container in ipairs({plr.Backpack, plr.Character}) do
+                    if container then
+                        for _, item in ipairs(container:GetChildren()) do
+                            if item:IsA("Tool") and artifact_compare_key(item.Name) == target_key then
+                                return item
+                            end
+                        end
+                    end
+                end
+                return nil
+            end
+
+            bank.get_dialogue_choices = function(dialog_data)
+                local choices = {}
+                local seen = {}
+                local raw_choices = dialog_data and dialog_data.choices
+
+                local function add_choice(choice)
+                    local text = nil
+                    if type(choice) == "string" then
+                        text = choice
+                    elseif type(choice) == "table" then
+                        text = choice.text or choice.Text or choice.choice or choice.Choice or choice.name or choice.Name
+                    end
+
+                    if text then
+                        text = tostring(text):gsub("^%s+", ""):gsub("%s+$", "")
+                        if text ~= "" and not seen[text] then
+                            seen[text] = true
+                            table.insert(choices, text)
+                        end
+                    end
+                end
+
+                if type(raw_choices) == "table" then
+                    for _, choice in ipairs(raw_choices) do
+                        add_choice(choice)
+                    end
+                    for key, choice in pairs(raw_choices) do
+                        if type(key) ~= "number" then
+                            add_choice(choice)
+                        end
+                    end
+                end
+
+                return choices
+            end
+
+            bank.find_recent_dialogue_choice = function(target_choice, max_age)
+                max_age = max_age or 8
+                if not last_dialogue_data or tick() - last_dialogue_received_at > max_age then
+                    return nil, last_dialogue_data
+                end
+
+                local target = tostring(target_choice or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                for _, choice in ipairs(bank.get_dialogue_choices(last_dialogue_data)) do
+                    if choice == target then
+                        return choice, last_dialogue_data
+                    end
+                end
+
+                return nil, last_dialogue_data
+            end
+
+            bank.recent_dialogue_has_text = function(fragment, max_age)
+                max_age = max_age or 8
+                if not last_dialogue_data or tick() - last_dialogue_received_at > max_age then
+                    return false
+                end
+
+                local needle = tostring(fragment or ""):lower()
+                for _, choice in ipairs(bank.get_dialogue_choices(last_dialogue_data)) do
+                    if choice:lower():find(needle, 1, true) then
+                        return true
+                    end
+                end
+
+                local msg = tostring(last_dialogue_data.msg or ""):lower()
+                return msg:find(needle, 1, true) ~= nil
+            end
+
+            bank.wait_for_dialogue_choice = function(choice, timeout)
+                local deadline = tick() + (timeout or 8)
+                repeat
+                    local found = bank.find_recent_dialogue_choice(choice, 10)
+                    if found then
+                        return found
+                    end
+                    task.wait(0.1)
+                until tick() >= deadline or shared.is_unloading
+
+                return nil
+            end
+
+            bank.fire_dialogue_choice = function(choice)
+                if not dialogue_remote or not dialogue_remote.Parent then
+                    return false
+                end
+
+                local ok = pcall(function()
+                    dialogue_remote:FireServer({choice = choice})
+                end)
+                return ok
+            end
+
+            bank.find_banker_click_detector = function()
+                local roots = {FindFirstChild(ws, "NPCs"), FindFirstChild(ws, "Live"), ws}
+                for _, root in ipairs(roots) do
+                    if root then
+                        local banker = FindFirstChild(root, "Banker", true)
+                        if banker then
+                            local detector = FindFirstChildWhichIsA(banker, "ClickDetector", true)
+                            if detector then
+                                return detector, banker
+                            end
+                        end
+                    end
+                end
+
+                return nil, nil
+            end
+
+            bank.get_bank_survey_radius = function()
+                local radius = math.max(180, get_effective_critical_distance(180))
+                local proximity_radius = get_effective_proximity_distance(0)
+                if proximity_radius and proximity_radius > 0 then
+                    radius = math.max(radius, math.min(proximity_radius, 500))
+                end
+                return radius
+            end
+
+            bank.get_bank_survey_positions = function()
+                local positions = {}
+                local shore_destination = get_gate_destination_for_location(RARE_ARTIFACT_BANK_GATE)
+                if shore_destination then
+                    table.insert(positions, {name = "Shore 4 gate landing", position = shore_destination})
+                end
+                table.insert(positions, {name = "Banker", position = RARE_ARTIFACT_BANK_POINT})
+
+                local root = plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart")
+                if root then
+                    table.insert(positions, {name = "Current position", position = root.Position})
+                end
+
+                return positions
+            end
+
+            bank.survey_bank_safety = function(context)
+                local radius = bank.get_bank_survey_radius()
+                for _, entry in ipairs(bank.get_bank_survey_positions()) do
+                    if entry.position and typeof(entry.position) == "Vector3" then
+                        local has_player, player_name = IsPlayerNearPosition(entry.position, radius)
+                        if has_player then
+                            return false, string.format(
+                                "%s: Player %s near %s within %.0f studs",
+                                tostring(context or "Auto Bank Arti"),
+                                tostring(player_name or "unknown"),
+                                tostring(entry.name),
+                                radius
+                            )
+                        end
+                    end
+                end
+
+                return true
+            end
+
+            bank.start_bank_survey_token = function(item_name)
+                local token = {
+                    active = true,
+                    unsafe = false,
+                    reason = nil
+                }
+
+                task.spawn(function()
+                    while token.active and not shared.is_unloading do
+                        local safe, reason = bank.survey_bank_safety("Auto Bank Arti survey")
+                        if not safe then
+                            token.unsafe = true
+                            token.reason = reason
+                            if trinket_bot.record_debug_event then
+                                pcall(function()
+                                    trinket_bot.record_debug_event("AUTO_BANK_SURVEY_BLOCKED", reason)
+                                end)
+                            end
+                            break
+                        end
+                        task.wait(0.25)
+                    end
+                end)
+
+                return token
+            end
+
+            bank.stop_bank_survey_token = function(token)
+                if token then
+                    token.active = false
+                end
+            end
+
+            bank.send_bank_artifact_webhook = function(item_name, status, reason, pickup_context, extra)
+                local rare_webhook = get_trinket_rare_artifact_webhook()
+                local artifact_webhook = get_trinket_artifact_webhook()
+                local general_webhook = get_trinket_general_webhook()
+                local target_webhook = rare_webhook ~= "" and rare_webhook or artifact_webhook ~= "" and artifact_webhook or general_webhook
+                if target_webhook == "" then
+                    warn("[LudSploit] No rare artifact, artifact, or general webhook configured for Auto Bank Arti.")
+                    return false
+                end
+
+                local server_name, server_region = get_server_info()
+                local path_name = trinket_bot.current_path_name and trinket_bot.current_path_name ~= "" and trinket_bot.current_path_name or "None"
+                local location_lines = "No pickup context"
+                if pickup_context then
+                    local parts = {}
+                    if pickup_context.area and pickup_context.area ~= "" and pickup_context.area ~= "None" then
+                        table.insert(parts, string.format("Area: %s", pickup_context.area))
+                    end
+                    if pickup_context.position then
+                        table.insert(parts, string.format(
+                            "Position: %.0f, %.0f, %.0f",
+                            pickup_context.position.X,
+                            pickup_context.position.Y,
+                            pickup_context.position.Z
+                        ))
+                    end
+                    if pickup_context.nearest_point_index then
+                        table.insert(parts, string.format(
+                            "Nearest Point: %d (%.0f studs)",
+                            pickup_context.nearest_point_index,
+                            pickup_context.nearest_point_distance or 0
+                        ))
+                    end
+                    location_lines = #parts > 0 and table.concat(parts, "\n") or location_lines
+                end
+
+                local inventory_tool = bank.find_inventory_tool_by_artifact_name(item_name)
+                local extra_text = ""
+                if extra then
+                    local extra_lines = {}
+                    for key, value in pairs(extra) do
+                        table.insert(extra_lines, tostring(key) .. "=" .. tostring(value))
+                    end
+                    table.sort(extra_lines)
+                    extra_text = table.concat(extra_lines, "\n")
+                end
+                if extra_text == "" then
+                    extra_text = "None"
+                end
+
+                local embed = {
+                    title = "LudSploit | Rare Artifact Pickup/Bank",
+                    description = string.format(
+                        "**Item:** `%s`\n**Status:** `%s`\n**Reason:** `%s`\n**Days:** `%s`\n**Path:** `%s`\n**Server:** `%s (%s)`",
+                        normalize_session_loot_name(item_name),
+                        tostring(status or "Update"),
+                        tostring(reason or "None"),
+                        get_days_survived_text(),
+                        path_name,
+                        server_name ~= "" and server_name or "Unknown",
+                        server_region ~= "" and server_region or "Unknown"
+                    ),
+                    color = status == "BANKED" and 0xff365e or 0xff9f1c,
+                    fields = {
+                        {
+                            name = "Pickup Context",
+                            value = "```\n" .. location_lines .. "```",
+                            inline = false
+                        },
+                        {
+                            name = "Verification",
+                            value = string.format("```\nInventory still has item: %s\nTool: %s\n%s```", inventory_tool and "true" or "false", inventory_tool and inventory_tool.Name or "None", extra_text),
+                            inline = false
+                        },
+                        {
+                            name = "Session Loot",
+                            value = "```\n" .. format_items_collected_text() .. "```",
+                            inline = false
+                        }
+                    },
+                    footer = {
+                        text = string.format("LudSploit • Players: %d/23 • %s • Job: %s", #plrs:GetPlayers(), plr.Name, game.JobId)
+                    },
+                    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                }
+
+                local payload = {
+                    username = cheat_client.config.webhook_username or "LudSploit",
+                    content = "@here",
+                    embeds = {embed}
+                }
+
+                task.spawn(function()
+                    local ok, result = pcall(function()
+                        return HXD_SEND_WEBHOOK(target_webhook, payload)
+                    end)
+
+                    if (not ok or result == false)
+                        and rare_webhook ~= ""
+                        and artifact_webhook ~= ""
+                        and artifact_webhook ~= rare_webhook then
+                        ok, result = pcall(function()
+                            return HXD_SEND_WEBHOOK(artifact_webhook, payload)
+                        end)
+                    end
+
+                    if (not ok or result == false)
+                        and general_webhook ~= ""
+                        and general_webhook ~= target_webhook
+                        and general_webhook ~= artifact_webhook then
+                        pcall(function()
+                            HXD_SEND_WEBHOOK(general_webhook, payload)
+                        end)
+                    end
+                end)
+
+                return true
+            end
+
+            bank.set_bank_fallback_kick_path = function(item_name, reason, pickup_context)
+                kick_debounce = true
+                kick_after_path = true
+                kick_trinket_name = normalize_session_loot_name(item_name)
+                bank.send_bank_artifact_webhook(item_name, "FALLBACK_KICK_PATH", reason, pickup_context, {
+                    banked_this_session = tostring(trinket_bot.rare_artifact_banked_this_session),
+                    yes_present = tostring(bank.find_recent_dialogue_choice("Yes.", 10) ~= nil),
+                    could_have_back = tostring(bank.recent_dialogue_has_text("Could I have it back", 10))
+                })
+
+                local ok, message = prepare_restart_from_point_one()
+                if ok then
+                    library:Notify("Auto Bank Arti fallback: Deepforest restart prepared, continuing kick path")
+                    trinket_bot_debug_log("AUTO_BANK_FALLBACK_KICK", tostring(reason))
+                else
+                    trinket_bot_debug_log("AUTO_BANK_FALLBACK_RESTART_FAIL", tostring(message or reason))
+                    TrinketBotServerhop("Auto Bank Arti fallback restart failed: " .. tostring(message or reason))
+                end
+            end
+
+            trinket_bot.try_auto_bank_arti = function(tool, item_name)
+                item_name = normalize_session_loot_name(item_name or (tool and tool.Name) or "")
+                if item_name == "" then
+                    return false
+                end
+
+                if not is_auto_bank_artifact_candidate(item_name) then
+                    return false
+                end
+
+                if trinket_bot.rare_artifact_bank_in_progress or trinket_bot.rare_artifact_banked_this_session then
+                    return false
+                end
+
+                trinket_bot.rare_artifact_bank_in_progress = true
+                trinket_bot.rare_artifact_bank_started_at = tick()
+                kick_debounce = true
+
+                local pickup_context = trinket_bot.last_world_pickup_context
+                if not pickup_context or pickup_context.name ~= item_name or tick() - (pickup_context.picked_at or 0) > 15 then
+                    pickup_context = {
+                        name = item_name,
+                        position = plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") and plr.Character.HumanoidRootPart.Position or nil,
+                        area = "None",
+                        picked_at = tick()
+                    }
+                end
+
+                task.spawn(function()
+                    local survey_token
+                    local function finish()
+                        bank.stop_bank_survey_token(survey_token)
+                        trinket_bot.suppress_auto_dialogue_until = 0
+                        trinket_bot.rare_artifact_bank_in_progress = false
+                    end
+
+                    local function fail_to_kick(reason)
+                        bank.set_bank_fallback_kick_path(item_name, reason, pickup_context)
+                        finish()
+                    end
+
+                    local ok, err = pcall(function()
+                        trinket_bot.suppress_auto_dialogue_until = tick() + 60
+                        if trinket_bot.record_debug_event then
+                            trinket_bot.record_debug_event("AUTO_BANK_START", item_name)
+                        end
+
+                        local safe, safety_reason = bank.survey_bank_safety("Auto Bank Arti preflight")
+                        if not safe then
+                            fail_to_kick(safety_reason)
+                            return
+                        end
+
+                        survey_token = bank.start_bank_survey_token(item_name)
+
+                        trinket_bot.path_running = true
+                        local shore_destination = get_gate_destination_for_location(RARE_ARTIFACT_BANK_GATE)
+                        local gate_success = Gate(RARE_ARTIFACT_BANK_GATE, shore_destination)
+                        if not gate_success then
+                            fail_to_kick("Shore 4 bank gate failed")
+                            return
+                        end
+                        if survey_token.unsafe then
+                            fail_to_kick(survey_token.reason)
+                            return
+                        end
+
+                        if not SmoothTeleport(RARE_ARTIFACT_BANK_POINT, true, true) then
+                            fail_to_kick("Failed to move to banker point")
+                            return
+                        end
+                        if survey_token.unsafe then
+                            fail_to_kick(survey_token.reason)
+                            return
+                        end
+
+                        local detector = bank.find_banker_click_detector()
+                        if not detector or not fireclickdetector then
+                            fail_to_kick("Banker ClickDetector unavailable")
+                            return
+                        end
+
+                        last_dialogue_data = nil
+                        last_dialogue_received_at = 0
+                        fireclickdetector(detector)
+
+                        local yes_choice = bank.wait_for_dialogue_choice("Yes.", 8)
+                        if not yes_choice then
+                            if bank.recent_dialogue_has_text("Could I have it back", 10) then
+                                fail_to_kick("Banker offered retrieval dialogue instead of deposit")
+                            else
+                                fail_to_kick("Banker did not offer Yes.")
+                            end
+                            return
+                        end
+
+                        bank.fire_dialogue_choice(yes_choice)
+                        local please_choice = bank.wait_for_dialogue_choice("Please.", 8)
+                        if not please_choice then
+                            fail_to_kick("Banker did not offer Please.")
+                            return
+                        end
+
+                        bank.fire_dialogue_choice(please_choice)
+                        trinket_bot.rare_artifact_banked_this_session = true
+
+                        local minimum_wait_until = tick() + 5
+                        local deadline = tick() + 15
+                        repeat
+                            if survey_token.unsafe then
+                                fail_to_kick(survey_token.reason)
+                                return
+                            end
+                            task.wait(0.25)
+                        until (tick() >= minimum_wait_until and not (plr.Character and FindFirstChildOfClass(plr.Character, "ForceField"))) or tick() >= deadline
+
+                        local inventory_deadline = tick() + 5
+                        while tick() < inventory_deadline and bank.find_inventory_tool_by_artifact_name(item_name) do
+                            task.wait(0.25)
+                        end
+
+                        if bank.find_inventory_tool_by_artifact_name(item_name) then
+                            bank.send_bank_artifact_webhook(item_name, "BANK_VERIFY_FAILED", "artifact still in inventory after banker flow; kicking instead of resuming", pickup_context, {
+                                dialogue_age = tostring(tick() - last_dialogue_received_at),
+                                choices = table.concat(bank.get_dialogue_choices(last_dialogue_data), ", "),
+                                bank_started_at = tostring(trinket_bot.rare_artifact_bank_started_at)
+                            })
+                            task.wait(0.5)
+                            plr:Kick("Auto Bank Arti verification failed")
+                            return
+                        end
+
+                        bank.send_bank_artifact_webhook(item_name, "BANKED", "Banker flow completed and inventory verification passed", pickup_context, {
+                            forcefield = tostring(plr.Character and FindFirstChildOfClass(plr.Character, "ForceField") ~= nil),
+                            waited_seconds = tostring(math.floor(tick() - (trinket_bot.rare_artifact_bank_started_at or tick())))
+                        })
+
+                        if pickup_context and pickup_context.position and typeof(pickup_context.position) == "Vector3" then
+                            local return_gate, _, _, return_destination = get_nearest_gate_location_to_position(pickup_context.position)
+                            if return_gate then
+                                Gate(return_gate, return_destination)
+                                task.wait(0.35)
+                            end
+                            SmoothTeleport(pickup_context.position, true, true)
+                            task.wait(0.35)
+                            CheckForTrinkets()
+                            task.wait(0.75)
+                        end
+
+                        if kick_after_path then
+                            library:Notify("Auto Bank Arti picked up another kick artifact; continuing kick path")
+                            finish()
+                            return
+                        end
+
+                        local restart_ok, restart_message = prepare_restart_from_point_one()
+                        if not restart_ok then
+                            trinket_bot_debug_log("AUTO_BANK_RESTART_FAIL", tostring(restart_message))
+                            TrinketBotServerhop("Auto Bank Arti banked artifact but restart prep failed: " .. tostring(restart_message))
+                            finish()
+                            return
+                        end
+
+                        stage_trinket_bot_session_for_hop()
+                        trinket_bot.path_running = false
+                        TrinketBotServerhop("Banked rare artifact " .. item_name .. "; serverhopping to continue", true, nil, true)
+                        finish()
+                    end)
+
+                    if not ok then
+                        bank.send_bank_artifact_webhook(item_name, "BANK_ERROR", tostring(err), pickup_context, {
+                            bank_started_at = tostring(trinket_bot.rare_artifact_bank_started_at)
+                        })
+                        bank.set_bank_fallback_kick_path(item_name, "Auto Bank Arti error: " .. tostring(err), pickup_context)
+                        finish()
+                    end
+                end)
+
+                return true
+            end
+            end
+
             trinket_bot.setup_backpack_monitoring = function()
                 if auto_drop_backpack_connection then
                     auto_drop_backpack_connection:Disconnect()
@@ -25437,6 +26020,12 @@ if is_hydroxide_supported_place() then
                         local selected_trinkets = Options.KickTrinketList.Value
                         for trinket_name, _ in next, selected_trinkets do
                             if obj.Name:gsub(" ", "") == trinket_name:gsub(" ", "") then
+                                if trinket_bot.try_auto_bank_arti and trinket_bot.try_auto_bank_arti(obj, trinket_name) then
+                                    print(string.format("[Auto Bank Arti] MATCH FOUND: %s - banking before resume/serverhop", obj.Name))
+                                    library:Notify(string.format("%s found! Auto Bank Arti starting...", trinket_name))
+                                    return
+                                end
+
                                 kick_debounce = true
                                 kick_after_path = true
                                 kick_trinket_name = trinket_name
@@ -28537,6 +29126,8 @@ if is_hydroxide_supported_place() then
                     local connection
                     connection = utility:Connection(remote.OnClientEvent, function(data)
                         if typeof(data) == "table" and (sensitive(data, "choices") or sensitive(data, "speaker")) then
+                            last_dialogue_data = data
+                            last_dialogue_received_at = tick()
                             if not dialogue_remote then
                                 dialogue_remote = remote
 
@@ -32173,6 +32764,13 @@ end
             
             local dialogConnection
             local function auto_dialogue_handler(dialogData)
+                if cheat_client
+                    and cheat_client.trinket_bot
+                    and cheat_client.trinket_bot.suppress_auto_dialogue_until
+                    and tick() < cheat_client.trinket_bot.suppress_auto_dialogue_until then
+                    return
+                end
+
                 if not (Toggles and Toggles.auto_dialogue and Toggles.auto_dialogue.Value) then
                     return
                 end
@@ -32351,6 +32949,35 @@ end
                 return normalize_artifact_scanner_webhook(shared_settings and shared_settings.trinket_artifact_webhook)
             end
 
+            local function resolve_artifact_scanner_rare_artifact_webhook()
+                local webhook = normalize_artifact_scanner_webhook(Options and Options.TrinketRareArtifactWebhook and Options.TrinketRareArtifactWebhook.Value)
+                if webhook ~= "" then return webhook end
+
+                webhook = normalize_artifact_scanner_webhook(cheat_client.config.trinket_rare_artifact_webhook)
+                if webhook ~= "" then return webhook end
+
+                local bot_settings = read_artifact_scanner_mem_json("trinket_bot_settings")
+                webhook = normalize_artifact_scanner_webhook(bot_settings and (bot_settings.trinket_rare_artifact_webhook or bot_settings.rare_artifact_webhook))
+                if webhook ~= "" then return webhook end
+
+                local shared_settings = read_artifact_scanner_mem_json("shared_settings")
+                return normalize_artifact_scanner_webhook(shared_settings and shared_settings.trinket_rare_artifact_webhook)
+            end
+
+            local function scanner_should_route_to_rare_artifact_webhook(item_name)
+                if cheat_client and cheat_client.should_route_to_rare_artifact_webhook then
+                    local ok, result = pcall(function()
+                        return cheat_client.should_route_to_rare_artifact_webhook(item_name)
+                    end)
+                    if ok then
+                        return result == true
+                    end
+                end
+
+                local normalized = tostring(item_name or "")
+                return normalized == "Rift Gem" or normalized == "Mysterious Artifact"
+            end
+
             utility:Connection(ws.ChildAdded, function(object)
                 if object.Name == "Part" and FindFirstChild(object, "ID") then
                     if auto_trinket_enabled then
@@ -32477,11 +33104,21 @@ end
 
                             local server_name, server_region = get_server_info()
                             local webhook_msg = string.format("@here")
+                            local days_text = "Unknown"
+                            pcall(function()
+                                if Get then
+                                    days_text = tostring(Get("DaysSurvived") or days_text)
+                                elseif utility and utility.getPlayerDays then
+                                    days_text = tostring(utility:getPlayerDays() or days_text)
+                                end
+                            end)
 
                             local description = string.format("**Artifact%s:** %s\n",
                                 #artifact_names > 1 and "s" or "",
                                 artifact_list
                             )
+
+                            description = description .. string.format("**Days:** `%s`\n", days_text)
 
                             if bot_running and nearest_point_index then
                                 description = description .. string.format("**Path:** %s\n", path_name)
@@ -32517,9 +33154,18 @@ end
                                 timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
                             }
 
+                            local has_rare_artifact = false
+                            for _, artifact_name in ipairs(artifact_names) do
+                                if scanner_should_route_to_rare_artifact_webhook(artifact_name) then
+                                    has_rare_artifact = true
+                                    break
+                                end
+                            end
+
+                            local configured_rare_artifact_webhook = has_rare_artifact and resolve_artifact_scanner_rare_artifact_webhook() or ""
                             local configured_artifact_webhook = resolve_artifact_scanner_artifact_webhook()
                             local fallback_general_webhook = resolve_artifact_scanner_general_webhook()
-                            local artifact_webhook_url = configured_artifact_webhook ~= "" and configured_artifact_webhook or fallback_general_webhook
+                            local artifact_webhook_url = configured_rare_artifact_webhook ~= "" and configured_rare_artifact_webhook or configured_artifact_webhook ~= "" and configured_artifact_webhook or fallback_general_webhook
                             local artifact_webhook_username = cheat_client.config.webhook_username or "LudSploit"
                             local has_artifact_destination = artifact_webhook_url ~= ""
 
@@ -32550,7 +33196,7 @@ end
                                 should_show_in_stream = true
                             end
 
-                            if configured_artifact_webhook ~= "" then
+                            if configured_rare_artifact_webhook ~= "" or configured_artifact_webhook ~= "" then
                                 should_show_in_stream = true
                             end
 
@@ -32583,7 +33229,13 @@ end
                                 }
 
                                 local sent, send_reason = send_artifact_payload(artifact_webhook_url, artifact_payload)
-                                if not sent and configured_artifact_webhook ~= "" and fallback_general_webhook ~= "" and fallback_general_webhook ~= configured_artifact_webhook then
+                                if not sent and configured_rare_artifact_webhook ~= "" and configured_artifact_webhook ~= "" and configured_artifact_webhook ~= configured_rare_artifact_webhook then
+                                    warn("[LudSploit] Rare artifact webhook send failed, retrying artifact webhook fallback: " .. tostring(send_reason))
+                                    artifact_webhook_url = configured_artifact_webhook
+                                    sent, send_reason = send_artifact_payload(artifact_webhook_url, artifact_payload)
+                                end
+
+                                if not sent and fallback_general_webhook ~= "" and fallback_general_webhook ~= artifact_webhook_url then
                                     warn("[LudSploit] Artifact webhook send failed, retrying general webhook fallback: " .. tostring(send_reason))
                                     artifact_webhook_url = fallback_general_webhook
                                     sent, send_reason = send_artifact_payload(artifact_webhook_url, artifact_payload)
