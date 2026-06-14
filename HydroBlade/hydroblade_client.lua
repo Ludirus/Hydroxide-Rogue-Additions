@@ -18,6 +18,7 @@ local TweenService = Services.TweenService
 local ReplicatedStorage = Services.ReplicatedStorage
 local Workspace = Services.Workspace
 local CollectionService = Services.CollectionService
+local TeleportService = Services.TeleportService
 local VirtualUser = game:GetService("VirtualUser")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
@@ -32,6 +33,8 @@ HydroBlade.account = {
     role = tostring(env.HYDROBLADE_ROLE or ""),
     active = env.HYDROBLADE_ACTIVE == true,
     gaia_job_id = tostring(env.HYDROBLADE_GAIA_JOB_ID or ""),
+    workflow = tostring(env.HYDROBLADE_WORKFLOW or ""),
+    failure_webhook = tostring(env.HYDROBLADE_FAILURE_WEBHOOK or ""),
 }
 
 HydroBlade.ws_url = tostring(env.HYDROBLADE_WS_URL or "ws://127.0.0.1:8765")
@@ -39,6 +42,12 @@ HydroBlade.connected = false
 HydroBlade.socket = nil
 HydroBlade.methods = {}
 HydroBlade.connections = {}
+HydroBlade.runtime = {
+    workflow = HydroBlade.account.workflow,
+    parent_job_id = "",
+    kick_reason = "",
+    running = false,
+}
 
 local last_dialogue_data = nil
 local last_dialogue_received_at = 0
@@ -101,6 +110,26 @@ function HydroBlade.send(payload)
     return send_raw(HydroBlade.socket, encode(payload))
 end
 
+function HydroBlade.status(status, extra)
+    local payload = {
+        method = "client_status",
+        account_id = HydroBlade.account.id,
+        parent_id = HydroBlade.account.parent_id,
+        role = HydroBlade.account.role,
+        username = HydroBlade.account.username,
+        user_id = HydroBlade.account.user_id,
+        job_id = game.JobId,
+        place_id = tostring(game.PlaceId),
+        status = tostring(status or ""),
+    }
+    if type(extra) == "table" then
+        for key, value in pairs(extra) do
+            payload[tostring(key)] = tostring(value)
+        end
+    end
+    return HydroBlade.send(payload)
+end
+
 local function websocket_connect(url)
     local candidates = {
         function()
@@ -139,6 +168,20 @@ end
 local function humanoid()
     local character = local_character()
     return character and character:FindFirstChildOfClass("Humanoid")
+end
+
+function HydroBlade.wait_for_character(timeout)
+    local deadline = os.clock() + (tonumber(timeout) or 12)
+    repeat
+        local character = local_character()
+        local root = root_part()
+        local hum = humanoid()
+        if character and root and hum and hum.Health > 0 then
+            return character, root, hum
+        end
+        task.wait(0.25)
+    until os.clock() >= deadline
+    return nil
 end
 
 local function find_dialogue_remote()
@@ -326,6 +369,8 @@ HydroBlade.movement.inn_aliases = {
     ["flowerlight town"] = "Flowerlight",
     ["sigil tree"] = "SigilTree",
     ["tundra 5"] = "Tundra5",
+    ["renova town"] = "Renova",
+    ["alana town"] = "Alana",
 }
 
 function HydroBlade.movement.resolve_inn(value)
@@ -437,8 +482,6 @@ function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
         return hum and hum.Health > 0
     end
 
-    -- Fire the choice before clicking, then click the NPC. This mirrors the safer
-    -- Rogue flow where the dialogue remote can be ahead of the physical prompt.
     HydroBlade.dialogue.fire_choice(choice)
 
     character:PivotTo(target)
@@ -666,6 +709,732 @@ function HydroBlade.dialogue.fire_click_detector(instance)
         return true
     end
     return false
+end
+
+HydroBlade.Inventory = {}
+HydroBlade.Inventory.__index = HydroBlade.Inventory
+
+function HydroBlade.Inventory.new()
+    return setmetatable({}, HydroBlade.Inventory)
+end
+
+function HydroBlade.Inventory:normalize(name)
+    return tostring(name or ""):gsub("%s+", ""):lower()
+end
+
+function HydroBlade.Inventory:containers()
+    local player = Players.LocalPlayer
+    return { player and player.Character, player and player:FindFirstChildOfClass("Backpack") }
+end
+
+function HydroBlade.Inventory:find(name)
+    local target = self:normalize(name)
+    for _, container in ipairs(self:containers()) do
+        if container then
+            for _, item in ipairs(container:GetChildren()) do
+                if item:IsA("Tool") and self:normalize(item.Name) == target then
+                    return item
+                end
+            end
+        end
+    end
+    return nil
+end
+
+function HydroBlade.Inventory:count(name)
+    local target = self:normalize(name)
+    local total = 0
+    for _, container in ipairs(self:containers()) do
+        if container then
+            for _, item in ipairs(container:GetChildren()) do
+                if item:IsA("Tool") and self:normalize(item.Name) == target then
+                    total += 1
+                end
+            end
+        end
+    end
+    return total
+end
+
+function HydroBlade.Inventory:equip(name)
+    local tool = self:find(name)
+    local hum = humanoid()
+    if not tool or not hum then
+        return false, "missing tool or humanoid"
+    end
+    if tool.Parent ~= local_character() then
+        hum:EquipTool(tool)
+        task.wait(0.15)
+    end
+    return tool.Parent == local_character(), tool
+end
+
+HydroBlade.IngredientService = {}
+HydroBlade.IngredientService.__index = HydroBlade.IngredientService
+
+function HydroBlade.IngredientService.new()
+    return setmetatable({
+        identifiers = {
+            ["3293218896"] = "Desert Mist",
+            ["2773353559"] = "Blood Thorn",
+            ["2960178471"] = "Snowscroom",
+            ["2577691737"] = "Lava Flower",
+            ["2618765559"] = "Glow Scroom",
+            ["2575167210"] = "Moss Plant",
+            ["2620905234"] = "Scroom",
+            ["2766925289"] = "Trote",
+            ["2766925320"] = "Polar Plant",
+            ["2766802713"] = "Periashroom",
+            ["2766802766"] = "Strange Tentacle",
+            ["2766925228"] = "Tellbloom",
+            ["2766802731"] = "Dire Flower",
+            ["2573998175"] = "Freeleaf",
+            ["2766925214"] = "Crown Flower",
+            ["3215371492"] = "Potato",
+            ["2766925304"] = "Vile Seed",
+            ["3049345298"] = "Zombie Scroom",
+            ["2766802752"] = "Orcher Leaf",
+            ["2766925267"] = "Creely",
+            ["2889328388"] = "Ice Jar",
+            ["3049928758"] = "Canewood",
+            ["3049556532"] = "Acorn Light",
+            ["2766925245"] = "Uncanny Tentacle",
+            ["9858299042"] = "Evoflower",
+        },
+        aliases = {
+            glowscroom = "Glow Scroom",
+            glowshroom = "Glow Scroom",
+            glow_scroom = "Glow Scroom",
+            direflower = "Dire Flower",
+            dire_flower = "Dire Flower",
+        },
+        blacklist = {
+            ["1967.813,177.640,1084.423"] = true,
+            ["1987.310,177.640,1080.920"] = true,
+            ["2511.750,198.985,-442.450"] = true,
+            ["2510.070,199.709,-518.071"] = true,
+            ["2512.570,199.709,-518.321"] = true,
+            ["2511.570,199.709,-517.071"] = true,
+            ["2438.070,199.709,-466.071"] = true,
+            ["2439.070,199.709,-467.321"] = true,
+            ["2439.570,199.709,-465.071"] = true,
+        },
+    }, HydroBlade.IngredientService)
+end
+
+function HydroBlade.IngredientService:key(position)
+    return string.format("%.3f,%.3f,%.3f", position.X, position.Y, position.Z)
+end
+
+function HydroBlade.IngredientService:normalize(name)
+    return tostring(name or ""):gsub("[%s_%-%p]+", ""):lower()
+end
+
+function HydroBlade.IngredientService:canonical(name)
+    local normalized = self:normalize(name)
+    return self.aliases[normalized] or name
+end
+
+function HydroBlade.IngredientService:asset_id(object)
+    if not gethiddenproperty then
+        return nil
+    end
+    local ok, asset = pcall(gethiddenproperty, object, "AssetId")
+    if not ok or not asset then
+        return nil
+    end
+    return tostring(asset):gsub("%%20", ""):match("%d+")
+end
+
+function HydroBlade.IngredientService:identify(object)
+    local asset = self:asset_id(object)
+    if asset and self.identifiers[asset] then
+        return self.identifiers[asset]
+    end
+    local object_name = tostring(object and object.Name or "")
+    local normalized = self:normalize(object_name)
+    for _, name in pairs(self.identifiers) do
+        if self:normalize(name) == normalized then
+            return name
+        end
+    end
+    return self.aliases[normalized]
+end
+
+function HydroBlade.IngredientService:folder()
+    for _, root in ipairs(Workspace:GetChildren()) do
+        if root:IsA("Folder") then
+            for _, object in ipairs(root:GetChildren()) do
+                if object:IsA("UnionOperation") and object:FindFirstChild("ClickDetector") and object:FindFirstChild("Blacklist") then
+                    return root
+                end
+            end
+        end
+    end
+    return nil
+end
+
+function HydroBlade.IngredientService:candidates()
+    local folder = self:folder()
+    if folder then
+        return folder:GetChildren()
+    end
+    local objects = {}
+    for _, object in ipairs(Workspace:GetDescendants()) do
+        if object:IsA("BasePart") and object:FindFirstChild("ClickDetector") then
+            table.insert(objects, object)
+        end
+    end
+    return objects
+end
+
+function HydroBlade.IngredientService:nearest(name, max_distance)
+    local root = root_part()
+    if not root then
+        return nil, "missing root"
+    end
+    local target = self:normalize(self:canonical(name))
+    local max = tonumber(max_distance) or math.huge
+    local best = nil
+    local best_distance = math.huge
+    for _, object in ipairs(self:candidates()) do
+        local position = instance_position(object)
+        if position and not self.blacklist[self:key(position)] then
+            local ingredient = self:identify(object)
+            if ingredient and self:normalize(ingredient) == target then
+                local detector = find_click_detector(object)
+                local distance = (position - root.Position).Magnitude
+                if detector and distance <= max and distance < best_distance then
+                    best = {
+                        object = object,
+                        detector = detector,
+                        position = position,
+                        name = ingredient,
+                        distance = distance,
+                    }
+                    best_distance = distance
+                end
+            end
+        end
+    end
+    if not best then
+        return nil, "ingredient not found within range"
+    end
+    return best
+end
+
+function HydroBlade.IngredientService:pick(data)
+    if not data or not data.detector then
+        return false, "missing ingredient"
+    end
+    local ok, err = HydroBlade.movement.tween_to(data.position, math.clamp((data.distance or 50) / 120, 0.35, 5.5))
+    if not ok then
+        return false, err
+    end
+    for _ = 1, 5 do
+        if not data.object.Parent then
+            return true
+        end
+        pcall(fireclickdetector, data.detector)
+        task.wait(0.12)
+    end
+    return true
+end
+
+function HydroBlade.IngredientService:pick_nearest(name, max_distance)
+    local data, err = self:nearest(name, max_distance)
+    if not data then
+        return false, err
+    end
+    local ok, pick_err = self:pick(data)
+    if ok then
+        return true, data
+    end
+    return false, pick_err
+end
+
+HydroBlade.Surveyor = {}
+HydroBlade.Surveyor.__index = HydroBlade.Surveyor
+
+function HydroBlade.Surveyor.new(radius)
+    return setmetatable({
+        radius = tonumber(radius) or 500,
+        active = false,
+        connection = nil,
+        last_check = 0,
+    }, HydroBlade.Surveyor)
+end
+
+function HydroBlade.Surveyor:nearby()
+    local root = root_part()
+    if not root then
+        return nil
+    end
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= Players.LocalPlayer and player.Character then
+            local other_root = player.Character:FindFirstChild("HumanoidRootPart")
+            if other_root then
+                local distance = (other_root.Position - root.Position).Magnitude
+                if distance <= self.radius then
+                    return player, distance
+                end
+            end
+        end
+    end
+    return nil
+end
+
+function HydroBlade.Surveyor:start(callback)
+    if self.active then
+        return true
+    end
+    self.active = true
+    self.connection = connect(RunService.Heartbeat, function()
+        local now = os.clock()
+        if now - self.last_check < 0.75 then
+            return
+        end
+        self.last_check = now
+        local player, distance = self:nearby()
+        if player then
+            callback(player, distance)
+        end
+    end)
+    return true
+end
+
+function HydroBlade.Surveyor:stop()
+    self.active = false
+    if self.connection then
+        pcall(function()
+            self.connection:Disconnect()
+        end)
+        self.connection = nil
+    end
+end
+
+HydroBlade.Session = {}
+HydroBlade.Session.__index = HydroBlade.Session
+
+function HydroBlade.Session.new()
+    return setmetatable({}, HydroBlade.Session)
+end
+
+function HydroBlade.Session:server_hop(job_id, reason)
+    HydroBlade.status("server_hop", { reason = reason or "", target_job = job_id or "" })
+    local player = Players.LocalPlayer
+    if job_id and job_id ~= "" then
+        TeleportService:TeleportToPlaceInstance(5208655184, tostring(job_id), player)
+    else
+        TeleportService:Teleport(5208655184, player)
+    end
+    return true
+end
+
+function HydroBlade.Session:kick(reason)
+    pcall(function()
+        Players.LocalPlayer:Kick(tostring(reason or "HydroBlade stopped."))
+    end)
+end
+
+HydroBlade.Reporter = {}
+HydroBlade.Reporter.__index = HydroBlade.Reporter
+
+function HydroBlade.Reporter.new()
+    return setmetatable({
+        webhook = HydroBlade.account.failure_webhook,
+    }, HydroBlade.Reporter)
+end
+
+function HydroBlade.Reporter:request(options)
+    local fn = (syn and syn.request) or (http and http.request) or request or http_request
+    if not fn then
+        return false, "request unavailable"
+    end
+    return pcall(fn, options)
+end
+
+function HydroBlade.Reporter:capture()
+    local fn = (getgenv and getgenv().getscreenshot) or getscreenshot
+    if type(fn) ~= "function" then
+        return nil
+    end
+    local ok, result = pcall(fn)
+    if ok and type(result) == "string" and result ~= "" then
+        return result
+    end
+    return nil
+end
+
+function HydroBlade.Reporter:send(reason, detail)
+    if not self.webhook or self.webhook == "" then
+        return false, "webhook unset"
+    end
+    local position = HydroBlade.paths.current_position()
+    local screenshot = self:capture()
+    local embed = {
+        title = "HydroBlade Rot Failure",
+        description = tostring(reason or "unknown"),
+        fields = {
+            { name = "Account", value = tostring(HydroBlade.account.username), inline = true },
+            { name = "User ID", value = tostring(HydroBlade.account.user_id), inline = true },
+            { name = "Job", value = tostring(game.JobId), inline = false },
+            { name = "Position", value = position and string.format("%.1f, %.1f, %.1f", position.x, position.y, position.z) or "unknown", inline = false },
+            { name = "Detail", value = tostring(detail or "none"), inline = false },
+            { name = "Screenshot", value = screenshot and "captured by executor" or "unavailable", inline = false },
+        },
+    }
+    if screenshot and screenshot:match("^https?://") then
+        embed.image = { url = screenshot }
+    end
+    return self:request({
+        Url = self.webhook,
+        Method = "POST",
+        Headers = { ["Content-Type"] = "application/json" },
+        Body = encode({ username = "HydroBlade", embeds = { embed } }),
+    })
+end
+
+function HydroBlade.Reporter:fail(reason, detail)
+    HydroBlade.send({
+        method = "rot_failure",
+        account_id = HydroBlade.account.id,
+        parent_id = HydroBlade.account.parent_id,
+        role = HydroBlade.account.role,
+        reason = tostring(reason or "unknown"),
+        detail = tostring(detail or ""),
+        job_id = game.JobId,
+    })
+    self:send(reason, detail)
+    HydroBlade.Session.new():kick(reason)
+end
+
+HydroBlade.AlchemyService = {}
+HydroBlade.AlchemyService.__index = HydroBlade.AlchemyService
+
+function HydroBlade.AlchemyService.new()
+    return setmetatable({
+        inventory = HydroBlade.Inventory.new(),
+    }, HydroBlade.AlchemyService)
+end
+
+function HydroBlade.AlchemyService:nearest_station()
+    local root = root_part()
+    if not root then
+        return nil, "missing root"
+    end
+    local best = nil
+    local best_distance = math.huge
+    for _, object in ipairs(Workspace:GetDescendants()) do
+        if object.Name == "AlchemyStation" then
+            local position = instance_position(object)
+            if position then
+                local distance = (position - root.Position).Magnitude
+                if distance < best_distance then
+                    best = object
+                    best_distance = distance
+                end
+            end
+        end
+    end
+    if not best then
+        return nil, "alchemy station not found"
+    end
+    return best, best_distance
+end
+
+function HydroBlade.AlchemyService:contents(station)
+    local contents = station and station:FindFirstChild("Contents")
+    if contents and contents.Value ~= nil then
+        return tostring(contents.Value)
+    end
+    return "[]"
+end
+
+function HydroBlade.AlchemyService:empty(station)
+    local bucket = station and station:FindFirstChild("Bucket", true)
+    local click_empty = bucket and bucket:FindFirstChild("ClickEmpty", true)
+    local detector = find_click_detector(click_empty or bucket)
+    if not detector then
+        return false, "empty detector not found"
+    end
+    for _ = 1, 20 do
+        if self:contents(station) == "[]" then
+            return true
+        end
+        pcall(fireclickdetector, detector)
+        task.wait(0.15)
+    end
+    return self:contents(station) == "[]", "station contents did not empty"
+end
+
+function HydroBlade.AlchemyService:click_water(station)
+    local water = station and station:FindFirstChild("Water", true)
+    local detector = find_click_detector(water)
+    if not detector then
+        return false, "water detector not found"
+    end
+    pcall(fireclickdetector, detector)
+    task.wait(0.35)
+    return true
+end
+
+function HydroBlade.AlchemyService:brew_switch_witch(station)
+    local before_glow = self.inventory:count("Glow Scroom")
+    local before_dire = self.inventory:count("Dire Flower")
+    local before_potion = self.inventory:count("Switch Witch")
+    if before_glow < 2 then
+        return false, "missing two Glow Scrooms"
+    end
+    if before_dire < 1 then
+        return false, "missing Dire Flower"
+    end
+    local emptied, empty_err = self:empty(station)
+    if not emptied then
+        return false, empty_err
+    end
+    local sequence = {
+        "Glow Scroom",
+        "Glow Scroom",
+        "Dire Flower",
+    }
+    for _, item in ipairs(sequence) do
+        local equipped, equip_err = self.inventory:equip(item)
+        if not equipped then
+            return false, equip_err
+        end
+        local clicked, click_err = self:click_water(station)
+        if not clicked then
+            return false, click_err
+        end
+    end
+    local deadline = os.clock() + 8
+    repeat
+        if self.inventory:count("Switch Witch") > before_potion and self.inventory:count("Glow Scroom") < before_glow and self.inventory:count("Dire Flower") < before_dire then
+            return true
+        end
+        task.wait(0.25)
+    until os.clock() >= deadline
+    return false, "Switch Witch verification failed"
+end
+
+HydroBlade.RoleRunner = {}
+HydroBlade.RoleRunner.__index = HydroBlade.RoleRunner
+
+function HydroBlade.RoleRunner.new()
+    return setmetatable({
+        inventory = HydroBlade.Inventory.new(),
+        ingredients = HydroBlade.IngredientService.new(),
+        reporter = HydroBlade.Reporter.new(),
+        session = HydroBlade.Session.new(),
+        surveyor = HydroBlade.Surveyor.new(500),
+    }, HydroBlade.RoleRunner)
+end
+
+function HydroBlade.RoleRunner:send_status(status, extra)
+    HydroBlade.status(status, extra)
+end
+
+function HydroBlade.RoleRunner:spawn()
+    HydroBlade.leave_menu()
+    task.wait(2)
+    self:send_status("spawned")
+    return true
+end
+
+function HydroBlade.RoleRunner:fail(reason, detail)
+    self.reporter:fail(reason, detail)
+    return false, reason
+end
+
+function HydroBlade.RoleRunner:start_survey()
+    self.surveyor:start(function(player, distance)
+        self.session:server_hop(nil, string.format("player %s within %.0f", tostring(player.Name), distance or 0))
+    end)
+end
+
+function HydroBlade.RoleRunner:pick(name, range)
+    local ok, result = self.ingredients:pick_nearest(name, range)
+    if not ok then
+        return self:fail("ingredient pickup failed", tostring(name) .. ": " .. tostring(result))
+    end
+    self:send_status("ingredient_picked", { ingredient = result.name, distance = tostring(math.floor(result.distance or 0)) })
+    return true
+end
+
+function HydroBlade.RoleRunner:alchemy()
+    local ok, err = HydroBlade.movement.InnTeleport("Alana")
+    if not ok then
+        return self:fail("inn teleport failed", err)
+    end
+    if not HydroBlade.wait_for_character(15) then
+        return self:fail("respawn failed after Alana inn teleport")
+    end
+    if not self:pick("Dire Flower", 700) then
+        return false
+    end
+    task.wait(0.3)
+    if local_character() then
+        local_character():BreakJoints()
+    end
+    task.wait(7)
+    if not HydroBlade.wait_for_character(15) then
+        return self:fail("respawn failed before alchemy station")
+    end
+    local moved, move_err = HydroBlade.movement.tween_to(Vector3.new(2350, 64, 800), 4)
+    if not moved then
+        return self:fail("alchemy move failed", move_err)
+    end
+    local service = HydroBlade.AlchemyService.new()
+    local station, station_err = service:nearest_station()
+    if not station then
+        return self:fail("alchemy station missing", station_err)
+    end
+    local brewed, brew_err = service:brew_switch_witch(station)
+    if not brewed then
+        return self:fail("alchemy failed", brew_err)
+    end
+    self:send_status("switch_witch_brewed")
+    return true
+end
+
+function HydroBlade.RoleRunner:alana()
+    local ok, err = HydroBlade.movement.InnTeleport("Oresfall")
+    if not ok then
+        return self:fail("oresfall inn teleport failed", err)
+    end
+    if not HydroBlade.wait_for_character(15) then
+        return self:fail("respawn failed after Oresfall inn teleport")
+    end
+    local npc = find_npc("Alana", Vector3.new(2967.634, 288.85, -16))
+    if not npc then
+        return self:fail("Alana npc missing")
+    end
+    local position = instance_position(npc)
+    if position then
+        HydroBlade.movement.tween_to(position, math.clamp(((root_part() and (root_part().Position - position).Magnitude) or 60) / 120, 0.5, 5))
+    end
+    local detector = find_click_detector(npc)
+    if detector and fireclickdetector then
+        pcall(fireclickdetector, detector)
+    end
+    local first = HydroBlade.dialogue.wait_for_choice("What's wrong?", 5)
+    if not first then
+        return self:fail("Alana dialogue missing", "What's wrong?")
+    end
+    local choices = {
+        "What's wrong?",
+        "I'm here to help.",
+        "I'm sorry to hear that.",
+        "Of course.",
+        "Bye",
+    }
+    for _, choice in ipairs(choices) do
+        local found = HydroBlade.dialogue.wait_for_choice(choice, 5)
+        if not found then
+            return self:fail("Alana dialogue missing", choice)
+        end
+        HydroBlade.dialogue.fire_choice(found)
+        task.wait(0.3)
+    end
+    if detector and fireclickdetector then
+        pcall(fireclickdetector, detector)
+        task.wait(0.4)
+    end
+    local equipped, equip_err = self.inventory:equip("Switch Witch")
+    if not equipped then
+        return self:fail("Switch Witch equip failed", equip_err)
+    end
+    for _, choice in ipairs({ "Would this potion be of any use?", "Bye" }) do
+        local found = HydroBlade.dialogue.wait_for_choice(choice, 5)
+        if not found then
+            return self:fail("Alana potion dialogue missing", choice)
+        end
+        HydroBlade.dialogue.fire_choice(found)
+        task.wait(0.3)
+    end
+    return true
+end
+
+function HydroBlade.RoleRunner:parent_job(timeout)
+    HydroBlade.runtime.parent_job_id = ""
+    HydroBlade.send({
+        method = "parent_job",
+        account_id = HydroBlade.account.id,
+        parent_id = HydroBlade.account.parent_id,
+        role = HydroBlade.account.role,
+        job_id = game.JobId,
+    })
+    local deadline = os.clock() + (tonumber(timeout) or 10)
+    repeat
+        if HydroBlade.runtime.parent_job_id ~= "" then
+            return HydroBlade.runtime.parent_job_id
+        end
+        task.wait(0.25)
+    until os.clock() >= deadline
+    return nil
+end
+
+function HydroBlade.RoleRunner:run_sigil()
+    if HydroBlade.runtime.running then
+        return false, "workflow already running"
+    end
+    HydroBlade.runtime.running = true
+    self:spawn()
+    while HydroBlade.runtime.running do
+        self:send_status("sigil_idle")
+        task.wait(6)
+    end
+    return true
+end
+
+function HydroBlade.RoleRunner:run_rot()
+    if HydroBlade.runtime.running then
+        return false, "workflow already running"
+    end
+    HydroBlade.runtime.running = true
+    self:spawn()
+    self:start_survey()
+    local ok, err = HydroBlade.movement.InnTeleport("Renova")
+    if not ok then
+        return self:fail("renova inn teleport failed", err)
+    end
+    if not HydroBlade.wait_for_character(15) then
+        return self:fail("respawn failed after Renova inn teleport")
+    end
+    if not self:pick("Glow Scroom", 650) then
+        return false
+    end
+    if not self:pick("Glow Scroom", 650) then
+        return false
+    end
+    if not self:alchemy() then
+        return false
+    end
+    if not self:alana() then
+        return false
+    end
+    local home_ok, home_err = HydroBlade.movement.InnTeleport("Renova")
+    if not home_ok then
+        return self:fail("renova return failed", home_err)
+    end
+    HydroBlade.wait_for_character(15)
+    local job = self:parent_job(15)
+    if not job then
+        return self:fail("parent job unavailable", "sigil did not report a job id")
+    end
+    return self.session:server_hop(job, "return_to_sigil")
+end
+
+function HydroBlade.RoleRunner:run(workflow)
+    workflow = tostring(workflow or HydroBlade.runtime.workflow or "")
+    if workflow == "sigil_idle" then
+        return self:run_sigil()
+    end
+    if workflow == "rot_alchemy" then
+        return self:run_rot()
+    end
+    return false, "workflow unset"
 end
 
 HydroBlade.bypasses = {
@@ -1066,6 +1835,44 @@ function HydroBlade.leave_menu()
     return true
 end
 
+HydroBlade.ClientHeartbeat = {}
+HydroBlade.ClientHeartbeat.__index = HydroBlade.ClientHeartbeat
+
+function HydroBlade.ClientHeartbeat.new(interval)
+    return setmetatable({
+        interval = tonumber(interval) or 5,
+        active = false,
+        connection = nil,
+        last = 0,
+    }, HydroBlade.ClientHeartbeat)
+end
+
+function HydroBlade.ClientHeartbeat:start()
+    if self.active then
+        return true
+    end
+    self.active = true
+    self.connection = connect(RunService.Heartbeat, function()
+        local now = os.clock()
+        if now - self.last < self.interval then
+            return
+        end
+        self.last = now
+        HydroBlade.status("heartbeat")
+    end)
+    return true
+end
+
+function HydroBlade.ClientHeartbeat:stop()
+    self.active = false
+    if self.connection then
+        pcall(function()
+            self.connection:Disconnect()
+        end)
+        self.connection = nil
+    end
+end
+
 HydroBlade.methods.ping = function()
     HydroBlade.send({ type = "pong", account = HydroBlade.account })
 end
@@ -1092,6 +1899,31 @@ end
 HydroBlade.methods.follow_path = function(message)
     local ok, err = HydroBlade.paths.follow(message.points or message.path, message.options)
     HydroBlade.send({ type = "follow_path", ok = ok == true, error = err })
+end
+
+HydroBlade.methods.find_nearest_ingredient = function(message)
+    local service = HydroBlade.IngredientService.new()
+    local data, err = service:nearest(message.name or message.ingredient, message.range or message.max_distance)
+    HydroBlade.send({
+        type = "find_nearest_ingredient",
+        ok = data ~= nil,
+        error = err,
+        name = data and data.name or nil,
+        distance = data and data.distance or nil,
+        position = data and { x = data.position.X, y = data.position.Y, z = data.position.Z } or nil,
+    })
+end
+
+HydroBlade.methods.pick_nearest_ingredient = function(message)
+    local service = HydroBlade.IngredientService.new()
+    local ok, result = service:pick_nearest(message.name or message.ingredient, message.range or message.max_distance)
+    HydroBlade.send({
+        type = "pick_nearest_ingredient",
+        ok = ok == true,
+        error = ok and nil or result,
+        name = ok and result.name or nil,
+        distance = ok and result.distance or nil,
+    })
 end
 
 HydroBlade.methods.dialogue_choice = function(message)
@@ -1128,6 +1960,48 @@ end
 HydroBlade.methods.aa_bypass = function()
     local ok, err = HydroBlade.bypasses.aa_bypass()
     HydroBlade.send({ type = "aa_bypass", ok = ok == true, error = err })
+end
+
+HydroBlade.methods.run_workflow = function(message)
+    local workflow = tostring(message.workflow or HydroBlade.runtime.workflow or "")
+    task.spawn(function()
+        local ok, err = HydroBlade.RoleRunner.new():run(workflow)
+        if not ok and err ~= "workflow unset" then
+            HydroBlade.send({ type = "workflow_error", workflow = workflow, error = err })
+        end
+    end)
+    HydroBlade.send({ type = "run_workflow", workflow = workflow })
+end
+
+HydroBlade.methods.listening = function(message)
+    HydroBlade.runtime.workflow = tostring(message.workflow or HydroBlade.runtime.workflow or "")
+    HydroBlade.account.failure_webhook = tostring(message.failure_webhook or HydroBlade.account.failure_webhook or "")
+    if HydroBlade.runtime.workflow ~= "" and not HydroBlade.runtime.running then
+        HydroBlade.methods.run_workflow({ workflow = HydroBlade.runtime.workflow })
+    end
+end
+
+HydroBlade.methods.client_status = function(message)
+    if message.kick == true then
+        HydroBlade.Session.new():kick(message.reason or "HydroBlade group stopped.")
+    end
+    if type(message.parent_job) == "string" and message.parent_job ~= "" then
+        HydroBlade.runtime.parent_job_id = message.parent_job
+    end
+end
+
+HydroBlade.methods.parent_job = function(message)
+    if type(message.job_id) == "string" and message.job_id ~= "" then
+        HydroBlade.runtime.parent_job_id = message.job_id
+    elseif type(message.parent_job) == "string" and message.parent_job ~= "" then
+        HydroBlade.runtime.parent_job_id = message.parent_job
+    end
+end
+
+HydroBlade.methods.rot_failure_ack = function(message)
+    if message.kick == true then
+        HydroBlade.Session.new():kick(message.reason or "HydroBlade rot failure.")
+    end
 end
 
 HydroBlade.methods.state = function()
@@ -1189,7 +2063,16 @@ function HydroBlade.connect()
     HydroBlade.socket = socket
     HydroBlade.connected = true
     bind_socket(socket)
-    HydroBlade.send({ method = "listen", account = HydroBlade.account, place_id = game.PlaceId, job_id = game.JobId })
+    HydroBlade.send({
+        method = "listen",
+        account_id = HydroBlade.account.id,
+        parent_id = HydroBlade.account.parent_id,
+        role = HydroBlade.account.role,
+        username = HydroBlade.account.username,
+        user_id = HydroBlade.account.user_id,
+        place_id = tostring(game.PlaceId),
+        job_id = game.JobId,
+    })
     HydroBlade.send({ method = "repeat", data = "HydroBlade client connected: " .. tostring(HydroBlade.account.username) })
     return true
 end
@@ -1209,6 +2092,7 @@ function HydroBlade.disconnect()
 end
 
 env.HydroBlade = HydroBlade
+HydroBlade.heartbeat = HydroBlade.ClientHeartbeat.new(5)
 
 task.defer(function()
     if env.HYDROBLADE_ENABLE_BYPASSES ~= false then
@@ -1219,6 +2103,13 @@ task.defer(function()
     local ok, err = HydroBlade.connect()
     if not ok and warn then
         warn("[HydroBlade] websocket connect failed:", err)
+    elseif ok then
+        HydroBlade.heartbeat:start()
+        task.delay(1, function()
+            if HydroBlade.runtime.workflow ~= "" and not HydroBlade.runtime.running then
+                HydroBlade.methods.run_workflow({ workflow = HydroBlade.runtime.workflow })
+            end
+        end)
     end
 end)
 

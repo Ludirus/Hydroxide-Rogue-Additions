@@ -26,6 +26,8 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -62,6 +64,7 @@ enum ControlId {
     IdWsStatus,
     IdHint,
     IdDragBadge,
+    IdSettings,
 };
 
 enum class Role {
@@ -133,6 +136,24 @@ std::vector<Account> g_accounts;
 std::recursive_mutex g_accountsMutex;
 std::atomic_uint64_t g_idCounter{1};
 std::wstring g_autoExecuteFolder;
+std::wstring g_failureWebhook;
+bool g_sigilsRunning = false;
+uint64_t g_sigilsRunId = 0;
+
+struct RuntimeAccount {
+    std::wstring accountId;
+    std::wstring parentId;
+    std::wstring role;
+    std::wstring username;
+    std::wstring userId;
+    std::wstring jobId;
+    std::wstring status;
+    uint64_t lastSeen = 0;
+};
+
+std::recursive_mutex g_runtimeMutex;
+std::unordered_map<std::wstring, RuntimeAccount> g_runtimeAccounts;
+std::unordered_set<std::wstring> g_failedGroups;
 
 struct DragState {
     HWND source = nullptr;
@@ -144,6 +165,7 @@ DragState g_drag;
 
 void SyncAutoExecuteFiles();
 std::wstring AccountShortName(const Account& account);
+void SetStatus(const std::wstring& message);
 
 std::wstring Trim(std::wstring text) {
     auto isSpace = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n'; };
@@ -308,6 +330,54 @@ size_t FindAccountIndexById(const std::wstring& id) {
     return static_cast<size_t>(-1);
 }
 
+std::wstring WorkflowForAccount(const Account& account) {
+    if (!g_sigilsRunning || !account.active) {
+        return {};
+    }
+    if (account.role == Role::SigilAlt) {
+        return L"sigil_idle";
+    }
+    if (account.role == Role::RotAlt) {
+        return L"rot_alchemy";
+    }
+    return {};
+}
+
+std::wstring WorkflowForAccountId(const std::wstring& id) {
+    std::lock_guard<std::recursive_mutex> lock(g_accountsMutex);
+    const size_t index = FindAccountIndexById(id);
+    if (index == static_cast<size_t>(-1)) {
+        return {};
+    }
+    return WorkflowForAccount(g_accounts[index]);
+}
+
+std::wstring ParentJobForAccount(const std::wstring& accountId, const std::wstring& parentId) {
+    {
+        std::lock_guard<std::recursive_mutex> runtimeLock(g_runtimeMutex);
+        if (!parentId.empty()) {
+            const auto runtime = g_runtimeAccounts.find(parentId);
+            if (runtime != g_runtimeAccounts.end() && !runtime->second.jobId.empty()) {
+                return runtime->second.jobId;
+            }
+        }
+    }
+
+    std::lock_guard<std::recursive_mutex> accountLock(g_accountsMutex);
+    const size_t index = FindAccountIndexById(parentId.empty() ? accountId : parentId);
+    if (index != static_cast<size_t>(-1)) {
+        return g_accounts[index].gaiaJobId;
+    }
+    return {};
+}
+
+std::wstring GroupIdForRuntime(const std::wstring& accountId, const std::wstring& parentId, const std::wstring& role) {
+    if (role == L"rot_alt" && !parentId.empty()) {
+        return parentId;
+    }
+    return accountId;
+}
+
 std::wstring ParentLabel(const Account& account) {
     const size_t parent = FindAccountIndexById(account.parentId);
     if (parent == static_cast<size_t>(-1)) {
@@ -319,6 +389,7 @@ std::wstring ParentLabel(const Account& account) {
 struct PromptState {
     std::wstring label;
     std::wstring value;
+    std::wstring initialValue;
     bool password = false;
     bool accepted = false;
     bool done = false;
@@ -337,7 +408,7 @@ LRESULT CALLBACK PromptProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             if (state->password) {
                 editStyle |= ES_PASSWORD;
             }
-            state->edit = CreateWindowExW(0, L"EDIT", L"", editStyle, 18, 44, 340, 30, hwnd, reinterpret_cast<HMENU>(1), g_instance, nullptr);
+            state->edit = CreateWindowExW(0, L"EDIT", state->initialValue.c_str(), editStyle, 18, 44, 340, 30, hwnd, reinterpret_cast<HMENU>(1), g_instance, nullptr);
             CreateWindowExW(0, L"BUTTON", L"Insert", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 184, 88, 82, 30, hwnd, reinterpret_cast<HMENU>(IDOK), g_instance, nullptr);
             CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE, 276, 88, 82, 30, hwnd, reinterpret_cast<HMENU>(IDCANCEL), g_instance, nullptr);
             SendMessageW(state->edit, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
@@ -370,7 +441,7 @@ LRESULT CALLBACK PromptProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
     return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
-std::optional<std::wstring> PromptForText(const std::wstring& title, const std::wstring& label, bool password = false) {
+std::optional<std::wstring> PromptForText(const std::wstring& title, const std::wstring& label, bool password = false, const std::wstring& initialValue = L"", bool allowEmpty = false) {
     static bool registered = false;
     if (!registered) {
         WNDCLASSW wc = {};
@@ -386,6 +457,7 @@ std::optional<std::wstring> PromptForText(const std::wstring& title, const std::
     PromptState state;
     state.label = label;
     state.password = password;
+    state.initialValue = initialValue;
     RECT parentRect = {};
     GetWindowRect(g_main, &parentRect);
     const int width = 390;
@@ -420,7 +492,7 @@ std::optional<std::wstring> PromptForText(const std::wstring& title, const std::
     }
     EnableWindow(g_main, TRUE);
     SetForegroundWindow(g_main);
-    if (state.accepted && !state.value.empty()) {
+    if (state.accepted && (allowEmpty || !state.value.empty())) {
         return state.value;
     }
     return std::nullopt;
@@ -524,13 +596,15 @@ void SaveSettings() {
         return;
     }
     out << "{\n";
-    out << "  \"autoExecuteFolder\": \"" << EscapeJson(g_autoExecuteFolder) << "\"\n";
+    out << "  \"autoExecuteFolder\": \"" << EscapeJson(g_autoExecuteFolder) << "\",\n";
+    out << "  \"failureWebhook\": \"" << EscapeJson(g_failureWebhook) << "\"\n";
     out << "}\n";
 }
 
 void LoadSettings() {
     const std::string text = ReadWholeFile(SettingsPath());
     g_autoExecuteFolder = Widen(ExtractJsonString(text, "autoExecuteFolder").value_or(""));
+    g_failureWebhook = Widen(ExtractJsonString(text, "failureWebhook").value_or(""));
 }
 
 std::optional<std::wstring> BrowseForFolder(const std::wstring& title) {
@@ -569,6 +643,18 @@ void EnsureAutoExecuteFolder() {
         g_autoExecuteFolder = folder.value();
         SaveSettings();
     }
+}
+
+void OpenSettings() {
+    const auto webhook = PromptForText(L"HydroBlade Settings", L"Failure webhook URL", false, g_failureWebhook, true);
+    if (!webhook.has_value()) {
+        SetStatus(L"Settings unchanged.");
+        return;
+    }
+    g_failureWebhook = Trim(webhook.value());
+    SaveSettings();
+    SyncAutoExecuteFiles();
+    SetStatus(g_failureWebhook.empty() ? L"Failure webhook cleared." : L"Failure webhook saved.");
 }
 
 void LoadAccounts() {
@@ -671,6 +757,8 @@ void WriteAccountAutoExecuteFile(const Account& account) {
     out << "getgenv().HYDROBLADE_ROLE = \"" << RoleKey(account.role) << "\"\n";
     out << "getgenv().HYDROBLADE_ACTIVE = " << (account.active ? "true" : "false") << "\n";
     out << "getgenv().HYDROBLADE_GAIA_JOB_ID = \"" << EscapeLua(account.gaiaJobId) << "\"\n";
+    out << "getgenv().HYDROBLADE_WORKFLOW = \"" << EscapeLua(WorkflowForAccount(account)) << "\"\n";
+    out << "getgenv().HYDROBLADE_FAILURE_WEBHOOK = \"" << EscapeLua(g_failureWebhook) << "\"\n";
     out << "getgenv().HYDROBLADE_WS_URL = getgenv().HYDROBLADE_WS_URL or \"ws://127.0.0.1:8765\"\n";
     out << "local ok, err = pcall(function()\n";
     out << "    if loadfile and isfile and isfile(\"HydroBladeClient.lua\") then\n";
@@ -794,12 +882,9 @@ public:
         return {true, name.value(), id.value(), L"Authenticated as " + name.value() + L" (" + id.value() + L")"};
     }
 
-    LaunchResult JoinRogueGaiaJob(const Account& account) {
+    LaunchResult JoinRogueGaiaJob(const Account& account, const std::wstring& jobOverride = L"") {
         if (account.cookie.empty()) {
             return {false, L"Missing account cookie."};
-        }
-        if (account.gaiaJobId.empty()) {
-            return {false, L"Missing Gaia job id."};
         }
 
         const auto ticket = GetAuthenticationTicket(account.cookie);
@@ -807,13 +892,17 @@ public:
             return {false, L"Could not obtain Roblox authentication ticket."};
         }
 
+        const std::wstring jobId = !jobOverride.empty() ? jobOverride : account.gaiaJobId;
         const std::wstring tracker = std::to_wstring(GetTickCount64());
-        const std::wstring launcher =
-            L"https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGameJob"
+        std::wstring launcher =
+            L"https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=" +
+            std::wstring(jobId.empty() ? L"RequestGame" : L"RequestGameJob") +
             L"&browserTrackerId=" + tracker +
-            L"&placeId=" + std::to_wstring(kRogueGaiaPlaceId) +
-            L"&gameId=" + UrlEncode(account.gaiaJobId) +
-            L"&isPlayTogetherGame=false";
+            L"&placeId=" + std::to_wstring(kRogueGaiaPlaceId);
+        if (!jobId.empty()) {
+            launcher += L"&gameId=" + UrlEncode(jobId);
+        }
+        launcher += L"&isPlayTogetherGame=false";
 
         const std::wstring protocol =
             L"roblox-player:1+launchmode:play+gameinfo:" + UrlEncode(ticket.value()) +
@@ -1227,16 +1316,78 @@ std::optional<std::string> ReceiveWebSocketText(SOCKET socket) {
     return payload;
 }
 
+RuntimeAccount RuntimeFromMessage(const std::string& message) {
+    RuntimeAccount account;
+    account.accountId = Widen(ExtractJsonString(message, "account_id").value_or(""));
+    account.parentId = Widen(ExtractJsonString(message, "parent_id").value_or(""));
+    account.role = Widen(ExtractJsonString(message, "role").value_or(""));
+    account.username = Widen(ExtractJsonString(message, "username").value_or(""));
+    account.userId = Widen(ExtractJsonString(message, "user_id").value_or(""));
+    account.jobId = Widen(ExtractJsonString(message, "job_id").value_or(""));
+    account.status = Widen(ExtractJsonString(message, "status").value_or(""));
+    account.lastSeen = GetTickCount64();
+    return account;
+}
+
+bool IsGroupFailed(const RuntimeAccount& account) {
+    const std::wstring groupId = GroupIdForRuntime(account.accountId, account.parentId, account.role);
+    std::lock_guard<std::recursive_mutex> lock(g_runtimeMutex);
+    return !groupId.empty() && g_failedGroups.find(groupId) != g_failedGroups.end();
+}
+
+void UpsertRuntimeAccount(const RuntimeAccount& account) {
+    if (account.accountId.empty()) {
+        return;
+    }
+    std::lock_guard<std::recursive_mutex> lock(g_runtimeMutex);
+    RuntimeAccount& stored = g_runtimeAccounts[account.accountId];
+    if (!account.accountId.empty()) stored.accountId = account.accountId;
+    if (!account.parentId.empty()) stored.parentId = account.parentId;
+    if (!account.role.empty()) stored.role = account.role;
+    if (!account.username.empty()) stored.username = account.username;
+    if (!account.userId.empty()) stored.userId = account.userId;
+    if (!account.jobId.empty()) stored.jobId = account.jobId;
+    if (!account.status.empty()) stored.status = account.status;
+    stored.lastSeen = account.lastSeen;
+}
+
+std::string ClientRuntimeReply(const RuntimeAccount& account, const std::string& type) {
+    const bool kick = IsGroupFailed(account);
+    std::ostringstream out;
+    out << "{\"type\":\"" << type << "\","
+        << "\"workflow\":\"" << EscapeJsonUtf8(Narrow(WorkflowForAccountId(account.accountId))) << "\","
+        << "\"failure_webhook\":\"" << EscapeJsonUtf8(Narrow(g_failureWebhook)) << "\","
+        << "\"kick\":" << (kick ? "true" : "false") << ","
+        << "\"reason\":\"" << (kick ? "HydroBlade group failure" : "") << "\"}";
+    return out.str();
+}
+
+std::string MarkRotFailure(const std::string& message) {
+    RuntimeAccount account = RuntimeFromMessage(message);
+    UpsertRuntimeAccount(account);
+    const std::wstring groupId = GroupIdForRuntime(account.accountId, account.parentId, account.role);
+    if (!groupId.empty()) {
+        std::lock_guard<std::recursive_mutex> lock(g_runtimeMutex);
+        g_failedGroups.insert(groupId);
+    }
+    const std::string reason = ExtractJsonString(message, "reason").value_or("rot failure");
+    return std::string("{\"type\":\"rot_failure_ack\",\"kick\":true,\"reason\":\"") + EscapeJsonUtf8(reason) + "\"}";
+}
+
 std::string ExecuteWsCommand(const std::string& message) {
     const std::string method = ExtractJsonString(message, "method").value_or(message);
     if (method == "ping") {
         return "{\"type\":\"pong\",\"server\":\"HydroBlade\"}";
     }
     if (method == "help") {
-        return "{\"type\":\"help\",\"methods\":[\"ping\",\"help\",\"listen\",\"repeat\",\"list_accounts\",\"set_active\",\"set_inactive\",\"start_sigils\"]}";
+        return "{\"type\":\"help\",\"methods\":[\"ping\",\"help\",\"listen\",\"repeat\",\"list_accounts\",\"set_active\",\"set_inactive\",\"start_sigils\",\"client_status\",\"parent_job\",\"rot_failure\"]}";
     }
     if (method == "listen") {
-        return std::string("{\"type\":\"listening\",\"events\":[\"accounts\",\"status\"],\"snapshot\":") + AccountListJson() + "}";
+        RuntimeAccount account = RuntimeFromMessage(message);
+        UpsertRuntimeAccount(account);
+        std::string reply = ClientRuntimeReply(account, "listening");
+        reply.pop_back();
+        return reply + ",\"events\":[\"accounts\",\"status\",\"workflow\"],\"snapshot\":" + AccountListJson() + "}";
     }
     if (method == "repeat") {
         const std::string data = ExtractJsonString(message, "data").value_or(message);
@@ -1256,6 +1407,20 @@ std::string ExecuteWsCommand(const std::string& message) {
     if (method == "start_sigils") {
         PostMessageW(g_main, kStartSigilsMessage, 0, 0);
         return "{\"type\":\"queued\",\"method\":\"start_sigils\"}";
+    }
+    if (method == "client_status") {
+        RuntimeAccount account = RuntimeFromMessage(message);
+        UpsertRuntimeAccount(account);
+        return ClientRuntimeReply(account, "client_status");
+    }
+    if (method == "parent_job") {
+        RuntimeAccount account = RuntimeFromMessage(message);
+        UpsertRuntimeAccount(account);
+        const std::wstring job = ParentJobForAccount(account.accountId, account.parentId);
+        return std::string("{\"type\":\"parent_job\",\"job_id\":\"") + EscapeJsonUtf8(Narrow(job)) + "\"}";
+    }
+    if (method == "rot_failure") {
+        return MarkRotFailure(message);
     }
     return std::string("{\"type\":\"error\",\"message\":\"Unknown method: ") + EscapeJsonUtf8(method) + "\"}";
 }
@@ -1377,7 +1542,7 @@ private:
             return;
         }
 
-        SendWebSocketText(client, "{\"type\":\"hello\",\"server\":\"HydroBlade\",\"methods\":[\"ping\",\"help\",\"listen\",\"repeat\",\"list_accounts\",\"set_active\",\"set_inactive\",\"start_sigils\"]}");
+        SendWebSocketText(client, "{\"type\":\"hello\",\"server\":\"HydroBlade\",\"methods\":[\"ping\",\"help\",\"listen\",\"repeat\",\"list_accounts\",\"set_active\",\"set_inactive\",\"start_sigils\",\"client_status\",\"parent_job\",\"rot_failure\"]}");
         while (running_) {
             const auto message = ReceiveWebSocketText(client);
             if (!message.has_value()) {
@@ -1828,28 +1993,54 @@ void StartSigils() {
     std::vector<Account> accounts;
     {
         std::lock_guard<std::recursive_mutex> lock(g_accountsMutex);
+        g_sigilsRunning = true;
+        ++g_sigilsRunId;
+        for (Account& parent : g_accounts) {
+            if (parent.role != Role::SigilAlt || !parent.active) {
+                continue;
+            }
+            for (Account& child : g_accounts) {
+                if (child.role == Role::RotAlt && child.parentId == parent.id) {
+                    child.active = true;
+                    child.gaiaJobId = parent.gaiaJobId;
+                }
+            }
+        }
+        {
+            std::lock_guard<std::recursive_mutex> runtimeLock(g_runtimeMutex);
+            g_failedGroups.clear();
+        }
+        SaveAccounts();
+        SyncAutoExecuteFiles();
         accounts = g_accounts;
     }
 
     size_t launched = 0;
+    size_t groups = 0;
     RobloxClient client;
-    for (const Account& account : accounts) {
-        if (!account.active) {
+    for (const Account& sigil : accounts) {
+        if (!sigil.active || sigil.role != Role::SigilAlt) {
             continue;
         }
-        if (account.role != Role::SigilAlt && account.role != Role::RotAlt) {
-            continue;
-        }
-        if (account.gaiaJobId.empty()) {
-            continue;
-        }
-        const LaunchResult result = client.JoinRogueGaiaJob(account);
-        if (result.ok) {
+        ++groups;
+        const LaunchResult sigilResult = client.JoinRogueGaiaJob(sigil);
+        if (sigilResult.ok) {
             ++launched;
             Sleep(750);
         }
+        for (const Account& rot : accounts) {
+            if (rot.role != Role::RotAlt || rot.parentId != sigil.id) {
+                continue;
+            }
+            const LaunchResult rotResult = client.JoinRogueGaiaJob(rot, sigil.gaiaJobId);
+            if (rotResult.ok) {
+                ++launched;
+                Sleep(750);
+            }
+        }
     }
-    SetStatus(L"Start Sigils launched " + std::to_wstring(launched) + L" active Sigil/Rot account(s).");
+    RefreshLists();
+    SetStatus(L"Start Sigils launched " + std::to_wstring(launched) + L" account(s) across " + std::to_wstring(groups) + L" Sigil group(s).");
 }
 
 int ListIndexFromPoint(HWND hwnd, LPARAM lParam) {
@@ -2173,6 +2364,7 @@ void BuildUi() {
     HWND title = CreateControl(L"STATIC", L"LudSploit Auto Sigil", SS_LEFT, 34, 30, 430, 42, 0);
     SendMessageW(title, WM_SETFONT, reinterpret_cast<WPARAM>(g_titleFont), TRUE);
     g_stats = CreateControl(L"STATIC", L"Active 0    Inactive 0    Sigils 0    Rot 0    Silver Banks 0    Verdien 0", SS_LEFT, 38, 88, 620, 24, IdStats);
+    CreateButton(L"Settings", 656, 28, 94, 32, IdSettings);
     g_wsStatus = CreateControl(L"STATIC", L"  WS starting...", WS_BORDER | SS_LEFT, 772, 28, 336, 32, IdWsStatus);
     g_hint = CreateControl(L"STATIC", L"Paste cookie, add active. Drag rows between lists. Right-click Sigils for Rot Alts.", SS_LEFT, 772, 78, 350, 40, IdHint);
 
@@ -2340,6 +2532,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 case IdAuthenticate: AuthenticateSelected(); return 0;
                 case IdJoinGaia: JoinSelectedGaia(); return 0;
                 case IdStartSigils: StartSigils(); return 0;
+                case IdSettings: OpenSettings(); return 0;
                 case IdSetAlias: ApplyAliasToSelected(); return 0;
                 case IdSetActive: MoveSelected(true); return 0;
                 case IdSetInactive: MoveSelected(false); return 0;
