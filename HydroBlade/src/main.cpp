@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cstdio>
 #include <cstdint>
 #include <cwctype>
 #include <filesystem>
@@ -34,6 +35,7 @@ namespace {
 
 constexpr wchar_t kAppClassName[] = L"HydroBladeWindow";
 constexpr wchar_t kAppTitle[] = L"HydroBlade";
+constexpr long long kRogueLoaderPlaceId = 3016661674LL;
 constexpr long long kRogueGaiaPlaceId = 5208655184LL;
 constexpr UINT kRefreshUiMessage = WM_APP + 1;
 constexpr UINT kStartSigilsMessage = WM_APP + 2;
@@ -110,6 +112,12 @@ struct LaunchResult {
     std::wstring message;
 };
 
+struct TicketResult {
+    bool ok = false;
+    std::wstring ticket;
+    std::wstring message;
+};
+
 HINSTANCE g_instance = nullptr;
 HWND g_main = nullptr;
 HWND g_name = nullptr;
@@ -144,6 +152,10 @@ bool g_failureWebhookEnabled = false;
 bool g_sigilsRunning = false;
 uint64_t g_sigilsRunId = 0;
 std::unordered_set<std::wstring> g_collapsedSigils;
+std::wstring g_statusLog;
+std::optional<std::string> g_koroOriginalContent;
+std::filesystem::path g_koroBackupPath;
+std::unordered_set<std::wstring> g_generatedAutoExecuteFiles;
 
 struct RuntimeAccount {
     std::wstring accountId;
@@ -151,6 +163,7 @@ struct RuntimeAccount {
     std::wstring role;
     std::wstring username;
     std::wstring userId;
+    std::wstring placeId;
     std::wstring jobId;
     std::wstring status;
     uint64_t lastSeen = 0;
@@ -171,10 +184,12 @@ struct DragState {
 DragState g_drag;
 
 void SyncAutoExecuteFiles();
+void RestoreAutoExecuteFiles();
 std::wstring AccountShortName(const Account& account);
 size_t RotChildCountFor(size_t index);
 void SetStatus(const std::wstring& message);
 void HideDragBadge();
+void EnsureDragBadgeClass();
 
 std::wstring Trim(std::wstring text) {
     auto isSpace = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n'; };
@@ -185,6 +200,53 @@ std::wstring Trim(std::wstring text) {
         text.pop_back();
     }
     return text;
+}
+
+std::wstring ToLower(std::wstring text) {
+    std::transform(text.begin(), text.end(), text.begin(), [](wchar_t c) {
+        return static_cast<wchar_t>(std::towlower(c));
+    });
+    return text;
+}
+
+std::wstring NormalizeRobloxCookie(std::wstring cookie) {
+    cookie = Trim(std::move(cookie));
+    if (cookie.empty()) {
+        return {};
+    }
+
+    const std::wstring lower = ToLower(cookie);
+    const std::wstring dottedKey = L".roblosecurity=";
+    const std::wstring plainKey = L"roblosecurity=";
+    size_t start = std::wstring::npos;
+
+    const size_t dotted = lower.find(dottedKey);
+    if (dotted != std::wstring::npos) {
+        start = dotted + dottedKey.size();
+    } else {
+        const size_t plain = lower.find(plainKey);
+        if (plain != std::wstring::npos) {
+            start = plain + plainKey.size();
+        }
+    }
+
+    if (start != std::wstring::npos) {
+        const size_t end = cookie.find_first_of(L";\r\n", start);
+        cookie = cookie.substr(start, end == std::wstring::npos ? std::wstring::npos : end - start);
+    } else {
+        const size_t end = cookie.find_first_of(L";\r\n");
+        if (end != std::wstring::npos) {
+            cookie = cookie.substr(0, end);
+        }
+    }
+
+    cookie = Trim(std::move(cookie));
+    while (cookie.size() >= 2 &&
+           ((cookie.front() == L'"' && cookie.back() == L'"') ||
+            (cookie.front() == L'\'' && cookie.back() == L'\''))) {
+        cookie = Trim(cookie.substr(1, cookie.size() - 2));
+    }
+    return cookie;
 }
 
 std::wstring GetWindowString(HWND hwnd) {
@@ -361,14 +423,19 @@ std::wstring WorkflowForAccountId(const std::wstring& id) {
     return WorkflowForAccount(g_accounts[index]);
 }
 
+bool IsGaiaPlaceId(const std::wstring& placeId) {
+    return placeId == std::to_wstring(kRogueGaiaPlaceId);
+}
+
 std::wstring ParentJobForAccount(const std::wstring& accountId, const std::wstring& parentId) {
     {
         std::lock_guard<std::recursive_mutex> runtimeLock(g_runtimeMutex);
         if (!parentId.empty()) {
             const auto runtime = g_runtimeAccounts.find(parentId);
-            if (runtime != g_runtimeAccounts.end() && !runtime->second.jobId.empty()) {
+            if (runtime != g_runtimeAccounts.end() && IsGaiaPlaceId(runtime->second.placeId) && !runtime->second.jobId.empty()) {
                 return runtime->second.jobId;
             }
+            return {};
         }
     }
 
@@ -423,7 +490,7 @@ LRESULT CALLBACK PromptProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             if (state->password) {
                 editStyle |= ES_PASSWORD;
             }
-            state->edit = CreateWindowExW(0, L"EDIT", state->initialValue.c_str(), editStyle, 18, 44, 340, 30, hwnd, reinterpret_cast<HMENU>(1), g_instance, nullptr);
+            state->edit = CreateWindowExW(0, L"EDIT", state->initialValue.c_str(), editStyle, 18, 44, 340, 30, hwnd, reinterpret_cast<HMENU>(9001), g_instance, nullptr);
             CreateWindowExW(0, L"BUTTON", L"Insert", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 184, 88, 82, 30, hwnd, reinterpret_cast<HMENU>(IDOK), g_instance, nullptr);
             CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE, 276, 88, 82, 30, hwnd, reinterpret_cast<HMENU>(IDCANCEL), g_instance, nullptr);
             SendMessageW(state->edit, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
@@ -431,14 +498,14 @@ LRESULT CALLBACK PromptProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             return 0;
         }
         case WM_COMMAND:
-            if (LOWORD(wParam) == IDOK && state) {
+            if (LOWORD(wParam) == IDOK && HIWORD(wParam) == BN_CLICKED && state) {
                 state->value = GetWindowString(state->edit);
                 state->accepted = true;
                 state->done = true;
                 DestroyWindow(hwnd);
                 return 0;
             }
-            if (LOWORD(wParam) == IDCANCEL && state) {
+            if (LOWORD(wParam) == IDCANCEL && HIWORD(wParam) == BN_CLICKED && state) {
                 state->done = true;
                 DestroyWindow(hwnd);
                 return 0;
@@ -454,6 +521,60 @@ LRESULT CALLBACK PromptProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
             break;
     }
     return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+LRESULT CALLBACK DragBadgeProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    switch (message) {
+        case WM_NCHITTEST:
+            return HTTRANSPARENT;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT ps = {};
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT rect = {};
+            GetClientRect(hwnd, &rect);
+
+            HBRUSH fill = CreateSolidBrush(RGB(18, 19, 25));
+            FillRect(hdc, &rect, fill);
+            DeleteObject(fill);
+
+            HBRUSH border = CreateSolidBrush(RGB(0, 194, 255));
+            FrameRect(hdc, &rect, border);
+            DeleteObject(border);
+
+            RECT textRect = rect;
+            textRect.left += 10;
+            textRect.right -= 10;
+            wchar_t text[256] = {};
+            GetWindowTextW(hwnd, text, 256);
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, RGB(240, 242, 248));
+            if (g_font) {
+                SelectObject(hdc, g_font);
+            }
+            DrawTextW(hdc, text, -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+void EnsureDragBadgeClass() {
+    static bool registered = false;
+    if (registered) {
+        return;
+    }
+    WNDCLASSW wc = {};
+    wc.lpfnWndProc = DragBadgeProc;
+    wc.hInstance = g_instance;
+    wc.lpszClassName = L"HydroBladeDragBadge";
+    wc.hCursor = LoadCursor(nullptr, IDC_HAND);
+    RegisterClassW(&wc);
+    registered = true;
 }
 
 std::optional<std::wstring> PromptForText(const std::wstring& title, const std::wstring& label, bool password = false, const std::wstring& initialValue = L"", bool allowEmpty = false) {
@@ -693,7 +814,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
             SetChildFont(CreateWindowExW(0, L"STATIC", L"Discord webhook URL", WS_CHILD | WS_VISIBLE | SS_LEFT, 18, 88, 220, 22, hwnd, nullptr, g_instance, nullptr), g_font);
             state->webhookEdit = CreateWindowExW(0, L"EDIT", state->failureWebhook.c_str(), WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 18, 114, 548, 30, hwnd, nullptr, g_instance, nullptr);
             SetChildFont(state->webhookEdit, g_font);
-            state->webhookCheck = CreateWindowExW(0, L"BUTTON", L"Enable Rot failure screenshot webhook", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 18, 154, 340, 26, hwnd, nullptr, g_instance, nullptr);
+            state->webhookCheck = CreateWindowExW(0, L"BUTTON", L"Enable Discord screenshot webhook", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 18, 154, 340, 26, hwnd, nullptr, g_instance, nullptr);
             SetChildFont(state->webhookCheck, g_font);
             SendMessageW(state->webhookCheck, BM_SETCHECK, state->failureWebhookEnabled ? BST_CHECKED : BST_UNCHECKED, 0);
             SetChildFont(CreateWindowExW(0, L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON, 374, 194, 90, 32, hwnd, reinterpret_cast<HMENU>(IDOK), g_instance, nullptr), g_font);
@@ -821,13 +942,18 @@ void EnsureAutoExecuteFolder() {
 
 void OpenSettings() {
     LoadSettings();
+    const std::wstring previousAutoExecuteFolder = g_autoExecuteFolder;
     const auto settings = ShowSettingsDialog();
     if (!settings.has_value()) {
         SetStatus(L"Settings unchanged.");
         return;
     }
 
-    g_autoExecuteFolder = Trim(settings->autoExecuteFolder);
+    const std::wstring nextAutoExecuteFolder = Trim(settings->autoExecuteFolder);
+    if (!previousAutoExecuteFolder.empty() && previousAutoExecuteFolder != nextAutoExecuteFolder) {
+        RestoreAutoExecuteFiles();
+    }
+    g_autoExecuteFolder = nextAutoExecuteFolder;
     g_failureWebhook = Trim(settings->failureWebhook);
     g_failureWebhookEnabled = settings->failureWebhookEnabled;
     SaveSettings();
@@ -837,11 +963,11 @@ void OpenSettings() {
         status += L" Auto execute folder: " + g_autoExecuteFolder;
     }
     if (!g_failureWebhookEnabled) {
-        status += L" Failure webhook disabled.";
+        status += L" Discord screenshot webhook disabled.";
     } else if (g_failureWebhook.empty()) {
-        status += L" Failure webhook cleared.";
+        status += L" Discord screenshot webhook cleared.";
     } else {
-        status += L" Failure webhook enabled.";
+        status += L" Discord screenshot webhook enabled.";
     }
     SetStatus(status);
 }
@@ -931,6 +1057,7 @@ void WriteAccountAutoExecuteFile(const Account& account) {
     std::filesystem::create_directories(folder);
 
     const std::filesystem::path file = folder / (L"HydroBlade_" + SafeFilePart(account.userId) + L".lua");
+    g_generatedAutoExecuteFiles.insert(file.wstring());
     std::ofstream out(file, std::ios::binary | std::ios::trunc);
     if (!out) {
         return;
@@ -1079,6 +1206,11 @@ bool UpdateKoroBlockedUsers(const std::vector<Account>& launchAccounts) {
         text += "\nlocal blockedUsers = {" + insertion + "\n}\n";
     }
 
+    if (!g_koroOriginalContent.has_value() || g_koroBackupPath != koroPath) {
+        g_koroOriginalContent = ReadWholeFile(koroPath.wstring());
+        g_koroBackupPath = koroPath;
+    }
+
     std::ofstream out(koroPath, std::ios::binary | std::ios::trunc);
     if (!out) {
         return false;
@@ -1101,6 +1233,53 @@ void SyncAutoExecuteFiles() {
         }
     } catch (...) {
         // Auto-execute sync is best-effort; account storage must not fail because the folder is locked.
+    }
+}
+
+void RestoreAutoExecuteFiles() {
+    bool restored = false;
+    try {
+        if (!g_autoExecuteFolder.empty()) {
+            const std::filesystem::path folder = g_autoExecuteFolder;
+            if (std::filesystem::exists(folder)) {
+                for (const auto& entry : std::filesystem::directory_iterator(folder)) {
+                    if (!entry.is_regular_file()) {
+                        continue;
+                    }
+                    const std::wstring name = entry.path().filename().wstring();
+                    if (name.rfind(L"HydroBlade_", 0) == 0 && entry.path().extension() == L".lua") {
+                        std::filesystem::remove(entry.path());
+                        restored = true;
+                    }
+                }
+            }
+        }
+
+        for (const std::wstring& file : g_generatedAutoExecuteFiles) {
+            const std::filesystem::path path = file;
+            if (std::filesystem::exists(path)) {
+                std::filesystem::remove(path);
+                restored = true;
+            }
+        }
+        g_generatedAutoExecuteFiles.clear();
+
+        if (g_koroOriginalContent.has_value() && !g_koroBackupPath.empty()) {
+            std::ofstream out(g_koroBackupPath, std::ios::binary | std::ios::trunc);
+            if (out) {
+                out << g_koroOriginalContent.value();
+                restored = true;
+            }
+        }
+        g_koroOriginalContent.reset();
+        g_koroBackupPath.clear();
+    } catch (...) {
+        SetStatus(L"Auto execute restore failed. Check folder permissions.");
+        return;
+    }
+
+    if (restored) {
+        SetStatus(L"Auto execute folder restored.");
     }
 }
 
@@ -1175,7 +1354,11 @@ std::optional<std::wstring> JsonValueAfterKey(const std::wstring& body, const st
 class RobloxClient {
 public:
     AuthResult AuthenticateCookie(const std::wstring& cookie) {
-        const std::wstring header = L"Cookie: .ROBLOSECURITY=" + cookie + L"\r\n";
+        const std::wstring normalizedCookie = NormalizeRobloxCookie(cookie);
+        if (normalizedCookie.empty()) {
+            return {false, L"", L"", L"Missing account cookie."};
+        }
+        const std::wstring header = L"Cookie: .ROBLOSECURITY=" + normalizedCookie + L"\r\n";
         const HttpResponse response = Request(L"GET", L"users.roblox.com", L"/v1/users/authenticated", header, L"");
         if (response.status != 200) {
             return {false, L"", L"", L"Authentication failed. HTTP " + std::to_wstring(response.status)};
@@ -1191,29 +1374,25 @@ public:
     }
 
     LaunchResult JoinRogueGaiaJob(const Account& account, const std::wstring& jobOverride = L"") {
-        if (account.cookie.empty()) {
+        const std::wstring normalizedCookie = NormalizeRobloxCookie(account.cookie);
+        if (normalizedCookie.empty()) {
             return {false, L"Missing account cookie."};
         }
 
-        const auto ticket = GetAuthenticationTicket(account.cookie);
-        if (!ticket.has_value()) {
-            return {false, L"Could not obtain Roblox authentication ticket."};
+        const TicketResult ticket = GetAuthenticationTicket(normalizedCookie);
+        if (!ticket.ok) {
+            return {false, ticket.message.empty() ? L"Could not obtain Roblox authentication ticket." : ticket.message};
         }
 
-        const std::wstring jobId = !jobOverride.empty() ? jobOverride : account.gaiaJobId;
         const std::wstring tracker = std::to_wstring(GetTickCount64());
         std::wstring launcher =
-            L"https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=" +
-            std::wstring(jobId.empty() ? L"RequestGame" : L"RequestGameJob") +
+            std::wstring(L"https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGame") +
             L"&browserTrackerId=" + tracker +
-            L"&placeId=" + std::to_wstring(kRogueGaiaPlaceId);
-        if (!jobId.empty()) {
-            launcher += L"&gameId=" + UrlEncode(jobId);
-        }
-        launcher += L"&isPlayTogetherGame=false";
+            L"&placeId=" + std::to_wstring(kRogueLoaderPlaceId) +
+            L"&isPlayTogetherGame=false";
 
         const std::wstring protocol =
-            L"roblox-player:1+launchmode:play+gameinfo:" + UrlEncode(ticket.value()) +
+            L"roblox-player:1+launchmode:play+gameinfo:" + UrlEncode(ticket.ticket) +
             L"+placelauncherurl:" + UrlEncode(launcher) +
             L"+browsertrackerid:" + tracker +
             L"+robloxLocale:en_us+gameLocale:en_us";
@@ -1222,7 +1401,7 @@ public:
         if (reinterpret_cast<intptr_t>(result) <= 32) {
             return {false, L"Roblox player protocol launch failed."};
         }
-        return {true, L"Launch requested for " + DisplayName(account) + L"."};
+        return {true, L"Launch requested for " + DisplayName(account) + L" into loader place " + std::to_wstring(kRogueLoaderPlaceId) + L"."};
     }
 
 private:
@@ -1232,38 +1411,74 @@ private:
         return L"account";
     }
 
-    std::optional<std::wstring> GetAuthenticationTicket(const std::wstring& cookie) {
-        const std::wstring cookieHeader = L"Cookie: .ROBLOSECURITY=" + cookie + L"\r\n";
-        HttpResponse first = Request(
+    TicketResult GetAuthenticationTicket(const std::wstring& cookie) {
+        const std::wstring baseHeaders = RobloxRequestHeaders(cookie, L"");
+        HttpResponse csrfProbe = Request(
             L"POST",
             L"auth.roblox.com",
-            L"/v1/authentication-ticket",
-            cookieHeader + L"Referer: https://www.roblox.com/\r\nOrigin: https://www.roblox.com\r\n",
-            L"");
+            L"/v2/logout",
+            baseHeaders,
+            L"{}");
 
-        std::wstring csrf = HeaderValue(first, L"x-csrf-token");
-        if (csrf.empty() && first.status == 200) {
-            const std::wstring ticket = HeaderValue(first, L"rbx-authentication-ticket");
+        std::wstring csrf = HeaderValue(csrfProbe, L"x-csrf-token");
+        if (csrf.empty()) {
+            HttpResponse ticketProbe = Request(
+                L"POST",
+                L"auth.roblox.com",
+                L"/v1/authentication-ticket",
+                baseHeaders,
+                L"{}");
+            const std::wstring ticket = HeaderValue(ticketProbe, L"rbx-authentication-ticket");
             if (!ticket.empty()) {
-                return ticket;
+                return {true, ticket, L""};
+            }
+            csrf = HeaderValue(ticketProbe, L"x-csrf-token");
+            if (csrf.empty()) {
+                return {false, L"", L"Could not obtain Roblox authentication ticket. CSRF unavailable. logout HTTP " + std::to_wstring(csrfProbe.status) + L", ticket HTTP " + std::to_wstring(ticketProbe.status)};
             }
         }
-        if (csrf.empty()) {
-            return std::nullopt;
-        }
 
-        HttpResponse second = Request(
+        HttpResponse response = Request(
             L"POST",
             L"auth.roblox.com",
             L"/v1/authentication-ticket",
-            cookieHeader + L"Referer: https://www.roblox.com/\r\nOrigin: https://www.roblox.com\r\nx-csrf-token: " + csrf + L"\r\n",
-            L"");
+            RobloxRequestHeaders(cookie, csrf),
+            L"{}");
 
-        const std::wstring ticket = HeaderValue(second, L"rbx-authentication-ticket");
-        if (second.status == 200 && !ticket.empty()) {
-            return ticket;
+        const std::wstring ticket = HeaderValue(response, L"rbx-authentication-ticket");
+        if (!ticket.empty()) {
+            return {true, ticket, L""};
         }
-        return std::nullopt;
+
+        std::wstring retryCsrf = HeaderValue(response, L"x-csrf-token");
+        if (!retryCsrf.empty() && retryCsrf != csrf) {
+            HttpResponse retry = Request(
+                L"POST",
+                L"auth.roblox.com",
+                L"/v1/authentication-ticket",
+                RobloxRequestHeaders(cookie, retryCsrf),
+                L"{}");
+            const std::wstring retryTicket = HeaderValue(retry, L"rbx-authentication-ticket");
+            if (!retryTicket.empty()) {
+                return {true, retryTicket, L""};
+            }
+            return {false, L"", L"Could not obtain Roblox authentication ticket. HTTP " + std::to_wstring(retry.status)};
+        }
+
+        return {false, L"", L"Could not obtain Roblox authentication ticket. HTTP " + std::to_wstring(response.status)};
+    }
+
+    static std::wstring RobloxRequestHeaders(const std::wstring& cookie, const std::wstring& csrf) {
+        std::wstring headers =
+            L"Cookie: .ROBLOSECURITY=" + cookie + L"\r\n"
+            L"Content-Type: application/json\r\n"
+            L"Accept: application/json, text/plain, */*\r\n"
+            L"Origin: https://www.roblox.com\r\n"
+            L"Referer: https://www.roblox.com/\r\n";
+        if (!csrf.empty()) {
+            headers += L"X-CSRF-TOKEN: " + csrf + L"\r\n";
+        }
+        return headers;
     }
 
     HttpResponse Request(
@@ -1274,7 +1489,7 @@ private:
         const std::wstring& body) {
         HttpResponse response;
         HINTERNET session = WinHttpOpen(
-            L"HydroBlade/0.1",
+            L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
             WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
             WINHTTP_NO_PROXY_NAME,
             WINHTTP_NO_PROXY_BYPASS,
@@ -1624,8 +1839,8 @@ std::optional<std::string> ReceiveWebSocketText(SOCKET socket) {
     return payload;
 }
 
-size_t LaunchPendingRotForParent(const std::wstring& parentId, const std::wstring& jobId, const std::wstring& role) {
-    if (parentId.empty() || jobId.empty() || role != L"sigil_alt") {
+size_t LaunchPendingRotForParent(const std::wstring& parentId, const std::wstring& placeId, const std::wstring& jobId, const std::wstring& role) {
+    if (parentId.empty() || jobId.empty() || role != L"sigil_alt" || !IsGaiaPlaceId(placeId)) {
         return 0;
     }
 
@@ -1650,7 +1865,7 @@ size_t LaunchPendingRotForParent(const std::wstring& parentId, const std::wstrin
         }
     }
     if (launched > 0) {
-        SetStatus(L"Launched " + std::to_wstring(launched) + L" pending Rot account(s) into Sigil job.");
+        SetStatus(L"Launched " + std::to_wstring(launched) + L" pending Rot account(s) after Sigil reached Gaia job " + jobId + L".");
     }
     return launched;
 }
@@ -1662,6 +1877,7 @@ RuntimeAccount RuntimeFromMessage(const std::string& message) {
     account.role = Widen(ExtractJsonString(message, "role").value_or(""));
     account.username = Widen(ExtractJsonString(message, "username").value_or(""));
     account.userId = Widen(ExtractJsonString(message, "user_id").value_or(""));
+    account.placeId = Widen(ExtractJsonString(message, "place_id").value_or(""));
     account.jobId = Widen(ExtractJsonString(message, "job_id").value_or(""));
     account.status = Widen(ExtractJsonString(message, "status").value_or(""));
     account.lastSeen = GetTickCount64();
@@ -1684,27 +1900,49 @@ void UpsertRuntimeAccount(const RuntimeAccount& account) {
     if (account.accountId.empty()) {
         return;
     }
+    std::wstring oldPlaceId;
+    std::wstring oldJobId;
+    std::wstring displayName;
     std::lock_guard<std::recursive_mutex> lock(g_runtimeMutex);
     RuntimeAccount& stored = g_runtimeAccounts[account.accountId];
+    oldPlaceId = stored.placeId;
+    oldJobId = stored.jobId;
     if (!account.accountId.empty()) stored.accountId = account.accountId;
     if (!account.parentId.empty()) stored.parentId = account.parentId;
     if (!account.role.empty()) stored.role = account.role;
     if (!account.username.empty()) stored.username = account.username;
     if (!account.userId.empty()) stored.userId = account.userId;
+    if (!account.placeId.empty()) stored.placeId = account.placeId;
     if (!account.jobId.empty()) stored.jobId = account.jobId;
     if (!account.status.empty()) stored.status = account.status;
     stored.lastSeen = account.lastSeen;
+    displayName = !stored.username.empty() ? stored.username : (!stored.userId.empty() ? L"User " + stored.userId : stored.accountId);
+    const bool placeChanged = !stored.placeId.empty() && stored.placeId != oldPlaceId;
+    const bool jobChanged = !stored.jobId.empty() && stored.jobId != oldJobId;
+    const bool reachedGaia = placeChanged && IsGaiaPlaceId(stored.placeId);
+    const std::wstring placeId = stored.placeId;
+    const std::wstring jobId = stored.jobId;
+    if (placeChanged || jobChanged) {
+        SetStatus(L"Monitoring " + displayName + L": place " + (placeId.empty() ? L"unknown" : placeId) + L", job " + (jobId.empty() ? L"unknown" : jobId));
+    }
+    if (reachedGaia && !jobId.empty()) {
+        SetStatus(displayName + L" reached Gaia place " + std::to_wstring(kRogueGaiaPlaceId) + L" with job " + jobId + L".");
+    }
 }
 
 std::string ClientRuntimeReply(const RuntimeAccount& account, const std::string& type) {
     const bool kick = IsGroupFailed(account);
     const bool rotRequested = IsRotRequested(account);
     const std::wstring parentJob = ParentJobForAccount(account.accountId, account.parentId);
+    const bool gaiaReady = IsGaiaPlaceId(account.placeId) && !account.jobId.empty();
     std::ostringstream out;
     out << "{\"type\":\"" << type << "\","
         << "\"workflow\":\"" << EscapeJsonUtf8(Narrow(WorkflowForAccountId(account.accountId))) << "\","
         << "\"failure_webhook\":\"" << EscapeJsonUtf8(Narrow(EffectiveFailureWebhook())) << "\","
         << "\"failure_webhook_enabled\":" << (g_failureWebhookEnabled ? "true" : "false") << ","
+        << "\"place_id\":\"" << EscapeJsonUtf8(Narrow(account.placeId)) << "\","
+        << "\"job_id\":\"" << EscapeJsonUtf8(Narrow(account.jobId)) << "\","
+        << "\"gaia_ready\":" << (gaiaReady ? "true" : "false") << ","
         << "\"parent_job\":\"" << EscapeJsonUtf8(Narrow(parentJob)) << "\","
         << "\"rot_requested\":" << (rotRequested ? "true" : "false") << ","
         << "\"kick\":" << (kick ? "true" : "false") << ","
@@ -1715,13 +1953,16 @@ std::string ClientRuntimeReply(const RuntimeAccount& account, const std::string&
 std::string MarkRotFailure(const std::string& message) {
     RuntimeAccount account = RuntimeFromMessage(message);
     UpsertRuntimeAccount(account);
+    const bool groupFailure = ExtractJsonBool(message, "group_failure");
+    const bool kickSelf = message.find("\"kick_self\"") == std::string::npos || ExtractJsonBool(message, "kick_self");
     const std::wstring groupId = GroupIdForRuntime(account.accountId, account.parentId, account.role);
-    if (!groupId.empty()) {
+    if (groupFailure && !groupId.empty()) {
         std::lock_guard<std::recursive_mutex> lock(g_runtimeMutex);
         g_failedGroups.insert(groupId);
     }
     const std::string reason = ExtractJsonString(message, "reason").value_or("rot failure");
-    return std::string("{\"type\":\"rot_failure_ack\",\"kick\":true,\"reason\":\"") + EscapeJsonUtf8(reason) + "\"}";
+    SetStatus(std::wstring(groupFailure ? L"Group-fatal Rot failure: " : L"Rot local failure: ") + Widen(reason));
+    return std::string("{\"type\":\"rot_failure_ack\",\"kick\":") + (kickSelf ? "true" : "false") + ",\"group_failure\":" + (groupFailure ? "true" : "false") + ",\"reason\":\"" + EscapeJsonUtf8(reason) + "\"}";
 }
 
 std::string MarkRotRequest(const std::string& message) {
@@ -1749,7 +1990,7 @@ std::string ExecuteWsCommand(const std::string& message) {
     if (method == "listen") {
         RuntimeAccount account = RuntimeFromMessage(message);
         UpsertRuntimeAccount(account);
-        LaunchPendingRotForParent(account.accountId, account.jobId, account.role);
+        LaunchPendingRotForParent(account.accountId, account.placeId, account.jobId, account.role);
         std::string reply = ClientRuntimeReply(account, "listening");
         reply.pop_back();
         return reply + ",\"events\":[\"accounts\",\"status\",\"workflow\"],\"snapshot\":" + AccountListJson() + "}";
@@ -1776,7 +2017,7 @@ std::string ExecuteWsCommand(const std::string& message) {
     if (method == "client_status") {
         RuntimeAccount account = RuntimeFromMessage(message);
         UpsertRuntimeAccount(account);
-        LaunchPendingRotForParent(account.accountId, account.jobId, account.role);
+        LaunchPendingRotForParent(account.accountId, account.placeId, account.jobId, account.role);
         return ClientRuntimeReply(account, "client_status");
     }
     if (method == "parent_job") {
@@ -1940,7 +2181,26 @@ private:
 std::unique_ptr<WsServer> g_wsServer;
 
 void SetStatus(const std::wstring& message) {
-    SetWindowString(g_status, L"  " + message);
+    SYSTEMTIME now = {};
+    GetLocalTime(&now);
+    wchar_t stamp[32] = {};
+    swprintf_s(stamp, L"[%02u:%02u:%02u] ", now.wHour, now.wMinute, now.wSecond);
+    g_statusLog += stamp;
+    g_statusLog += message;
+    g_statusLog += L"\r\n";
+    constexpr size_t kMaxStatusChars = 24000;
+    if (g_statusLog.size() > kMaxStatusChars) {
+        const size_t trimTo = g_statusLog.size() - kMaxStatusChars;
+        const size_t nextLine = g_statusLog.find(L"\r\n", trimTo);
+        g_statusLog.erase(0, nextLine == std::wstring::npos ? trimTo : nextLine + 2);
+    }
+    if (!g_status || !IsWindow(g_status)) {
+        return;
+    }
+    SetWindowTextW(g_status, g_statusLog.c_str());
+    const int length = GetWindowTextLengthW(g_status);
+    SendMessageW(g_status, EM_SETSEL, static_cast<WPARAM>(length), static_cast<LPARAM>(length));
+    SendMessageW(g_status, EM_SCROLLCARET, 0, 0);
 }
 
 void UpdateStats() {
@@ -2277,17 +2537,23 @@ void InsertRotAlt(size_t parentIndex) {
         return;
     }
 
-    const auto cookie = PromptForText(L"Insert Rot Alt", L"Paste the Rot Alt .ROBLOSECURITY cookie", true);
+    const auto cookie = PromptForText(L"Insert Rot Alt", L"Paste the Rot Alt .ROBLOSECURITY cookie", true, L"", true);
     if (!cookie.has_value()) {
         SetStatus(L"Rot Alt insert cancelled.");
         return;
     }
 
+    const std::wstring normalizedCookie = NormalizeRobloxCookie(cookie.value());
+    if (normalizedCookie.empty()) {
+        SetStatus(L"Paste a Rot Alt .ROBLOSECURITY cookie first.");
+        return;
+    }
+
     SetStatus(L"Authenticating Rot Alt cookie...");
     RobloxClient client;
-    AuthResult result = client.AuthenticateCookie(cookie.value());
+    AuthResult result = client.AuthenticateCookie(normalizedCookie);
     if (!result.ok) {
-        SetStatus(result.message);
+        SetStatus(L"Insert Rot Alt failed: " + result.message);
         return;
     }
 
@@ -2311,7 +2577,7 @@ void InsertRotAlt(size_t parentIndex) {
     child.role = Role::RotAlt;
     child.active = parent.active;
     child.gaiaJobId = parent.gaiaJobId;
-    child.cookie = cookie.value();
+    child.cookie = normalizedCookie;
     child.username = result.username;
     child.userId = result.userId;
     child.label = result.username;
@@ -2333,7 +2599,7 @@ void InsertRotAlt(size_t parentIndex) {
 
 void AddCookieToAccount(bool active) {
     const auto selected = SelectedAccountIndex();
-    const std::wstring cookie = GetWindowString(g_cookie);
+    const std::wstring cookie = NormalizeRobloxCookie(GetWindowString(g_cookie));
     if (cookie.empty()) {
         SetStatus(L"Paste a .ROBLOSECURITY cookie first.");
         return;
@@ -2446,19 +2712,29 @@ void StartSigils() {
     }
 
     const bool koroUpdated = UpdateKoroBlockedUsers(AccountsForSigilLaunch(accounts));
-    size_t launched = 0;
+    size_t launchedSigils = 0;
+    size_t launchedRots = 0;
+    size_t failedLaunches = 0;
     size_t groups = 0;
-    size_t pendingRot = 0;
+    std::wstring firstFailure;
     RobloxClient client;
     for (const Account& sigil : accounts) {
         if (!sigil.active || sigil.role != Role::SigilAlt) {
             continue;
         }
         ++groups;
+        SetStatus(L"Launching Sigil: " + AccountShortName(sigil));
         const LaunchResult sigilResult = client.JoinRogueGaiaJob(sigil);
         if (sigilResult.ok) {
-            ++launched;
+            ++launchedSigils;
+            SetStatus(L"Launched Sigil: " + AccountShortName(sigil));
             Sleep(750);
+        } else {
+            ++failedLaunches;
+            SetStatus(L"Sigil launch failed: " + AccountShortName(sigil) + L" - " + sigilResult.message);
+            if (firstFailure.empty()) {
+                firstFailure = AccountShortName(sigil) + L": " + sigilResult.message;
+            }
         }
         std::vector<Account> rotChildren;
         for (const Account& rot : accounts) {
@@ -2467,27 +2743,32 @@ void StartSigils() {
             }
             rotChildren.push_back(rot);
         }
-        if (!sigilResult.ok || rotChildren.empty()) {
-            continue;
-        }
-        if (sigil.gaiaJobId.empty()) {
-            std::lock_guard<std::recursive_mutex> runtimeLock(g_runtimeMutex);
-            pendingRot += rotChildren.size();
-            g_pendingRotLaunches[sigil.id] = std::move(rotChildren);
-        } else {
-            for (const Account& rot : rotChildren) {
-                const LaunchResult rotResult = client.JoinRogueGaiaJob(rot, sigil.gaiaJobId);
-                if (rotResult.ok) {
-                    ++launched;
-                    Sleep(750);
+        for (const Account& rot : rotChildren) {
+            SetStatus(L"Launching Rot Alt: " + AccountShortName(rot));
+            const LaunchResult rotResult = client.JoinRogueGaiaJob(rot, sigil.gaiaJobId);
+            if (rotResult.ok) {
+                ++launchedRots;
+                SetStatus(L"Launched Rot Alt: " + AccountShortName(rot));
+                Sleep(750);
+            } else {
+                ++failedLaunches;
+                SetStatus(L"Rot Alt launch failed: " + AccountShortName(rot) + L" - " + rotResult.message);
+                if (firstFailure.empty()) {
+                    firstFailure = AccountShortName(rot) + L": " + rotResult.message;
                 }
             }
         }
     }
     RefreshLists();
-    std::wstring status = L"Start Sigils launched " + std::to_wstring(launched) + L" account(s) across " + std::to_wstring(groups) + L" Sigil group(s).";
-    if (pendingRot > 0) {
-        status += L" Waiting for " + std::to_wstring(pendingRot) + L" Rot account(s) to receive parent job.";
+    std::wstring status = L"Start Sigils launched " + std::to_wstring(launchedSigils) + L" Sigil(s) and " + std::to_wstring(launchedRots) + L" Rot Alt(s) across " + std::to_wstring(groups) + L" Sigil group(s).";
+    if (groups == 0) {
+        status += L" No active Sigil Alt accounts were found.";
+    }
+    if (failedLaunches > 0) {
+        status += L" Failed launch(es): " + std::to_wstring(failedLaunches) + L".";
+        if (!firstFailure.empty()) {
+            status += L" First failure: " + firstFailure;
+        }
     }
     if (koroUpdated) {
         status += L" Updated koro.luau blocked users.";
@@ -2580,17 +2861,17 @@ void UpdateDragBadge(POINT screenPoint) {
     if (!g_drag.source || !g_dragBadge) {
         return;
     }
-    POINT clientPoint = screenPoint;
-    ScreenToClient(g_main, &clientPoint);
     SetWindowString(g_dragBadge, DragBadgeText(g_drag.index));
     SetWindowPos(
         g_dragBadge,
-        HWND_TOP,
-        clientPoint.x + 14,
-        clientPoint.y + 14,
-        300,
-        28,
-        SWP_SHOWWINDOW);
+        HWND_TOPMOST,
+        screenPoint.x + 16,
+        screenPoint.y + 16,
+        320,
+        30,
+        SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    InvalidateRect(g_dragBadge, nullptr, TRUE);
+    UpdateWindow(g_dragBadge);
 }
 
 void HideDragBadge() {
@@ -2658,6 +2939,20 @@ std::optional<size_t> AccountIndexAtScreenPoint(HWND list, POINT screenPoint) {
     return static_cast<size_t>(itemData);
 }
 
+HWND AccountListAtScreenPoint(POINT screenPoint) {
+    RECT activeRect = {};
+    RECT inactiveRect = {};
+    GetWindowRect(g_activeList, &activeRect);
+    GetWindowRect(g_inactiveList, &inactiveRect);
+    if (PtInRect(&activeRect, screenPoint)) {
+        return g_activeList;
+    }
+    if (PtInRect(&inactiveRect, screenPoint)) {
+        return g_inactiveList;
+    }
+    return nullptr;
+}
+
 LRESULT CALLBACK AccountListSubclass(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR subclassId, DWORD_PTR) {
     const bool sourceActive = subclassId == kActiveListSubclass;
     switch (message) {
@@ -2696,7 +2991,8 @@ LRESULT CALLBACK AccountListSubclass(HWND hwnd, UINT message, WPARAM wParam, LPA
             if (g_drag.source) {
                 POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
                 ClientToScreen(hwnd, &point);
-                HWND target = WindowFromPoint(point);
+                HideDragBadge();
+                HWND target = AccountListAtScreenPoint(point);
                 if (target == g_activeList || target == g_inactiveList) {
                     const auto targetIndex = AccountIndexAtScreenPoint(target, point);
                     bool reparented = false;
@@ -2719,7 +3015,6 @@ LRESULT CALLBACK AccountListSubclass(HWND hwnd, UINT message, WPARAM wParam, LPA
                 } else {
                     SetStatus(L"Drag cancelled.");
                 }
-                HideDragBadge();
                 g_drag = {};
                 return 0;
             }
@@ -2891,8 +3186,22 @@ void BuildUi() {
     CreateButton(L"Join Gaia", 394, 520, 138, 30, IdJoinGaia);
     CreateButton(L"Set Active", 34, 566, 140, 34, IdSetActive);
     CreateButton(L"Set Inactive", 190, 566, 140, 34, IdSetInactive);
-    g_status = CreateControl(L"STATIC", L"  Ready.", WS_BORDER | SS_LEFT, 34, 620, 498, 34, IdStatus);
-    g_dragBadge = CreateControl(L"STATIC", L"", WS_BORDER | SS_CENTER, 760, 116, 260, 28, IdDragBadge);
+    g_status = CreateControl(L"EDIT", L"", WS_BORDER | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL, 34, 610, 498, 44, IdStatus);
+    SetStatus(L"Ready.");
+    EnsureDragBadgeClass();
+    g_dragBadge = CreateWindowExW(
+        WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+        L"HydroBladeDragBadge",
+        L"",
+        WS_POPUP,
+        0,
+        0,
+        320,
+        30,
+        g_main,
+        reinterpret_cast<HMENU>(IdDragBadge),
+        g_instance,
+        nullptr);
     ShowWindow(g_dragBadge, SW_HIDE);
 
     CreatePanelLabel(L"ACTIVE ACCOUNTS", 594, 174, 180, 22);
@@ -3058,9 +3367,15 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPara
                 g_wsServer->Stop();
                 g_wsServer.reset();
             }
+            g_sigilsRunning = false;
+            RestoreAutoExecuteFiles();
             SaveAccounts();
             RemoveWindowSubclass(g_activeList, AccountListSubclass, kActiveListSubclass);
             RemoveWindowSubclass(g_inactiveList, AccountListSubclass, kInactiveListSubclass);
+            if (g_dragBadge) {
+                DestroyWindow(g_dragBadge);
+                g_dragBadge = nullptr;
+            }
             g_logo.reset();
             if (g_appIcon) {
                 DestroyIcon(g_appIcon);

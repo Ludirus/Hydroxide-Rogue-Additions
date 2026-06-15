@@ -66,6 +66,17 @@ local function hydroxide_flag_truthy(value)
     return text == "true" or text == "1" or text == "yes" or text == "on"
 end
 
+local kick_debounce = false
+local kick_after_path = false
+local kick_trinket_name = ""
+local proximity_warnings = {}
+local mana_initialized = false
+local emergency_gate_requested = nil
+local current_gate_section = 0
+local player_encounters = {}
+local emergency_resume_mode = false
+local INPUT_BLOCKED = false
+
 local function hidden_grapple_silent_aim_enabled()
     if not getgenv then
         return false
@@ -19304,7 +19315,7 @@ if is_hydroxide_supported_place() then
             local player_encounters = {}
             local emergency_resume_mode = false
             local INPUT_BLOCKED = false
-            trinket_bot.ExecutePath = function(test_mode)
+            local function ExecutePath(test_mode)
                 if not cheat_client or not cheat_client.config then
                     trinket_bot_debug_log("EXECUTE_PATH_ABORT", "cheat_client.config missing")
                     return
@@ -22331,6 +22342,8 @@ if is_hydroxide_supported_place() then
                     end
                 end
             end
+
+            trinket_bot.ExecutePath = ExecutePath
 
             do
             local group_trinket_bot = Tabs.Botting:AddLeftGroupbox("Trinket Bot")

@@ -122,7 +122,7 @@ if game.PlaceId == 3541987450 or game.PlaceId == 5208655184 or game.PlaceId == 1
     if getgenv()[key] and type(getgenv()[key]) == "table" then return end
     getgenv()[key] = setmetatable({}, { __tostring = function() return "nil" end })
 
-    local success, err = xpcall(function()
+    local success, err = pcall(function()
     local old_destroy = nil
     do
         if not getgenv().lolololol then
@@ -27664,8 +27664,7 @@ end
                 end
             end
         end
-    end, function(err)
-        return debug.traceback(err, 2)
+    end
     end)
 
     if not success then

@@ -39,6 +39,8 @@ HydroBlade.account = {
 }
 
 HydroBlade.ws_url = tostring(env.HYDROBLADE_WS_URL or "ws://127.0.0.1:8765")
+HydroBlade.loader_place_id = 3016661674
+HydroBlade.gaia_place_id = 5208655184
 HydroBlade.connected = false
 HydroBlade.socket = nil
 HydroBlade.methods = {}
@@ -205,6 +207,53 @@ function HydroBlade.wait_for_character(timeout)
         task.wait(0.25)
     until os.clock() >= deadline
     return nil
+end
+
+function HydroBlade.wait_for_start_menu(required_visible_seconds, timeout)
+    local required = tonumber(required_visible_seconds) or 5
+    local deadline = os.clock() + (tonumber(timeout) or 45)
+    local visible_since = nil
+    repeat
+        local player = Players.LocalPlayer
+        local player_gui = player and player:FindFirstChildOfClass("PlayerGui")
+        local menu = player_gui and player_gui:FindFirstChild("StartMenu")
+        local visible = false
+        if menu then
+            if menu:IsA("ScreenGui") then
+                visible = menu.Enabled ~= false
+            elseif menu:IsA("GuiObject") then
+                visible = menu.Visible ~= false
+            else
+                visible = true
+            end
+        end
+        if visible then
+            visible_since = visible_since or os.clock()
+            if os.clock() - visible_since >= required then
+                return true
+            end
+        else
+            visible_since = nil
+        end
+        task.wait(0.25)
+    until os.clock() >= deadline
+    return false, "StartMenu was not visible for " .. tostring(required) .. " seconds"
+end
+
+function HydroBlade.wait_for_place(place_id, timeout)
+    local target = tonumber(place_id)
+    local deadline = os.clock() + (tonumber(timeout) or 120)
+    repeat
+        if tonumber(game.PlaceId) == target then
+            return true
+        end
+        HydroBlade.status("waiting_for_place", {
+            current_place = tostring(game.PlaceId),
+            target_place = tostring(target),
+        })
+        task.wait(2)
+    until os.clock() >= deadline
+    return false, "timed out waiting for place " .. tostring(target) .. " from " .. tostring(game.PlaceId)
 end
 
 local function find_dialogue_remote()
@@ -468,6 +517,9 @@ end
 
 function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
     local character = local_character()
+    if not character then
+        character = HydroBlade.wait_for_character(20)
+    end
     if not character then
         return false, "missing character"
     end
@@ -1086,15 +1138,38 @@ function HydroBlade.Reporter:request(options)
 end
 
 function HydroBlade.Reporter:capture()
-    local fn = (getgenv and getgenv().getscreenshot) or getscreenshot
-    if type(fn) ~= "function" then
-        return nil
+    local env_table = getgenv and getgenv() or {}
+    local candidates = {}
+    local seen = {}
+    local function add(name, fn)
+        if type(fn) == "function" and not seen[fn] then
+            seen[fn] = true
+            table.insert(candidates, { name = name, fn = fn })
+        end
     end
-    local ok, result = pcall(fn)
-    if ok and type(result) == "string" and result ~= "" then
-        return result
+    for _, name in ipairs({ "getscreenshot", "screenshot", "take_screenshot", "capturescreenshot", "get_screenshot", "getscreen" }) do
+        add(name, env_table[name])
+        add(name, rawget(_G, name))
     end
-    return nil
+    if #candidates == 0 then
+        return nil, "no executor screenshot function found"
+    end
+    local errors = {}
+    for _, candidate in ipairs(candidates) do
+        local ok, result = pcall(candidate.fn)
+        if ok and type(result) == "string" and result ~= "" then
+            return result, candidate.name
+        end
+        table.insert(errors, candidate.name .. ": " .. tostring(ok and "empty result" or result))
+    end
+    return nil, table.concat(errors, "; ")
+end
+
+function HydroBlade.Reporter:is_image_bytes(data)
+    if type(data) ~= "string" then
+        return false
+    end
+    return data:sub(1, 8) == "\137PNG\r\n\26\n" or data:sub(1, 2) == "\255\216"
 end
 
 function HydroBlade.Reporter:screenshot_file(path)
@@ -1147,7 +1222,7 @@ function HydroBlade.Reporter:send_file(embed, file_data)
     })
 end
 
-function HydroBlade.Reporter:send(reason, detail)
+function HydroBlade.Reporter:send(reason, detail, options)
     self.webhook = HydroBlade.account.failure_webhook
     self.enabled = HydroBlade.account.failure_webhook_enabled
     if not self.enabled then
@@ -1157,26 +1232,38 @@ function HydroBlade.Reporter:send(reason, detail)
         return false, "webhook unset"
     end
     local position = HydroBlade.paths.current_position()
-    local screenshot = self:capture()
-    local screenshot_value = "unavailable"
+    local screenshot, screenshot_source = self:capture()
+    local screenshot_value = screenshot_source or "unavailable"
     if screenshot and screenshot ~= "" then
-        screenshot_value = screenshot
+        if self:is_image_bytes(screenshot) then
+            screenshot_value = "attached raw image via " .. tostring(screenshot_source or "screenshot")
+        else
+            screenshot_value = tostring(screenshot)
+        end
+    end
+    options = options or {}
+    local fields = {
+        { name = "Account", value = tostring(HydroBlade.account.username), inline = true },
+        { name = "User ID", value = tostring(HydroBlade.account.user_id), inline = true },
+        { name = "Job", value = tostring(game.JobId), inline = false },
+        { name = "Position", value = position and string.format("%.1f, %.1f, %.1f", position.x, position.y, position.z) or "unknown", inline = false },
+        { name = "Detail", value = tostring(detail or "none"), inline = false },
+        { name = "Screenshot Path", value = tostring(screenshot_value):sub(1, 1024), inline = false },
+    }
+    if options.stage then
+        table.insert(fields, 3, { name = "Stage", value = tostring(options.stage), inline = true })
     end
     local embed = {
-        title = "HydroBlade Rot Failure",
+        title = tostring(options.title or "HydroBlade Rot Failure"),
         description = tostring(reason or "unknown"),
-        fields = {
-            { name = "Account", value = tostring(HydroBlade.account.username), inline = true },
-            { name = "User ID", value = tostring(HydroBlade.account.user_id), inline = true },
-            { name = "Job", value = tostring(game.JobId), inline = false },
-            { name = "Position", value = position and string.format("%.1f, %.1f, %.1f", position.x, position.y, position.z) or "unknown", inline = false },
-            { name = "Detail", value = tostring(detail or "none"), inline = false },
-            { name = "Screenshot Path", value = tostring(screenshot_value):sub(1, 1024), inline = false },
-        },
+        fields = fields,
     }
     if screenshot and screenshot:match("^https?://") then
         embed.image = { url = screenshot }
         return self:send_json(embed)
+    end
+    if self:is_image_bytes(screenshot) then
+        return self:send_file(embed, screenshot)
     end
     local file_data = self:screenshot_file(screenshot)
     if file_data then
@@ -1185,7 +1272,15 @@ function HydroBlade.Reporter:send(reason, detail)
     return self:send_json(embed)
 end
 
-function HydroBlade.Reporter:fail(reason, detail)
+function HydroBlade.Reporter:update(stage, detail)
+    return self:send(stage, detail, {
+        title = "HydroBlade Rot Update",
+        stage = stage,
+    })
+end
+
+function HydroBlade.Reporter:fail(reason, detail, options)
+    options = options or {}
     HydroBlade.send({
         method = "rot_failure",
         account_id = HydroBlade.account.id,
@@ -1193,10 +1288,18 @@ function HydroBlade.Reporter:fail(reason, detail)
         role = HydroBlade.account.role,
         reason = tostring(reason or "unknown"),
         detail = tostring(detail or ""),
+        group_failure = options.group_failure == true,
+        kick_self = options.kick_self ~= false,
         job_id = game.JobId,
+        place_id = tostring(game.PlaceId),
     })
-    self:send(reason, detail)
-    HydroBlade.Session.new():kick(reason)
+    self:send(reason, detail, {
+        title = options.group_failure == true and "HydroBlade Group Failure" or "HydroBlade Rot Failure",
+        stage = options.stage,
+    })
+    if options.kick_self ~= false then
+        HydroBlade.Session.new():kick(reason)
+    end
 end
 
 HydroBlade.AlchemyService = {}
@@ -1326,14 +1429,43 @@ function HydroBlade.RoleRunner:send_status(status, extra)
 end
 
 function HydroBlade.RoleRunner:spawn()
-    HydroBlade.leave_menu()
-    task.wait(2)
+    if tonumber(game.PlaceId) == HydroBlade.loader_place_id then
+        self:send_status("waiting_for_menu", { current_place = tostring(game.PlaceId), target_place = tostring(HydroBlade.gaia_place_id) })
+        local menu_ready, menu_err = HydroBlade.wait_for_start_menu(5, 60)
+        if not menu_ready then
+            self:send_status("spawn_wait_failed", { error = menu_err or "StartMenu unavailable" })
+            return false, menu_err or "StartMenu unavailable"
+        end
+        local left_menu, leave_err = HydroBlade.leave_menu()
+        if not left_menu then
+            self:send_status("spawn_wait_failed", { error = leave_err or "StartMenu Play click failed" })
+            return false, leave_err or "StartMenu Play click failed"
+        end
+        self:send_status("waiting_for_gaia", { current_place = tostring(game.PlaceId), target_place = tostring(HydroBlade.gaia_place_id) })
+        local gaia_ready, gaia_err = HydroBlade.wait_for_place(HydroBlade.gaia_place_id, 180)
+        if not gaia_ready then
+            self:send_status("spawn_wait_failed", { error = gaia_err or "Gaia place unavailable" })
+            return false, gaia_err or "Gaia place unavailable"
+        end
+    elseif tonumber(game.PlaceId) ~= HydroBlade.gaia_place_id then
+        self:send_status("waiting_for_gaia", { current_place = tostring(game.PlaceId), target_place = tostring(HydroBlade.gaia_place_id) })
+        local gaia_ready, gaia_err = HydroBlade.wait_for_place(HydroBlade.gaia_place_id, 180)
+        if not gaia_ready then
+            self:send_status("spawn_wait_failed", { error = gaia_err or "Gaia place unavailable" })
+            return false, gaia_err or "Gaia place unavailable"
+        end
+    end
+    local character = HydroBlade.wait_for_character(20)
+    if not character then
+        self:send_status("spawn_wait_failed", { error = "character unavailable in Gaia" })
+        return false, "character unavailable in Gaia"
+    end
     self:send_status("spawned")
     return true
 end
 
-function HydroBlade.RoleRunner:fail(reason, detail)
-    self.reporter:fail(reason, detail)
+function HydroBlade.RoleRunner:fail(reason, detail, group_failure)
+    self.reporter:fail(reason, detail, { group_failure = group_failure == true })
     return false, reason
 end
 
@@ -1382,9 +1514,10 @@ function HydroBlade.RoleRunner:alchemy()
     end
     local brewed, brew_err = service:brew_switch_witch(station)
     if not brewed then
-        return self:fail("alchemy failed", brew_err)
+        return self:fail("alchemy failed", brew_err, brew_err == "Switch Witch verification failed")
     end
     self:send_status("switch_witch_brewed")
+    self.reporter:update("Switch Witch brewed", "Potion was created and inventory verification passed.")
     return true
 end
 
@@ -1433,16 +1566,17 @@ function HydroBlade.RoleRunner:alana()
     end
     local equipped, equip_err = self.inventory:equip("Switch Witch")
     if not equipped then
-        return self:fail("Switch Witch equip failed", equip_err)
+        return self:fail("Switch Witch equip failed", equip_err, true)
     end
     for _, choice in ipairs({ "Would this potion be of any use?", "Bye" }) do
         local found = HydroBlade.dialogue.wait_for_choice(choice, 5)
         if not found then
-            return self:fail("Alana potion dialogue missing", choice)
+            return self:fail("Alana potion dialogue missing", choice, true)
         end
         HydroBlade.dialogue.fire_choice(found)
         task.wait(0.3)
     end
+    self.reporter:update("Switch Witch turned in", "Alana accepted the potion dialogue path.")
     return true
 end
 
@@ -1470,7 +1604,11 @@ function HydroBlade.RoleRunner:run_sigil()
         return false, "workflow already running"
     end
     HydroBlade.runtime.running = true
-    self:spawn()
+    local spawned, spawn_err = self:spawn()
+    if not spawned then
+        HydroBlade.runtime.running = false
+        return false, spawn_err
+    end
     while HydroBlade.runtime.running do
         self:send_status("sigil_idle")
         task.wait(6)
@@ -1508,7 +1646,16 @@ function HydroBlade.RoleRunner:run_rot()
         return false, "workflow already running"
     end
     HydroBlade.runtime.running = true
-    self:spawn()
+    local spawned, spawn_err = self:spawn()
+    if not spawned then
+        HydroBlade.runtime.running = false
+        return false, spawn_err
+    end
+    task.wait(5)
+    if not HydroBlade.wait_for_character(20) then
+        HydroBlade.runtime.running = false
+        return false, "character unavailable after Gaia settle"
+    end
     self:start_survey()
     local ok, err = HydroBlade.movement.InnTeleport("Renova")
     if not ok then
@@ -1939,15 +2086,71 @@ function HydroBlade.bypasses.enable_all()
 end
 
 function HydroBlade.leave_menu()
+    local player = Players.LocalPlayer
+    local player_gui = player and player:FindFirstChildOfClass("PlayerGui")
+    local start_menu = player_gui and player_gui:FindFirstChild("StartMenu")
+    if not start_menu then
+        return true
+    end
+    local choices = start_menu:FindFirstChild("Choices")
+    local play = choices and choices:FindFirstChild("Play")
+    if not play then
+        for _, descendant in ipairs(start_menu:GetDescendants()) do
+            if descendant:IsA("GuiButton") and (descendant.Name == "Play" or tostring(descendant.Text) == "Play") then
+                play = descendant
+                break
+            end
+        end
+    end
+    if not play then
+        return false, "StartMenu Play button missing"
+    end
     pcall(function()
         Services.GuiService.SelectedObject = nil
     end)
+    local clicked = false
     pcall(function()
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Escape, false, game)
-        task.wait(0.05)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Escape, false, game)
+        if firesignal and play.MouseButton1Click then
+            firesignal(play.MouseButton1Click)
+            clicked = true
+        end
     end)
-    return true
+    pcall(function()
+        if firesignal and play.Activated then
+            firesignal(play.Activated)
+            clicked = true
+        end
+    end)
+    pcall(function()
+        if getconnections and play.MouseButton1Click then
+            for _, connection in ipairs(getconnections(play.MouseButton1Click)) do
+                if connection and connection.Fire then
+                    connection:Fire()
+                    clicked = true
+                elseif type(connection) == "function" then
+                    connection()
+                    clicked = true
+                end
+            end
+        end
+    end)
+    pcall(function()
+        if play.Activate then
+            play:Activate()
+            clicked = true
+        end
+    end)
+    pcall(function()
+        local pos = play.AbsolutePosition
+        local size = play.AbsoluteSize
+        local x = pos.X + size.X / 2
+        local y = pos.Y + size.Y / 2
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 1)
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 1)
+        clicked = true
+    end)
+    return clicked, clicked and nil or "StartMenu Play click failed"
 end
 
 HydroBlade.ClientHeartbeat = {}
