@@ -240,6 +240,48 @@ function HydroBlade.wait_for_start_menu(required_visible_seconds, timeout)
     return false, "StartMenu was not visible for " .. tostring(required) .. " seconds"
 end
 
+function HydroBlade.wait_for_start_menu_or_character(required_visible_seconds, timeout, character_fallback_seconds)
+    local required = tonumber(required_visible_seconds) or 5
+    local fallback_required = tonumber(character_fallback_seconds) or math.max(required, 20)
+    local deadline = os.clock() + (tonumber(timeout) or 60)
+    local visible_since = nil
+    local character_since = nil
+    repeat
+        local player = Players.LocalPlayer
+        local player_gui = player and player:FindFirstChildOfClass("PlayerGui")
+        local menu = player_gui and player_gui:FindFirstChild("StartMenu")
+        local visible = false
+        if menu then
+            if menu:IsA("ScreenGui") then
+                visible = menu.Enabled ~= false
+            elseif menu:IsA("GuiObject") then
+                visible = menu.Visible ~= false
+            else
+                visible = true
+            end
+        end
+        if visible then
+            visible_since = visible_since or os.clock()
+            character_since = nil
+            if os.clock() - visible_since >= required then
+                return true, "menu"
+            end
+        else
+            visible_since = nil
+            if HydroBlade.wait_for_character(0.05) then
+                character_since = character_since or os.clock()
+                if os.clock() - character_since >= fallback_required then
+                    return true, "character"
+                end
+            else
+                character_since = nil
+            end
+        end
+        task.wait(0.25)
+    until os.clock() >= deadline
+    return false, "StartMenu was not visible and character fallback was unavailable after " .. tostring(timeout or 60) .. " seconds"
+end
+
 function HydroBlade.wait_for_place(place_id, timeout)
     local target = tonumber(place_id)
     local deadline = os.clock() + (tonumber(timeout) or 120)
@@ -1430,18 +1472,7 @@ end
 
 function HydroBlade.RoleRunner:spawn()
     if tonumber(game.PlaceId) == HydroBlade.loader_place_id then
-        self:send_status("waiting_for_menu", { current_place = tostring(game.PlaceId), target_place = tostring(HydroBlade.gaia_place_id) })
-        local menu_ready, menu_err = HydroBlade.wait_for_start_menu(5, 60)
-        if not menu_ready then
-            self:send_status("spawn_wait_failed", { error = menu_err or "StartMenu unavailable" })
-            return false, menu_err or "StartMenu unavailable"
-        end
-        local left_menu, leave_err = HydroBlade.leave_menu()
-        if not left_menu then
-            self:send_status("spawn_wait_failed", { error = leave_err or "StartMenu Play click failed" })
-            return false, leave_err or "StartMenu Play click failed"
-        end
-        self:send_status("waiting_for_gaia", { current_place = tostring(game.PlaceId), target_place = tostring(HydroBlade.gaia_place_id) })
+        self:send_status("waiting_for_gaia_from_loader", { current_place = tostring(game.PlaceId), target_place = tostring(HydroBlade.gaia_place_id) })
         local gaia_ready, gaia_err = HydroBlade.wait_for_place(HydroBlade.gaia_place_id, 180)
         if not gaia_ready then
             self:send_status("spawn_wait_failed", { error = gaia_err or "Gaia place unavailable" })
@@ -1455,7 +1486,22 @@ function HydroBlade.RoleRunner:spawn()
             return false, gaia_err or "Gaia place unavailable"
         end
     end
-    local character = HydroBlade.wait_for_character(20)
+    self:send_status("waiting_for_gaia_menu", { current_place = tostring(game.PlaceId), target_place = tostring(HydroBlade.gaia_place_id) })
+    local spawn_ready, spawn_state_or_err = HydroBlade.wait_for_start_menu_or_character(5, 90, 20)
+    if not spawn_ready then
+        self:send_status("spawn_wait_failed", { error = spawn_state_or_err or "StartMenu unavailable in Gaia" })
+        return false, spawn_state_or_err or "StartMenu unavailable in Gaia"
+    end
+    if spawn_state_or_err == "menu" then
+        self:send_status("clicking_gaia_play")
+        local left_menu, leave_err = HydroBlade.leave_menu()
+        if not left_menu then
+            self:send_status("spawn_wait_failed", { error = leave_err or "StartMenu Play click failed in Gaia" })
+            return false, leave_err or "StartMenu Play click failed in Gaia"
+        end
+        self:send_status("gaia_play_clicked")
+    end
+    local character = HydroBlade.wait_for_character(45)
     if not character then
         self:send_status("spawn_wait_failed", { error = "character unavailable in Gaia" })
         return false, "character unavailable in Gaia"
@@ -2090,7 +2136,7 @@ function HydroBlade.leave_menu()
     local player_gui = player and player:FindFirstChildOfClass("PlayerGui")
     local start_menu = player_gui and player_gui:FindFirstChild("StartMenu")
     if not start_menu then
-        return true
+        return false, "StartMenu missing"
     end
     local choices = start_menu:FindFirstChild("Choices")
     local play = choices and choices:FindFirstChild("Play")

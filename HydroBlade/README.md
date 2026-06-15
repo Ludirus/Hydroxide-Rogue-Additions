@@ -42,7 +42,7 @@ The source, assets, and clean Lua client are tracked. Local account stores, sele
 - Provide client methods for bypass setup, dialogue choice snapshots, click/dialogue helpers, path movement, `InnTeleport`, ingredient lookup, ingredient pickup, and Sigil/Rot workflows.
 - Send enabled Rot failure and milestone webhooks with account, job, position, detail, executor screenshot path/URL/raw image capture, and screenshot attachment when the executor exposes a supported screenshot API.
 - Keep setup/local Rot failures scoped to the Rot Alt; only critical potion or Alana handoff failures mark the Sigil group failed.
-- Workflows wait until the Rogue StartMenu has been visible for five seconds, then click the StartMenu Play button directly instead of sending Escape.
+- Workflows wait until Gaia's Rogue StartMenu has been visible for five seconds, then click the StartMenu Play button directly instead of sending Escape.
 - After a Rot Alt gives Alana the Switch Witch, it returns to the Sigil's job, stays at menu, follows later Sigil server hops, and waits for a WS Rot request.
 - Restore the selected auto-execute folder on shutdown or folder changes by removing HydroBlade account boot files and reverting the current-run `koro.luau` edit.
 

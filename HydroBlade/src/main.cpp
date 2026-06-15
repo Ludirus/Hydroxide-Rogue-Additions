@@ -166,6 +166,7 @@ struct RuntimeAccount {
     std::wstring placeId;
     std::wstring jobId;
     std::wstring status;
+    std::wstring statusDetail;
     uint64_t lastSeen = 0;
 };
 
@@ -1880,6 +1881,11 @@ RuntimeAccount RuntimeFromMessage(const std::string& message) {
     account.placeId = Widen(ExtractJsonString(message, "place_id").value_or(""));
     account.jobId = Widen(ExtractJsonString(message, "job_id").value_or(""));
     account.status = Widen(ExtractJsonString(message, "status").value_or(""));
+    if (const auto error = ExtractJsonString(message, "error")) {
+        account.statusDetail = Widen(*error);
+    } else if (const auto detail = ExtractJsonString(message, "detail")) {
+        account.statusDetail = Widen(*detail);
+    }
     account.lastSeen = GetTickCount64();
     return account;
 }
@@ -1896,17 +1902,31 @@ bool IsRotRequested(const RuntimeAccount& account) {
     return !groupId.empty() && g_requestedRotGroups.find(groupId) != g_requestedRotGroups.end();
 }
 
+std::wstring RuntimeStatusText(const std::wstring& status) {
+    if (status == L"waiting_for_gaia_from_loader") return L"waiting for Gaia from loader";
+    if (status == L"waiting_for_gaia_menu") return L"waiting for Gaia StartMenu";
+    if (status == L"clicking_gaia_play") return L"clicking Gaia Play";
+    if (status == L"gaia_play_clicked") return L"clicked Gaia Play";
+    if (status == L"spawned") return L"spawned into Gaia";
+    if (status == L"spawn_wait_failed") return L"spawn wait failed";
+    return L"";
+}
+
 void UpsertRuntimeAccount(const RuntimeAccount& account) {
     if (account.accountId.empty()) {
         return;
     }
     std::wstring oldPlaceId;
     std::wstring oldJobId;
+    std::wstring oldStatus;
+    std::wstring oldStatusDetail;
     std::wstring displayName;
     std::lock_guard<std::recursive_mutex> lock(g_runtimeMutex);
     RuntimeAccount& stored = g_runtimeAccounts[account.accountId];
     oldPlaceId = stored.placeId;
     oldJobId = stored.jobId;
+    oldStatus = stored.status;
+    oldStatusDetail = stored.statusDetail;
     if (!account.accountId.empty()) stored.accountId = account.accountId;
     if (!account.parentId.empty()) stored.parentId = account.parentId;
     if (!account.role.empty()) stored.role = account.role;
@@ -1914,11 +1934,15 @@ void UpsertRuntimeAccount(const RuntimeAccount& account) {
     if (!account.userId.empty()) stored.userId = account.userId;
     if (!account.placeId.empty()) stored.placeId = account.placeId;
     if (!account.jobId.empty()) stored.jobId = account.jobId;
-    if (!account.status.empty()) stored.status = account.status;
+    if (!account.status.empty()) {
+        stored.status = account.status;
+        stored.statusDetail = account.statusDetail;
+    }
     stored.lastSeen = account.lastSeen;
     displayName = !stored.username.empty() ? stored.username : (!stored.userId.empty() ? L"User " + stored.userId : stored.accountId);
     const bool placeChanged = !stored.placeId.empty() && stored.placeId != oldPlaceId;
     const bool jobChanged = !stored.jobId.empty() && stored.jobId != oldJobId;
+    const bool statusChanged = !stored.status.empty() && (stored.status != oldStatus || stored.statusDetail != oldStatusDetail);
     const bool reachedGaia = placeChanged && IsGaiaPlaceId(stored.placeId);
     const std::wstring placeId = stored.placeId;
     const std::wstring jobId = stored.jobId;
@@ -1927,6 +1951,14 @@ void UpsertRuntimeAccount(const RuntimeAccount& account) {
     }
     if (reachedGaia && !jobId.empty()) {
         SetStatus(displayName + L" reached Gaia place " + std::to_wstring(kRogueGaiaPlaceId) + L" with job " + jobId + L".");
+    }
+    const std::wstring statusText = RuntimeStatusText(stored.status);
+    if (statusChanged && !statusText.empty()) {
+        std::wstring line = displayName + L": " + statusText + L".";
+        if (!stored.statusDetail.empty()) {
+            line += L" " + stored.statusDetail;
+        }
+        SetStatus(line);
     }
 }
 
