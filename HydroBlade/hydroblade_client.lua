@@ -1499,6 +1499,9 @@ function HydroBlade.RoleRunner:spawn()
         self:send_status("spawn_wait_failed", { error = "character unavailable in Gaia" })
         return false, "character unavailable in Gaia"
     end
+    if env.HYDROBLADE_ENABLE_BYPASSES ~= false then
+        HydroBlade.bypasses.enable_remote_bypasses()
+    end
     self:send_status("spawned")
     return true
 end
@@ -2103,7 +2106,8 @@ function HydroBlade.bypasses.aa_bypass()
     return true
 end
 
-function HydroBlade.bypasses.enable_all()
+function HydroBlade.bypasses.enable_all(options)
+    options = options or {}
     HydroBlade.dialogue.setup_listener()
     if HydroBlade.bypasses.config.anti_afk then
         HydroBlade.bypasses.enable_anti_afk()
@@ -2120,32 +2124,23 @@ function HydroBlade.bypasses.enable_all()
     if HydroBlade.bypasses.config.auto_dialogue then
         HydroBlade.bypasses.enable_auto_dialogue()
     end
-    HydroBlade.bypasses.enable_remote_bypasses()
+    if options.remote ~= false then
+        HydroBlade.bypasses.enable_remote_bypasses()
+    end
     return true
 end
 
 function HydroBlade.leave_menu()
     local player = Players.LocalPlayer
-    local deadline = os.clock() + 30
-    local saw_menu = false
+    local deadline = tick() + 30
 
-    while os.clock() < deadline do
+    while tick() < deadline do
         local player_gui = player and player:FindFirstChild("PlayerGui")
         local start_menu = player_gui and player_gui:FindFirstChild("StartMenu")
         local choices = start_menu and start_menu:FindFirstChild("Choices")
         local play_button = choices and choices:FindFirstChild("Play")
 
-        if not play_button and start_menu then
-            for _, descendant in ipairs(start_menu:GetDescendants()) do
-                if descendant:IsA("GuiButton") and (descendant.Name == "Play" or tostring(descendant.Text) == "Play") then
-                    play_button = descendant
-                    break
-                end
-            end
-        end
-
         if play_button then
-            saw_menu = true
             pcall(function()
                 firesignal(play_button.MouseButton1Click)
             end)
@@ -2177,7 +2172,7 @@ function HydroBlade.leave_menu()
     if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
         return true
     end
-    return false, saw_menu and "StartMenu Play did not spawn character" or "StartMenu Play button missing"
+    return false, "StartMenu Play did not spawn character"
 end
 
 HydroBlade.ClientHeartbeat = {}
@@ -2465,7 +2460,7 @@ HydroBlade.heartbeat = HydroBlade.ClientHeartbeat.new(5)
 
 task.defer(function()
     if env.HYDROBLADE_ENABLE_BYPASSES ~= false then
-        pcall(HydroBlade.bypasses.enable_all)
+        pcall(HydroBlade.bypasses.enable_all, { remote = false })
     else
         HydroBlade.dialogue.setup_listener()
     end
