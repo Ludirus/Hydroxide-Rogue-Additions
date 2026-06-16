@@ -10,11 +10,24 @@ add_executable(HydroBlade WIN32
     src/main.cpp
 )
 
+add_executable(update
+    src/update.cpp
+)
+
 target_compile_definitions(HydroBlade PRIVATE
     UNICODE
     _UNICODE
     NOMINMAX
     WIN32_LEAN_AND_MEAN
+)
+
+target_compile_definitions(update PRIVATE
+    UNICODE
+    _UNICODE
+    NOMINMAX
+    WIN32_LEAN_AND_MEAN
+    HYDROBLADE_SOURCE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\"
+    HYDROBLADE_CXX_COMPILER=\"${CMAKE_CXX_COMPILER}\"
 )
 
 target_link_libraries(HydroBlade PRIVATE
@@ -26,6 +39,18 @@ target_link_libraries(HydroBlade PRIVATE
     bcrypt
     gdiplus
     ole32
+)
+
+target_link_options(HydroBlade PRIVATE
+    -Wl,--no-insert-timestamp
+)
+
+target_link_libraries(update PRIVATE
+    bcrypt
+)
+
+set_target_properties(update PROPERTIES
+    OUTPUT_NAME "update"
 )
 
 add_custom_command(TARGET HydroBlade POST_BUILD

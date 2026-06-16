@@ -45,6 +45,7 @@ The source, assets, and clean Lua client are tracked. Local account stores, sele
 - Workflows wait until Gaia's Rogue StartMenu has been visible for five seconds, then click the StartMenu Play button directly instead of sending Escape.
 - After a Rot Alt gives Alana the Switch Witch, it returns to the Sigil's job, stays at menu, follows later Sigil server hops, and waits for a WS Rot request.
 - Restore the selected auto-execute folder on shutdown or folder changes by removing HydroBlade account boot files and reverting the current-run `koro.luau` edit.
+- Build `update.exe`, a local verifier/updater that rebuilds `HydroBlade.exe` from the checked-out source, compares SHA-256 hashes, and replaces the app when the latest build differs.
 
 ## WebSocket Methods
 
@@ -71,11 +72,15 @@ cmake -S HydroBlade -B HydroBlade/build -G "MinGW Makefiles"
 cmake --build HydroBlade/build
 ```
 
+Open `HydroBlade/build/update.exe` to verify and refresh `HydroBlade.exe` against the latest checked-out source. It attempts a `git pull --ff-only` when the repo is available, then rebuilds and compares hashes. Close HydroBlade before running it if the app exe needs to be replaced.
+
 If `mingw32-make` is not on PATH but MinGW g++ is available:
 
 ```powershell
 New-Item -ItemType Directory -Force HydroBlade\build | Out-Null
-& "C:\msys64\mingw64\bin\g++.exe" -std=c++17 -municode -mwindows -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN HydroBlade\src\main.cpp -o HydroBlade\build\HydroBlade.exe -lcomctl32 -lwinhttp -lshell32 -lshlwapi -lws2_32 -lbcrypt -lgdiplus -lole32
+$hydroBladeSource = (Resolve-Path HydroBlade).Path.Replace('\', '/')
+& "C:\msys64\mingw64\bin\g++.exe" -std=c++17 -municode -mwindows -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN HydroBlade\src\main.cpp -o HydroBlade\build\HydroBlade.exe -Wl,--no-insert-timestamp -lcomctl32 -lwinhttp -lshell32 -lshlwapi -lws2_32 -lbcrypt -lgdiplus -lole32
+& "C:\msys64\mingw64\bin\g++.exe" -std=c++17 -municode -DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN "-DHYDROBLADE_SOURCE_DIR=`"$hydroBladeSource`"" "-DHYDROBLADE_CXX_COMPILER=`"C:/msys64/mingw64/bin/g++.exe`"" HydroBlade\src\update.cpp -o HydroBlade\build\update.exe -lbcrypt
 New-Item -ItemType Directory -Force HydroBlade\build\assets | Out-Null
 Copy-Item -Force HydroBlade\assets\* HydroBlade\build\assets\
 ```

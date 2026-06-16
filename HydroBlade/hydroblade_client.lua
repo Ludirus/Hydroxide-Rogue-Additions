@@ -238,15 +238,15 @@ function HydroBlade.fire_start_menu_join()
     return ok, err
 end
 
-function HydroBlade.is_request_remote(instance, requests)
-    if not requests or typeof(instance) ~= "Instance" then
+function HydroBlade.is_descendant_of(instance, ancestor)
+    if not ancestor or typeof(instance) ~= "Instance" then
         return false
     end
-    if instance.Parent == requests then
+    if instance.Parent == ancestor then
         return true
     end
     local ok, result = pcall(function()
-        return instance:IsDescendantOf(requests)
+        return instance:IsDescendantOf(ancestor)
     end)
     return ok and result == true
 end
@@ -2065,12 +2065,13 @@ function HydroBlade.bypasses.enable_remote_bypasses()
             local requests = ReplicatedStorage:FindFirstChild("Requests")
             local remotes = ReplicatedStorage:FindFirstChild("Remotes")
 
-            if type(args[1]) == "table" and HydroBlade.is_request_remote(self, requests) then
+            if args[1] ~= nil and type(args[1]) ~= "string" then
                 local _, menu_visible = HydroBlade.start_menu_state()
                 if menu_visible then
                     local remote_name = tostring(self.Name or "")
                     local lowered = remote_name:lower()
-                    if lowered:find("join", 1, true) or lowered:find("server", 1, true) or lowered:find("public", 1, true) then
+                    if HydroBlade.is_descendant_of(self, requests)
+                        and (lowered:find("join", 1, true) or lowered:find("server", 1, true) or lowered:find("public", 1, true)) then
                         HydroBlade.status("start_menu_join_normalized", { detail = remote_name })
                         return old(self, "hey")
                     end
