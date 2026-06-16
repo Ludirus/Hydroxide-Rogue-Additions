@@ -226,31 +226,6 @@ function HydroBlade.start_menu_state()
     return menu, visible
 end
 
-function HydroBlade.fire_start_menu_join()
-    local requests = ReplicatedStorage:FindFirstChild("Requests")
-    local join = requests and requests:FindFirstChild("JoinPublicServer")
-    if not (join and join:IsA("RemoteEvent")) then
-        return false, "JoinPublicServer remote missing"
-    end
-    local ok, err = pcall(function()
-        join:FireServer("hey")
-    end)
-    return ok, err
-end
-
-function HydroBlade.is_descendant_of(instance, ancestor)
-    if not ancestor or typeof(instance) ~= "Instance" then
-        return false
-    end
-    if instance.Parent == ancestor then
-        return true
-    end
-    local ok, result = pcall(function()
-        return instance:IsDescendantOf(ancestor)
-    end)
-    return ok and result == true
-end
-
 function HydroBlade.wait_for_start_menu(required_visible_seconds, timeout)
     local required = tonumber(required_visible_seconds) or 5
     local deadline = os.clock() + (tonumber(timeout) or 45)
@@ -2065,21 +2040,6 @@ function HydroBlade.bypasses.enable_remote_bypasses()
             local requests = ReplicatedStorage:FindFirstChild("Requests")
             local remotes = ReplicatedStorage:FindFirstChild("Remotes")
 
-            if args[1] ~= nil and type(args[1]) ~= "string" then
-                local _, menu_visible = HydroBlade.start_menu_state()
-                if menu_visible then
-                    local remote_name = tostring(self.Name or "")
-                    local lowered = remote_name:lower()
-                    if HydroBlade.is_descendant_of(self, requests)
-                        and (lowered:find("join", 1, true) or lowered:find("server", 1, true) or lowered:find("public", 1, true)) then
-                        HydroBlade.status("start_menu_join_normalized", { detail = remote_name })
-                        return old(self, "hey")
-                    end
-                    HydroBlade.status("start_menu_table_remote_blocked", { detail = remote_name })
-                    return nil
-                end
-            end
-
             if HydroBlade.bypasses.config.no_fall and remotes and self.Parent == remotes and #args == 2 and type(args[2]) == "table" then
                 return nil
             end
@@ -2165,105 +2125,59 @@ function HydroBlade.bypasses.enable_all()
 end
 
 function HydroBlade.leave_menu()
-    local start_menu, visible = HydroBlade.start_menu_state()
-    if not start_menu then
-        return false, "StartMenu missing"
-    end
-    if not visible then
-        return true
-    end
-    local choices = start_menu:FindFirstChild("Choices")
-    local play = choices and choices:FindFirstChild("Play")
-    if not play then
-        for _, descendant in ipairs(start_menu:GetDescendants()) do
-            if descendant:IsA("GuiButton") and (descendant.Name == "Play" or tostring(descendant.Text) == "Play") then
-                play = descendant
-                break
+    local player = Players.LocalPlayer
+    local deadline = os.clock() + 30
+    local saw_menu = false
+
+    while os.clock() < deadline do
+        local player_gui = player and player:FindFirstChild("PlayerGui")
+        local start_menu = player_gui and player_gui:FindFirstChild("StartMenu")
+        local choices = start_menu and start_menu:FindFirstChild("Choices")
+        local play_button = choices and choices:FindFirstChild("Play")
+
+        if not play_button and start_menu then
+            for _, descendant in ipairs(start_menu:GetDescendants()) do
+                if descendant:IsA("GuiButton") and (descendant.Name == "Play" or tostring(descendant.Text) == "Play") then
+                    play_button = descendant
+                    break
+                end
             end
         end
-    end
-    if not play then
-        return false, "StartMenu Play button missing"
-    end
 
-    local function menu_closed()
-        local _, current_visible = HydroBlade.start_menu_state()
-        return current_visible ~= true
-    end
+        if play_button then
+            saw_menu = true
+            pcall(function()
+                firesignal(play_button.MouseButton1Click)
+            end)
+            pcall(function()
+                firesignal(play_button.MouseButton1Down)
+            end)
+            pcall(function()
+                firesignal(play_button.Activated)
+            end)
 
-    local function wait_for_close(duration)
-        local deadline = os.clock() + duration
-        repeat
-            if menu_closed() then
+            if VirtualInputManager and play_button.AbsolutePosition and play_button.AbsoluteSize then
+                pcall(function()
+                    local center = play_button.AbsolutePosition + (play_button.AbsoluteSize / 2)
+                    VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 1)
+                    task.wait(0.05)
+                    VirtualInputManager:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 1)
+                end)
+            end
+
+            task.wait(0.35)
+            if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
                 return true
             end
-            task.wait(0.15)
-        until os.clock() >= deadline
-        return menu_closed()
-    end
-
-    local join_ok = HydroBlade.fire_start_menu_join()
-    if join_ok and wait_for_close(5) then
-        return true
-    end
-
-    local function click_at(x, y)
-        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 1)
-        task.wait(0.05)
-        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 1)
-    end
-
-    local function click_button(use_inset)
-        local pos = play.AbsolutePosition
-        local size = play.AbsoluteSize
-        if size.X <= 0 or size.Y <= 0 then
-            return false
         end
-        local x = pos.X + size.X / 2
-        local y = pos.Y + size.Y / 2
-        if use_inset then
-            local ok, inset = pcall(function()
-                return Services.GuiService:GetGuiInset()
-            end)
-            if ok and inset then
-                x += inset.X
-                y += inset.Y
-            end
-        end
-        click_at(x, y)
-        return true
+
+        task.wait(0.25)
     end
 
-    pcall(function()
-        Services.GuiService.SelectedObject = play
-    end)
-
-    local ok, attempted = pcall(click_button, false)
-    local clicked = ok and attempted == true
-    if clicked and wait_for_close(3) then
+    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
         return true
     end
-
-    ok, attempted = pcall(click_button, true)
-    clicked = (ok and attempted == true) or clicked
-    if clicked and wait_for_close(3) then
-        return true
-    end
-
-    pcall(function()
-        if Services.GuiService.SelectedObject ~= play then
-            Services.GuiService.SelectedObject = play
-        end
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
-        task.wait(0.05)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
-        clicked = true
-    end)
-    if clicked and wait_for_close(5) then
-        return true
-    end
-
-    return false, "StartMenu Play click did not close menu"
+    return false, saw_menu and "StartMenu Play did not spawn character" or "StartMenu Play button missing"
 end
 
 HydroBlade.ClientHeartbeat = {}

@@ -42,11 +42,16 @@ target_link_libraries(HydroBlade PRIVATE
 )
 
 target_link_options(HydroBlade PRIVATE
+    -municode
     -Wl,--no-insert-timestamp
 )
 
 target_link_libraries(update PRIVATE
     bcrypt
+)
+
+target_link_options(update PRIVATE
+    -municode
 )
 
 set_target_properties(update PROPERTIES

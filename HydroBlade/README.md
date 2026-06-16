@@ -72,6 +72,13 @@ cmake -S HydroBlade -B HydroBlade/build -G "MinGW Makefiles"
 cmake --build HydroBlade/build
 ```
 
+If using Ninja with the MSYS2 MinGW compiler:
+
+```powershell
+cmake -S HydroBlade -B HydroBlade/build -G Ninja -DCMAKE_CXX_COMPILER=C:/msys64/mingw64/bin/g++.exe
+cmake --build HydroBlade/build
+```
+
 Open `HydroBlade/build/update.exe` to verify and refresh `HydroBlade.exe` against the latest checked-out source. It attempts a `git pull --ff-only` when the repo is available, then rebuilds and compares hashes. Close HydroBlade before running it if the app exe needs to be replaced.
 
 If `mingw32-make` is not on PATH but MinGW g++ is available:
