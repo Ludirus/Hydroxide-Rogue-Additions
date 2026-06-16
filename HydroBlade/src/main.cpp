@@ -1909,6 +1909,8 @@ std::wstring RuntimeStatusText(const std::wstring& status) {
     if (status == L"gaia_play_clicked") return L"clicked Gaia Play";
     if (status == L"spawned") return L"spawned into Gaia";
     if (status == L"spawn_wait_failed") return L"spawn wait failed";
+    if (status == L"start_menu_join_normalized") return L"normalized StartMenu join call";
+    if (status == L"start_menu_table_remote_blocked") return L"blocked malformed StartMenu remote";
     return L"";
 }
 

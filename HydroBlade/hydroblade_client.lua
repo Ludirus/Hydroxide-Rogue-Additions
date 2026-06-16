@@ -238,6 +238,19 @@ function HydroBlade.fire_start_menu_join()
     return ok, err
 end
 
+function HydroBlade.is_request_remote(instance, requests)
+    if not requests or typeof(instance) ~= "Instance" then
+        return false
+    end
+    if instance.Parent == requests then
+        return true
+    end
+    local ok, result = pcall(function()
+        return instance:IsDescendantOf(requests)
+    end)
+    return ok and result == true
+end
+
 function HydroBlade.wait_for_start_menu(required_visible_seconds, timeout)
     local required = tonumber(required_visible_seconds) or 5
     local deadline = os.clock() + (tonumber(timeout) or 45)
@@ -2052,8 +2065,18 @@ function HydroBlade.bypasses.enable_remote_bypasses()
             local requests = ReplicatedStorage:FindFirstChild("Requests")
             local remotes = ReplicatedStorage:FindFirstChild("Remotes")
 
-            if requests and self.Parent == requests and self.Name == "JoinPublicServer" and type(args[1]) ~= "string" then
-                return old(self, "hey")
+            if type(args[1]) == "table" and HydroBlade.is_request_remote(self, requests) then
+                local _, menu_visible = HydroBlade.start_menu_state()
+                if menu_visible then
+                    local remote_name = tostring(self.Name or "")
+                    local lowered = remote_name:lower()
+                    if lowered:find("join", 1, true) or lowered:find("server", 1, true) or lowered:find("public", 1, true) then
+                        HydroBlade.status("start_menu_join_normalized", { detail = remote_name })
+                        return old(self, "hey")
+                    end
+                    HydroBlade.status("start_menu_table_remote_blocked", { detail = remote_name })
+                    return nil
+                end
             end
 
             if HydroBlade.bypasses.config.no_fall and remotes and self.Parent == remotes and #args == 2 and type(args[2]) == "table" then
