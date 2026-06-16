@@ -21,6 +21,12 @@ local CollectionService = Services.CollectionService
 local TeleportService = Services.TeleportService
 local VirtualUser = game:GetService("VirtualUser")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local mem_ok, MemStorageService = pcall(function()
+    return Services.MemStorageService
+end)
+if not mem_ok then
+    MemStorageService = nil
+end
 
 local env = getgenv and getgenv() or _G
 
@@ -47,11 +53,13 @@ HydroBlade.methods = {}
 HydroBlade.connections = {}
 HydroBlade.runtime = {
     workflow = HydroBlade.account.workflow,
-    parent_job_id = "",
+    parent_job_id = tostring(env.HYDROBLADE_PARENT_JOB_ID or ""),
     rot_stage = tostring(env.HYDROBLADE_ROT_STAGE or ""),
     rot_requested = env.HYDROBLADE_ROT_REQUESTED == true,
     kick_reason = "",
     running = false,
+    teleport_failed = false,
+    teleport_fail_reason = "",
 }
 
 local last_dialogue_data = nil
@@ -104,6 +112,10 @@ local function lua_value(value)
     return string.format("%q", tostring(value or ""))
 end
 
+local function request_function()
+    return (syn and syn.request) or (http and http.request) or request or http_request
+end
+
 function HydroBlade.queue_state(values)
     local queue = queue_on_teleport or queueonteleport or queueteleport or (syn and syn.queue_on_teleport)
     if type(queue) ~= "function" or type(values) ~= "table" then
@@ -115,6 +127,55 @@ function HydroBlade.queue_state(values)
     end
     local ok = pcall(queue, table.concat(lines, "\n"))
     return ok
+end
+
+function HydroBlade.queue_loader_state(values)
+    local queue = queue_on_teleport or queueonteleport or queueteleport or (syn and syn.queue_on_teleport)
+    if type(queue) ~= "function" then
+        return false, "queue_on_teleport unavailable"
+    end
+
+    local state = {
+        HYDROBLADE_ACCOUNT_ID = HydroBlade.account.id,
+        HYDROBLADE_PARENT_ID = HydroBlade.account.parent_id,
+        HYDROBLADE_USERNAME = HydroBlade.account.username,
+        HYDROBLADE_USER_ID = HydroBlade.account.user_id,
+        HYDROBLADE_ALIAS = HydroBlade.account.alias,
+        HYDROBLADE_ROLE = HydroBlade.account.role,
+        HYDROBLADE_ACTIVE = HydroBlade.account.active == true,
+        HYDROBLADE_GAIA_JOB_ID = HydroBlade.account.gaia_job_id,
+        HYDROBLADE_WORKFLOW = HydroBlade.runtime.workflow,
+        HYDROBLADE_FAILURE_WEBHOOK = HydroBlade.account.failure_webhook,
+        HYDROBLADE_FAILURE_WEBHOOK_ENABLED = HydroBlade.account.failure_webhook_enabled == true,
+        HYDROBLADE_CLIENT = true,
+        HYDROBLADE_BOOT_MODE = "account",
+        HYDROBLADE_DIST_ENTRYPOINT = "dist/hydroblade_client.lua",
+        HYDROBLADE_WS_URL = HydroBlade.ws_url,
+        HYDROBLADE_PARENT_JOB_ID = HydroBlade.runtime.parent_job_id,
+        HYDROBLADE_ROT_STAGE = HydroBlade.runtime.rot_stage,
+        HYDROBLADE_ROT_REQUESTED = HydroBlade.runtime.rot_requested == true,
+    }
+    if type(values) == "table" then
+        for key, value in pairs(values) do
+            state[tostring(key)] = value
+        end
+    end
+
+    local lines = {
+        "repeat task.wait() until game:IsLoaded() and game:FindService(\"Players\") and game.Players.LocalPlayer",
+        "local env = getgenv and getgenv() or _G",
+    }
+    for key, value in pairs(state) do
+        table.insert(lines, "env." .. tostring(key) .. " = " .. lua_value(value))
+    end
+    table.insert(lines, "env.HYDROXIDE_REPO = env.HYDROXIDE_REPO or \"https://raw.githubusercontent.com/Ludirus/Hydroxide-Rogue-Additions/main/\"")
+    table.insert(lines, "local repo = tostring(env.HYDROXIDE_REPO)")
+    table.insert(lines, "if repo:sub(-1) ~= \"/\" then repo = repo .. \"/\" end")
+    table.insert(lines, "local ok, err = pcall(function() return loadstring(game:HttpGet(repo .. \"loader.lua\", true))() end)")
+    table.insert(lines, "if not ok and warn then warn(\"[HydroBlade] loader failed\", err) end")
+
+    local ok, err = pcall(queue, table.concat(lines, "\n"))
+    return ok, err
 end
 
 local function send_raw(socket, text)
@@ -374,6 +435,25 @@ local function find_click_detector(instance)
     return instance:FindFirstChildWhichIsA("ClickDetector", true)
 end
 
+local function player_near_position(position, radius)
+    if typeof(position) ~= "Vector3" then
+        return false
+    end
+    radius = tonumber(radius) or 500
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= Players.LocalPlayer and player.Character then
+            local other_root = player.Character:FindFirstChild("HumanoidRootPart")
+            if other_root then
+                local distance = (other_root.Position - position).Magnitude
+                if distance <= radius then
+                    return true, player, distance
+                end
+            end
+        end
+    end
+    return false
+end
+
 local function find_tool(container, names)
     if not container then
         return nil
@@ -550,6 +630,24 @@ function HydroBlade.movement.tween_to(target, seconds)
     return true
 end
 
+function HydroBlade.movement.inn_danger_radius()
+    return tonumber(env.HYDROBLADE_INN_DANGER_RADIUS) or 500
+end
+
+function HydroBlade.movement.check_inn_danger(inn_name, position)
+    local radius = HydroBlade.movement.inn_danger_radius()
+    local unsafe, player, distance = player_near_position(position, radius)
+    if not unsafe then
+        return false
+    end
+    return true, {
+        player = player,
+        distance = distance,
+        radius = radius,
+        inn = inn_name,
+    }
+end
+
 function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
     local character = local_character()
     if not character then
@@ -575,6 +673,33 @@ function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
     local target = cframe_from(point)
     if not target then
         return false, "missing inn teleport point"
+    end
+
+    local unsafe, danger = HydroBlade.movement.check_inn_danger(inn_name or tostring(npcName or "Inn"), target.Position)
+    if unsafe then
+        local player_name = danger.player and danger.player.Name or "unknown"
+        local reason = string.format(
+            "inn danger precheck: %s near %s within %.0f studs",
+            tostring(player_name),
+            tostring(inn_name or "target inn"),
+            tonumber(danger.distance) or 0
+        )
+        HydroBlade.status("inn_danger_serverhop", {
+            reason = reason,
+            inn = tostring(inn_name or ""),
+            player = tostring(player_name),
+            distance = tostring(math.floor(tonumber(danger.distance) or 0)),
+            radius = tostring(math.floor(tonumber(danger.radius) or 0)),
+        })
+        local hopped, hop_err = HydroBlade.Session.new():server_hop(nil, reason, {
+            rot_stage = HydroBlade.runtime.rot_stage,
+        })
+        if hopped then
+            while true do
+                task.wait(1)
+            end
+        end
+        return false, hop_err or "inn danger serverhop failed"
     end
 
     npcName = tostring(npcName or "Inn Keeper")
@@ -1130,22 +1255,433 @@ function HydroBlade.Session.new()
     return setmetatable({}, HydroBlade.Session)
 end
 
+function HydroBlade.Session:mem_get(key)
+    if not MemStorageService then
+        return nil
+    end
+    local ok, value = pcall(function()
+        return MemStorageService:GetItem(key)
+    end)
+    if ok then
+        return value
+    end
+    return nil
+end
+
+function HydroBlade.Session:mem_set(key, value)
+    if not MemStorageService then
+        return false
+    end
+    local ok = pcall(function()
+        MemStorageService:SetItem(key, value)
+    end)
+    return ok
+end
+
+function HydroBlade.Session:server_history_key()
+    return "RecentServers_" .. tostring(game.PlaceId)
+end
+
+function HydroBlade.Session:get_server_history()
+    local stored = self:mem_get(self:server_history_key())
+    if type(stored) ~= "string" or stored == "" then
+        return {}
+    end
+    local ok, history = pcall(function()
+        return HttpService:JSONDecode(stored)
+    end)
+    if ok and type(history) == "table" then
+        return history
+    end
+    return {}
+end
+
+function HydroBlade.Session:add_server_to_history(job_id)
+    job_id = tostring(job_id or "")
+    if job_id == "" then
+        return false
+    end
+    local history = self:get_server_history()
+    table.insert(history, 1, job_id)
+    while #history > 15 do
+        table.remove(history)
+    end
+    return self:mem_set(self:server_history_key(), encode(history))
+end
+
+function HydroBlade.Session:clear_server_history()
+    return self:mem_set(self:server_history_key(), encode({}))
+end
+
+function HydroBlade.Session:is_recent_server(job_id, history)
+    for _, recent in ipairs(history or {}) do
+        if tostring(recent) == tostring(job_id) then
+            return true
+        end
+    end
+    return false
+end
+
+function HydroBlade.Session:is_restricted_server_info(server_folder)
+    if typeof(server_folder) ~= "Instance" then
+        return false
+    end
+    for _, child in ipairs(server_folder:GetChildren()) do
+        local marker = tostring(child.Name or ""):lower()
+        if marker:find("private", 1, true) or marker:find("reserved", 1, true) or marker:find("restricted", 1, true) then
+            if child:IsA("BoolValue") and child.Value == true then
+                return true
+            end
+            if child:IsA("StringValue") and tostring(child.Value) ~= "" then
+                return true
+            end
+            if child:IsA("IntValue") and child.Value ~= 0 then
+                return true
+            end
+        end
+        if child:IsA("StringValue") then
+            local value = tostring(child.Value or ""):lower()
+            if value:find("private", 1, true) or value:find("reserved", 1, true) or value:find("restricted", 1, true) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+function HydroBlade.Session:public_server_player_count(server_folder)
+    local players_value = server_folder and server_folder:FindFirstChild("Players")
+    if not (players_value and players_value:IsA("StringValue")) then
+        return nil
+    end
+    local ok, player_data = pcall(function()
+        return HttpService:JSONDecode(players_value.Value)
+    end)
+    if ok and type(player_data) == "table" then
+        return #player_data
+    end
+    return nil
+end
+
+function HydroBlade.Session:is_public_server_joinable(server_folder, min_players, history)
+    if not (server_folder and server_folder:IsA("Folder")) then
+        return false
+    end
+    local job_id = tostring(server_folder.Name or "")
+    if job_id == "" or job_id == tostring(game.JobId or "") or self:is_recent_server(job_id, history) then
+        return false
+    end
+    if self:is_restricted_server_info(server_folder) then
+        return false
+    end
+    local player_count = self:public_server_player_count(server_folder)
+    return player_count ~= nil and player_count < 23 and player_count >= (tonumber(min_players) or 0)
+end
+
+function HydroBlade.Session:get_serverhop_candidates(min_players, ignore_history)
+    local server_info = ReplicatedStorage:FindFirstChild("ServerInfo")
+    if not server_info then
+        return {}
+    end
+    local history = ignore_history and {} or self:get_server_history()
+    local candidates = {}
+    for _, server in ipairs(server_info:GetChildren()) do
+        if self:is_public_server_joinable(server, min_players, history) then
+            table.insert(candidates, server.Name)
+        end
+    end
+    return candidates
+end
+
+function HydroBlade.Session:get_public_server_api_candidates(min_players, ignore_history, max_pages)
+    local req = request_function()
+    if not req then
+        return {}
+    end
+
+    min_players = tonumber(min_players) or 0
+    max_pages = math.max(1, math.min(tonumber(max_pages) or 5, 10))
+    local history = ignore_history and {} or self:get_server_history()
+    local candidates = {}
+    local seen = {}
+    local cursor = nil
+
+    for _ = 1, max_pages do
+        local url = string.format("https://games.roblox.com/v1/games/%s/servers/Public?sortOrder=2&excludeFullGames=true&limit=100", tostring(game.PlaceId))
+        if cursor and cursor ~= "" then
+            url = url .. "&cursor=" .. HttpService:UrlEncode(cursor)
+        end
+
+        local ok, response = pcall(function()
+            return req({
+                Url = url,
+                Method = "GET",
+                Headers = {
+                    ["Accept"] = "application/json",
+                },
+            })
+        end)
+        local status_code = response and tonumber(response.StatusCode or response.Status)
+        if not ok or not response or status_code ~= 200 then
+            break
+        end
+
+        local body = response.Body or response.body
+        local decode_ok, data = pcall(function()
+            return HttpService:JSONDecode(body)
+        end)
+        if not decode_ok or type(data) ~= "table" or type(data.data) ~= "table" then
+            break
+        end
+
+        for _, server in ipairs(data.data) do
+            local job_id = tostring(server.id or "")
+            local player_count = tonumber(server.playing) or 0
+            local max_players = tonumber(server.maxPlayers) or 23
+            if job_id ~= ""
+                and job_id ~= tostring(game.JobId or "")
+                and not seen[job_id]
+                and player_count >= min_players
+                and player_count < max_players
+                and not self:is_recent_server(job_id, history) then
+                seen[job_id] = true
+                table.insert(candidates, job_id)
+            end
+        end
+
+        cursor = data.nextPageCursor
+        if not cursor or cursor == "" then
+            break
+        end
+        task.wait(0.05)
+    end
+
+    return candidates
+end
+
+function HydroBlade.Session:wait_child(parent, name, timeout)
+    if not parent then
+        return nil
+    end
+    local child = parent:FindFirstChild(name)
+    if child or not timeout or timeout <= 0 then
+        return child
+    end
+    local ok, result = pcall(function()
+        return parent:WaitForChild(name, timeout)
+    end)
+    if ok then
+        return result
+    end
+    return nil
+end
+
+function HydroBlade.Session:get_join_public_server_remote(timeout)
+    local requests = ReplicatedStorage:FindFirstChild("Requests") or self:wait_child(ReplicatedStorage, "Requests", timeout or 0)
+    if not requests then
+        return nil
+    end
+    return requests:FindFirstChild("JoinPublicServer") or self:wait_child(requests, "JoinPublicServer", timeout or 0)
+end
+
+function HydroBlade.Session:ensure_teleport_listener()
+    if HydroBlade.runtime.teleport_listener then
+        return true
+    end
+    HydroBlade.runtime.teleport_listener = connect(TeleportService.TeleportInitFailed, function(player, _, error_message)
+        if player ~= Players.LocalPlayer then
+            return
+        end
+        HydroBlade.runtime.teleport_failed = true
+        HydroBlade.runtime.teleport_fail_reason = tostring(error_message or "Unknown error")
+        HydroBlade.status("teleport_failed", { error = HydroBlade.runtime.teleport_fail_reason })
+    end)
+    return true
+end
+
+function HydroBlade.Session:confirmed_join_public_server(job_id, max_retries, options)
+    options = options or {}
+    job_id = tostring(job_id or "")
+    if job_id == "" or job_id == tostring(game.JobId or "") then
+        return false
+    end
+
+    self:ensure_teleport_listener()
+    local label = tostring(options.label or "HYDROBLADE_SERVERHOP")
+    local wait_seconds = tonumber(options.wait_seconds) or 10
+    local start_job_id = tostring(options.start_job_id or game.JobId or "")
+    max_retries = math.max(1, math.min(tonumber(max_retries) or 1, 3))
+
+    for attempt = 1, max_retries do
+        HydroBlade.runtime.teleport_failed = false
+        HydroBlade.runtime.teleport_fail_reason = ""
+
+        local join_remote = self:get_join_public_server_remote(3)
+        if not join_remote then
+            HydroBlade.status("server_hop_failed", { reason = "JoinPublicServer missing", label = label })
+            return false, "JoinPublicServer remote unavailable"
+        end
+
+        HydroBlade.status("server_hop_attempt", {
+            label = label,
+            attempt = tostring(attempt),
+            target_job = job_id,
+        })
+
+        local fire_ok, fire_err = pcall(function()
+            join_remote:FireServer(job_id)
+        end)
+        if not fire_ok then
+            HydroBlade.runtime.teleport_fail_reason = tostring(fire_err)
+            break
+        end
+
+        local deadline = tick() + wait_seconds
+        while tick() < deadline do
+            if tostring(game.JobId or "") ~= start_job_id then
+                self:add_server_to_history(job_id)
+                HydroBlade.status("server_hop_confirmed", {
+                    label = label,
+                    target_job = job_id,
+                    previous_job = start_job_id,
+                    current_job = tostring(game.JobId or ""),
+                })
+                return true
+            end
+            if HydroBlade.runtime.teleport_failed then
+                break
+            end
+            task.wait(0.1)
+        end
+
+        if tostring(game.JobId or "") ~= start_job_id then
+            self:add_server_to_history(job_id)
+            return true
+        end
+        task.wait(0.2 + attempt * 0.15)
+    end
+
+    return false, HydroBlade.runtime.teleport_fail_reason ~= "" and HydroBlade.runtime.teleport_fail_reason or "serverhop timed out"
+end
+
+function HydroBlade.Session:is_returned_to_start_menu()
+    local player_gui = Players.LocalPlayer and Players.LocalPlayer:FindFirstChild("PlayerGui")
+    return player_gui and player_gui:FindFirstChild("StartMenu") ~= nil
+end
+
+function HydroBlade.Session:return_to_menu(timeout)
+    timeout = tonumber(timeout) or 5
+    if self:is_returned_to_start_menu() then
+        return true, "already in menu"
+    end
+
+    local requests = ReplicatedStorage:FindFirstChild("Requests")
+    local return_to_menu = requests and requests:FindFirstChild("ReturnToMenu")
+    if not return_to_menu then
+        return false, "ReturnToMenu remote missing"
+    end
+
+    local done = false
+    local ok = false
+    local result = nil
+    task.spawn(function()
+        ok, result = pcall(function()
+            return return_to_menu:InvokeServer()
+        end)
+        done = true
+    end)
+
+    local deadline = tick() + timeout
+    while not done and tick() < deadline do
+        if self:is_returned_to_start_menu() then
+            return true, "returned"
+        end
+        task.wait(0.05)
+    end
+
+    if self:is_returned_to_start_menu() then
+        return true, "returned"
+    end
+    if not done then
+        return false, "ReturnToMenu timed out"
+    end
+    if not ok then
+        return false, tostring(result)
+    end
+    return true, "returned"
+end
+
+function HydroBlade.Session:try_serverhop_candidates(label, min_players, ignore_history, max_pages)
+    local candidates = self:get_serverhop_candidates(min_players, ignore_history)
+    if #candidates <= 0 then
+        candidates = self:get_public_server_api_candidates(min_players, ignore_history, max_pages)
+    end
+    if #candidates <= 0 then
+        return false, "no candidates"
+    end
+
+    local attempts = math.min(12, #candidates)
+    for attempt = 1, attempts do
+        local index = math.random(1, #candidates)
+        local job_id = candidates[index]
+        table.remove(candidates, index)
+        local ok = self:confirmed_join_public_server(job_id, 1, {
+            label = label,
+            wait_seconds = 10,
+        })
+        if ok then
+            return true
+        end
+    end
+
+    return false, "candidate attempts failed"
+end
+
 function HydroBlade.Session:server_hop(job_id, reason, options)
     if type(options) == "table" and options.rot_stage then
         HydroBlade.runtime.rot_stage = tostring(options.rot_stage)
-        HydroBlade.queue_state({
-            HYDROBLADE_ROT_STAGE = HydroBlade.runtime.rot_stage,
-            HYDROBLADE_ROT_REQUESTED = HydroBlade.runtime.rot_requested == true,
+    end
+    HydroBlade.queue_loader_state({
+        HYDROBLADE_ROT_STAGE = HydroBlade.runtime.rot_stage,
+        HYDROBLADE_ROT_REQUESTED = HydroBlade.runtime.rot_requested == true,
+        HYDROBLADE_PARENT_JOB_ID = HydroBlade.runtime.parent_job_id,
+    })
+
+    job_id = tostring(job_id or "")
+    HydroBlade.status("server_hop", { reason = reason or "", target_job = job_id })
+    self:add_server_to_history(game.JobId)
+
+    local returned, return_reason = self:return_to_menu(5)
+    if not returned then
+        HydroBlade.status("return_to_menu_failed", { error = return_reason or "" })
+    end
+    task.wait(returned and 0.65 or 0.05)
+
+    if job_id ~= "" then
+        return self:confirmed_join_public_server(job_id, 3, {
+            label = "HYDROBLADE_TARGET_SERVERHOP",
+            wait_seconds = 10,
         })
     end
-    HydroBlade.status("server_hop", { reason = reason or "", target_job = job_id or "" })
-    local player = Players.LocalPlayer
-    if job_id and job_id ~= "" then
-        TeleportService:TeleportToPlaceInstance(5208655184, tostring(job_id), player)
-    else
-        TeleportService:Teleport(5208655184, player)
+
+    local ok, err = self:try_serverhop_candidates("HYDROBLADE_SERVERHOP", 0, false, 5)
+    if ok then
+        return true
     end
-    return true
+
+    self:clear_server_history()
+    ok, err = self:try_serverhop_candidates("HYDROBLADE_SERVERHOP_CLEAR_HISTORY", 0, true, 6)
+    if ok then
+        return true
+    end
+
+    ok, err = self:try_serverhop_candidates("HYDROBLADE_SERVERHOP_EMERGENCY", 0, true, 8)
+    if ok then
+        return true
+    end
+
+    HydroBlade.status("server_hop_failed", { reason = err or "no joinable servers" })
+    return false, err or "no joinable servers"
 end
 
 function HydroBlade.Session:kick(reason)
