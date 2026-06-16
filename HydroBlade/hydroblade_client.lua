@@ -64,6 +64,8 @@ HydroBlade.runtime = {
 
 local last_dialogue_data = nil
 local last_dialogue_received_at = 0
+local dialogue_remote = nil
+local dialogue_probe_connections = {}
 
 local function connect(signal, callback)
     local connection = signal and signal.Connect and signal:Connect(callback)
@@ -114,6 +116,18 @@ end
 
 local function request_function()
     return (syn and syn.request) or (http and http.request) or request or http_request
+end
+
+local function sensitive_key(tbl, key)
+    if type(tbl) ~= "table" then
+        return false
+    end
+    for k, _ in pairs(tbl) do
+        if typeof(k) == "string" and k:lower() == key:lower() then
+            return true
+        end
+    end
+    return false
 end
 
 function HydroBlade.queue_state(values)
@@ -353,17 +367,29 @@ function HydroBlade.wait_for_place(place_id, timeout)
 end
 
 local function find_dialogue_remote()
-    local requests = ReplicatedStorage:FindFirstChild("Requests")
-    local dialogue = requests and requests:FindFirstChild("Dialogue")
-    if dialogue and dialogue:IsA("RemoteEvent") then
-        return dialogue
+    if dialogue_remote and dialogue_remote.Parent then
+        return dialogue_remote
     end
-    for _, descendant in ipairs(ReplicatedStorage:GetDescendants()) do
-        if descendant:IsA("RemoteEvent") and descendant.Name == "Dialogue" then
-            return descendant
+    if tonumber(game.PlaceId) == 14341521240 then
+        local requests = ReplicatedStorage:FindFirstChild("Requests")
+        local dialogue = requests and requests:FindFirstChild("Dialogue")
+        if dialogue and dialogue:IsA("RemoteEvent") then
+            dialogue_remote = dialogue
+            return dialogue_remote
         end
     end
     return nil
+end
+
+local function clear_dialogue_probe_connections(keep)
+    for index, connection in pairs(dialogue_probe_connections) do
+        if connection ~= keep then
+            pcall(function()
+                connection:Disconnect()
+            end)
+            dialogue_probe_connections[index] = nil
+        end
+    end
 end
 
 local function instance_position(instance)
@@ -648,6 +674,37 @@ function HydroBlade.movement.check_inn_danger(inn_name, position)
     }
 end
 
+function HydroBlade.movement.disable_noclip(character)
+    character = character or local_character()
+    if not character then
+        return false
+    end
+
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+            if part.Name == "Head" or part.Name == "Torso" then
+                part.CanCollide = true
+            else
+                part.CanCollide = false
+            end
+        end
+    end
+
+    local hum = character:FindFirstChildOfClass("Humanoid")
+    if hum then
+        pcall(function()
+            hum:SetStateEnabled(5, true)
+            hum:ChangeState(5)
+        end)
+    end
+
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if root then
+        root.Anchored = false
+    end
+    return true
+end
+
 function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
     local character = local_character()
     if not character then
@@ -656,6 +713,8 @@ function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
     if not character then
         return false, "missing character"
     end
+    HydroBlade.movement.disable_noclip(character)
+    HydroBlade.dialogue.setup_listener()
 
     local inn_name, inn
     if type(point) == "table" and point.inn then
@@ -731,8 +790,8 @@ function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
         pcall(fireclickdetector, detector)
     end
 
-    task.wait(0.1)
-    HydroBlade.dialogue.fire_choice(choice)
+    local found_choice = HydroBlade.dialogue.wait_for_choice(choice, 1.5)
+    HydroBlade.dialogue.fire_choice(found_choice or choice)
 
     if is_alive() then
         character:BreakJoints()
@@ -815,7 +874,7 @@ end
 
 function HydroBlade.dialogue.latest(max_age)
     max_age = max_age or 8
-    if last_dialogue_data and os.clock() - last_dialogue_received_at <= max_age then
+    if last_dialogue_data and tick() - last_dialogue_received_at <= max_age then
         return last_dialogue_data
     end
     return nil
@@ -836,14 +895,14 @@ function HydroBlade.dialogue.find_recent_choice(target_choice, max_age)
 end
 
 function HydroBlade.dialogue.wait_for_choice(choice, timeout)
-    local deadline = os.clock() + (tonumber(timeout) or 8)
+    local deadline = tick() + (tonumber(timeout) or 8)
     repeat
         local found = HydroBlade.dialogue.find_recent_choice(choice, 10)
         if found then
             return found
         end
         task.wait(0.1)
-    until os.clock() >= deadline
+    until tick() >= deadline
     return nil
 end
 
@@ -873,23 +932,57 @@ function HydroBlade.dialogue.setup_listener()
     if HydroBlade.dialogue._listening then
         return true
     end
-    local remote = find_dialogue_remote()
-    if not remote then
-        return false, "dialogue remote not found"
+
+    local requests = ReplicatedStorage:FindFirstChild("Requests")
+    if not requests then
+        return false, "Requests folder not found"
     end
+
     HydroBlade.dialogue._listening = true
-    connect(remote.OnClientEvent, function(dialog_data)
-        if type(dialog_data) == "table" then
-            last_dialogue_data = dialog_data
-            last_dialogue_received_at = os.clock()
-            HydroBlade.send({
-                type = "dialogue",
-                speaker = dialog_data.speaker,
-                msg = dialog_data.msg,
-                choices = HydroBlade.dialogue.get_choices(dialog_data),
-            })
+
+    local function handle_dialogue(remote, dialog_data, connection)
+        if typeof(dialog_data) ~= "table" or not (sensitive_key(dialog_data, "choices") or sensitive_key(dialog_data, "speaker")) then
+            return
         end
-    end)
+
+        last_dialogue_data = dialog_data
+        last_dialogue_received_at = tick()
+        if not dialogue_remote or not dialogue_remote.Parent then
+            dialogue_remote = remote
+            clear_dialogue_probe_connections(connection)
+        end
+        HydroBlade.send({
+            type = "dialogue",
+            speaker = dialog_data.speaker,
+            msg = dialog_data.msg,
+            choices = HydroBlade.dialogue.get_choices(dialog_data),
+        })
+        if HydroBlade.bypasses and HydroBlade.bypasses._auto_dialogue and HydroBlade.bypasses.auto_dialogue_handler then
+            task.defer(function()
+                HydroBlade.bypasses.auto_dialogue_handler(dialog_data)
+            end)
+        end
+    end
+
+    local direct = find_dialogue_remote()
+    if direct then
+        local connection
+        connection = connect(direct.OnClientEvent, function(dialog_data)
+            handle_dialogue(direct, dialog_data, connection)
+        end)
+        dialogue_probe_connections[#dialogue_probe_connections + 1] = connection
+    end
+
+    for _, remote in ipairs(requests:GetChildren()) do
+        if remote:IsA("RemoteEvent") and remote ~= direct then
+            local connection
+            connection = connect(remote.OnClientEvent, function(dialog_data)
+                handle_dialogue(remote, dialog_data, connection)
+            end)
+            dialogue_probe_connections[#dialogue_probe_connections + 1] = connection
+        end
+    end
+
     return true
 end
 
@@ -2518,15 +2611,14 @@ function HydroBlade.bypasses.enable_debuff_bypasses()
     return HydroBlade.bypasses.enable_anti_hystericus()
 end
 
-function HydroBlade.bypasses.enable_auto_dialogue()
-    local ok, err = HydroBlade.dialogue.setup_listener()
-    if not ok then
-        return ok, err
+function HydroBlade.bypasses.auto_dialogue_handler(dialog_data)
+    if type(dialog_data) ~= "table" then
+        return
     end
-    if HydroBlade.bypasses._auto_dialogue then
-        return true
+    local character = local_character()
+    if not character or not character:FindFirstChild("InDialogue") then
+        return
     end
-    local remote = find_dialogue_remote()
     local speakers = {
         ["Doctor"] = true,
         ["Engineer"] = true,
@@ -2539,29 +2631,34 @@ function HydroBlade.bypasses.enable_auto_dialogue()
         ["Fallion"] = true,
         ["Kyley"] = true,
     }
-    HydroBlade.bypasses._auto_dialogue = connect(remote.OnClientEvent, function(dialog_data)
-        if type(dialog_data) ~= "table" then
+    local speaker = dialog_data.speaker
+    local msg = dialog_data.msg
+    if msg == "_The Obelisk radiates a great power._" then
+    elseif not speaker or speaker == "" or tostring(speaker):match("^%s*$") then
+        return
+    elseif speaker == "..." then
+        local choices = dialog_data.choices
+        if not (msg and msg:find("drop back to your inn") and choices and choices[1] == "Take me away.") then
             return
         end
-        local speaker = dialog_data.speaker
-        local msg = dialog_data.msg
-        if msg == "_The Obelisk radiates a great power._" then
-        elseif speaker == "..." then
-            local choices = dialog_data.choices
-            if not (msg and msg:find("drop back to your inn") and choices and choices[1] == "Take me away.") then
-                return
-            end
-        elseif not speakers[speaker] then
-            return
-        end
-        task.wait(0.1)
-        local choices = HydroBlade.dialogue.get_choices(dialog_data)
-        if choices[1] then
-            HydroBlade.dialogue.fire_choice(choices[1])
-        else
-            HydroBlade.dialogue.fire_exit()
-        end
-    end)
+    elseif not speakers[speaker] then
+        return
+    end
+    task.wait(0.1)
+    local choices = HydroBlade.dialogue.get_choices(dialog_data)
+    if choices[1] then
+        HydroBlade.dialogue.fire_choice(choices[1])
+    else
+        HydroBlade.dialogue.fire_exit()
+    end
+end
+
+function HydroBlade.bypasses.enable_auto_dialogue()
+    HydroBlade.bypasses._auto_dialogue = true
+    local ok, err = HydroBlade.dialogue.setup_listener()
+    if not ok then
+        return ok, err
+    end
     return true
 end
 
