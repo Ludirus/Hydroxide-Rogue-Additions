@@ -209,24 +209,29 @@ function HydroBlade.wait_for_character(timeout)
     return nil
 end
 
+function HydroBlade.start_menu_state()
+    local player = Players.LocalPlayer
+    local player_gui = player and player:FindFirstChildOfClass("PlayerGui")
+    local menu = player_gui and player_gui:FindFirstChild("StartMenu")
+    local visible = false
+    if menu then
+        if menu:IsA("ScreenGui") then
+            visible = menu.Enabled ~= false
+        elseif menu:IsA("GuiObject") then
+            visible = menu.Visible ~= false
+        else
+            visible = true
+        end
+    end
+    return menu, visible
+end
+
 function HydroBlade.wait_for_start_menu(required_visible_seconds, timeout)
     local required = tonumber(required_visible_seconds) or 5
     local deadline = os.clock() + (tonumber(timeout) or 45)
     local visible_since = nil
     repeat
-        local player = Players.LocalPlayer
-        local player_gui = player and player:FindFirstChildOfClass("PlayerGui")
-        local menu = player_gui and player_gui:FindFirstChild("StartMenu")
-        local visible = false
-        if menu then
-            if menu:IsA("ScreenGui") then
-                visible = menu.Enabled ~= false
-            elseif menu:IsA("GuiObject") then
-                visible = menu.Visible ~= false
-            else
-                visible = true
-            end
-        end
+        local _, visible = HydroBlade.start_menu_state()
         if visible then
             visible_since = visible_since or os.clock()
             if os.clock() - visible_since >= required then
@@ -247,19 +252,7 @@ function HydroBlade.wait_for_start_menu_or_character(required_visible_seconds, t
     local visible_since = nil
     local character_since = nil
     repeat
-        local player = Players.LocalPlayer
-        local player_gui = player and player:FindFirstChildOfClass("PlayerGui")
-        local menu = player_gui and player_gui:FindFirstChild("StartMenu")
-        local visible = false
-        if menu then
-            if menu:IsA("ScreenGui") then
-                visible = menu.Enabled ~= false
-            elseif menu:IsA("GuiObject") then
-                visible = menu.Visible ~= false
-            else
-                visible = true
-            end
-        end
+        local _, visible = HydroBlade.start_menu_state()
         if visible then
             visible_since = visible_since or os.clock()
             character_since = nil
@@ -2132,11 +2125,12 @@ function HydroBlade.bypasses.enable_all()
 end
 
 function HydroBlade.leave_menu()
-    local player = Players.LocalPlayer
-    local player_gui = player and player:FindFirstChildOfClass("PlayerGui")
-    local start_menu = player_gui and player_gui:FindFirstChild("StartMenu")
+    local start_menu, visible = HydroBlade.start_menu_state()
     if not start_menu then
         return false, "StartMenu missing"
+    end
+    if not visible then
+        return true
     end
     local choices = start_menu:FindFirstChild("Choices")
     local play = choices and choices:FindFirstChild("Play")
@@ -2151,52 +2145,80 @@ function HydroBlade.leave_menu()
     if not play then
         return false, "StartMenu Play button missing"
     end
-    pcall(function()
-        Services.GuiService.SelectedObject = nil
-    end)
-    local clicked = false
-    pcall(function()
-        if firesignal and play.MouseButton1Click then
-            firesignal(play.MouseButton1Click)
-            clicked = true
-        end
-    end)
-    pcall(function()
-        if firesignal and play.Activated then
-            firesignal(play.Activated)
-            clicked = true
-        end
-    end)
-    pcall(function()
-        if getconnections and play.MouseButton1Click then
-            for _, connection in ipairs(getconnections(play.MouseButton1Click)) do
-                if connection and connection.Fire then
-                    connection:Fire()
-                    clicked = true
-                elseif type(connection) == "function" then
-                    connection()
-                    clicked = true
-                end
+
+    local function menu_closed()
+        local _, current_visible = HydroBlade.start_menu_state()
+        return current_visible ~= true
+    end
+
+    local function wait_for_close(duration)
+        local deadline = os.clock() + duration
+        repeat
+            if menu_closed() then
+                return true
             end
-        end
-    end)
-    pcall(function()
-        if play.Activate then
-            play:Activate()
-            clicked = true
-        end
-    end)
-    pcall(function()
-        local pos = play.AbsolutePosition
-        local size = play.AbsoluteSize
-        local x = pos.X + size.X / 2
-        local y = pos.Y + size.Y / 2
+            task.wait(0.15)
+        until os.clock() >= deadline
+        return menu_closed()
+    end
+
+    local function click_at(x, y)
         VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 1)
         task.wait(0.05)
         VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 1)
+    end
+
+    local function click_button(use_inset)
+        local pos = play.AbsolutePosition
+        local size = play.AbsoluteSize
+        if size.X <= 0 or size.Y <= 0 then
+            return false
+        end
+        local x = pos.X + size.X / 2
+        local y = pos.Y + size.Y / 2
+        if use_inset then
+            local ok, inset = pcall(function()
+                return Services.GuiService:GetGuiInset()
+            end)
+            if ok and inset then
+                x += inset.X
+                y += inset.Y
+            end
+        end
+        click_at(x, y)
+        return true
+    end
+
+    pcall(function()
+        Services.GuiService.SelectedObject = play
+    end)
+
+    local ok, attempted = pcall(click_button, false)
+    local clicked = ok and attempted == true
+    if clicked and wait_for_close(3) then
+        return true
+    end
+
+    ok, attempted = pcall(click_button, true)
+    clicked = (ok and attempted == true) or clicked
+    if clicked and wait_for_close(3) then
+        return true
+    end
+
+    pcall(function()
+        if Services.GuiService.SelectedObject ~= play then
+            Services.GuiService.SelectedObject = play
+        end
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+        task.wait(0.05)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
         clicked = true
     end)
-    return clicked, clicked and nil or "StartMenu Play click failed"
+    if clicked and wait_for_close(5) then
+        return true
+    end
+
+    return false, "StartMenu Play click did not close menu"
 end
 
 HydroBlade.ClientHeartbeat = {}
