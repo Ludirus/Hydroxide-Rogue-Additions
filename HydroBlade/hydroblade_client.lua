@@ -226,6 +226,18 @@ function HydroBlade.start_menu_state()
     return menu, visible
 end
 
+function HydroBlade.fire_start_menu_join()
+    local requests = ReplicatedStorage:FindFirstChild("Requests")
+    local join = requests and requests:FindFirstChild("JoinPublicServer")
+    if not (join and join:IsA("RemoteEvent")) then
+        return false, "JoinPublicServer remote missing"
+    end
+    local ok, err = pcall(function()
+        join:FireServer("hey")
+    end)
+    return ok, err
+end
+
 function HydroBlade.wait_for_start_menu(required_visible_seconds, timeout)
     local required = tonumber(required_visible_seconds) or 5
     local deadline = os.clock() + (tonumber(timeout) or 45)
@@ -2040,6 +2052,10 @@ function HydroBlade.bypasses.enable_remote_bypasses()
             local requests = ReplicatedStorage:FindFirstChild("Requests")
             local remotes = ReplicatedStorage:FindFirstChild("Remotes")
 
+            if requests and self.Parent == requests and self.Name == "JoinPublicServer" and type(args[1]) ~= "string" then
+                return old(self, "hey")
+            end
+
             if HydroBlade.bypasses.config.no_fall and remotes and self.Parent == remotes and #args == 2 and type(args[2]) == "table" then
                 return nil
             end
@@ -2160,6 +2176,11 @@ function HydroBlade.leave_menu()
             task.wait(0.15)
         until os.clock() >= deadline
         return menu_closed()
+    end
+
+    local join_ok = HydroBlade.fire_start_menu_join()
+    if join_ok and wait_for_close(5) then
+        return true
     end
 
     local function click_at(x, y)
