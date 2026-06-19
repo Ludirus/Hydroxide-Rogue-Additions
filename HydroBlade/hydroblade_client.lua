@@ -130,6 +130,14 @@ local function sensitive_key(tbl, key)
     return false
 end
 
+local function trim_text(value)
+    return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function loose_key(value)
+    return trim_text(value):gsub("[%s_%-%p]+", ""):lower()
+end
+
 function HydroBlade.queue_state(values)
     local queue = queue_on_teleport or queueonteleport or queueteleport or (syn and syn.queue_on_teleport)
     if type(queue) ~= "function" or type(values) ~= "table" then
@@ -407,8 +415,42 @@ local function instance_position(instance)
     return part and part.Position or nil
 end
 
-local function find_npc(name, near_position)
+local function instance_value(instance, child_name)
+    if typeof(instance) ~= "Instance" then
+        return nil
+    end
+    local child = instance:FindFirstChild(child_name)
+    if not child then
+        return nil
+    end
+    local ok, value = pcall(function()
+        return child.Value
+    end)
+    if ok and value ~= nil then
+        return tostring(value)
+    end
+    return nil
+end
+
+local function text_matches_any(value, values)
+    if type(values) ~= "table" then
+        return false
+    end
+    local normalized = loose_key(value)
+    if normalized == "" then
+        return false
+    end
+    for _, candidate in ipairs(values) do
+        if normalized == loose_key(candidate) then
+            return true
+        end
+    end
+    return false
+end
+
+local function find_npc(name, near_position, options)
     name = tostring(name or "")
+    options = options or {}
     local roots = {
         Workspace:FindFirstChild("NPCs"),
         Workspace:FindFirstChild("Live"),
@@ -416,24 +458,41 @@ local function find_npc(name, near_position)
     }
     local best = nil
     local best_distance = math.huge
+    local best_priority = math.huge
 
     local function consider(candidate)
         if not candidate or candidate.Name ~= name then
             return
         end
+        local priority = 1
+        if type(options.location_names) == "table" then
+            local location = instance_value(candidate, "Location")
+            if text_matches_any(location, options.location_names) then
+                priority = 0
+            elseif options.require_location then
+                return
+            end
+        end
         if typeof(near_position) ~= "Vector3" then
-            best = best or candidate
+            if priority < best_priority then
+                best = candidate
+                best_priority = priority
+            end
             return
         end
         local position = instance_position(candidate)
         if not position then
-            best = best or candidate
+            if priority < best_priority then
+                best = candidate
+                best_priority = priority
+            end
             return
         end
         local distance = (position - near_position).Magnitude
-        if distance < best_distance then
+        if priority < best_priority or (priority == best_priority and distance < best_distance) then
             best = candidate
             best_distance = distance
+            best_priority = priority
         end
     end
 
@@ -530,51 +589,61 @@ HydroBlade.movement.inns = {
         position = Vector3.new(2967.634, 288.85, -16),
         npc = "Inn Keeper",
         choice = "Sure.",
+        locations = { "Oresfall" },
     },
     Southern = {
         position = Vector3.new(-1255.422, 145.093, 340.663),
         npc = "Inn Keeper",
         choice = "Sure.",
+        locations = { "Southern Sanctuary" },
     },
     Wayside = {
         position = Vector3.new(1336.531, 196.3, 931.763),
         npc = "Inn Keeper",
         choice = "Sure.",
+        locations = { "Wayside Inn" },
     },
     Santorini = {
         position = Vector3.new(1341.703, 432.766, 2976.65),
         npc = "Inn Keeper",
         choice = "Sure.",
+        locations = { "Santorini" },
     },
     Alana = {
         position = Vector3.new(2253.484, 61.801, 552.427),
         npc = "Inn Keeper",
         choice = "Sure.",
+        locations = { "Alana", "Alana Town" },
     },
     Tundra5 = {
         position = Vector3.new(6168.783, 1345.494, 88.494),
         npc = "Inn Keeper",
         choice = "Sure.",
+        locations = { "Tundra 5", "Tundra5" },
     },
     Snail = {
         position = Vector3.new(5759.284, 1115.494, 938.868),
         npc = "Inn Keeper",
         choice = "Sure.",
+        locations = { "Sleeping Snail", "Snail" },
     },
     Renova = {
         position = Vector3.new(-2115.639, 610.454, -705.018),
         npc = "Inn Keeper",
         choice = "Sure.",
+        locations = { "Renova", "Renova Town" },
     },
     Flowerlight = {
         position = Vector3.new(3317.394, 202.368, -2520.07),
         npc = "Ria",
         choice = "A room, please.",
+        locations = { "Flowerlight Town", "Flowerlight" },
     },
     SigilTree = {
         position = Vector3.new(1879.793, 223.325, -795.055),
         npc = "Knight Orodin",
         choice = "May I reserve a room?",
+        locations = { "Sigil Tree", "SigilTree" },
     },
 }
 
@@ -584,6 +653,9 @@ HydroBlade.movement.inn_aliases = {
     ["tundra 5"] = "Tundra5",
     ["renova town"] = "Renova",
     ["alana town"] = "Alana",
+    ["southern sanctuary"] = "Southern",
+    ["wayside inn"] = "Wayside",
+    ["sleeping snail"] = "Snail",
 }
 
 function HydroBlade.movement.resolve_inn(value)
@@ -594,10 +666,15 @@ function HydroBlade.movement.resolve_inn(value)
     if HydroBlade.movement.inns[key] then
         return key, HydroBlade.movement.inns[key]
     end
-    local normalized = key:gsub("[%s_%-%p]+", ""):lower()
+    local normalized = loose_key(key)
     for name, inn in pairs(HydroBlade.movement.inns) do
-        if name:gsub("[%s_%-%p]+", ""):lower() == normalized then
+        if loose_key(name) == normalized then
             return name, inn
+        end
+        for _, location in ipairs(inn.locations or {}) do
+            if loose_key(location) == normalized then
+                return name, inn
+            end
         end
     end
     local alias = HydroBlade.movement.inn_aliases[key:lower()]
@@ -605,6 +682,27 @@ function HydroBlade.movement.resolve_inn(value)
         return alias, HydroBlade.movement.inns[alias]
     end
     return nil
+end
+
+function HydroBlade.movement.inn_location_names(inn_name, inn)
+    local names = {}
+    local seen = {}
+    local function add(value)
+        value = trim_text(value)
+        local key = loose_key(value)
+        if value ~= "" and not seen[key] then
+            seen[key] = true
+            table.insert(names, value)
+        end
+    end
+    add(inn_name)
+    if type(inn) == "table" then
+        add(inn.location)
+        for _, location in ipairs(inn.locations or {}) do
+            add(location)
+        end
+    end
+    return names
 end
 
 function HydroBlade.movement.teleport(target)
@@ -776,45 +874,104 @@ function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
         return hum and hum.Health > 0
     end
 
-    HydroBlade.dialogue.fire_choice(choice, true)
+    local function character_in_dialogue()
+        local active_character = local_character() or character
+        return active_character and active_character:FindFirstChild("InDialogue") ~= nil
+    end
 
+    local function pivot_to_instance(instance)
+        local active_character = local_character() or character
+        if not active_character then
+            return false
+        end
+        local ok, pivot = pcall(function()
+            return instance:GetPivot()
+        end)
+        if not ok or typeof(pivot) ~= "CFrame" then
+            local position = instance_position(instance)
+            pivot = position and CFrame.new(position) or target
+        end
+        active_character:PivotTo(pivot)
+        local root = active_character:FindFirstChild("HumanoidRootPart")
+        if root then
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.Velocity = Vector3.zero
+        end
+        return true
+    end
+
+    HydroBlade.dialogue.clear()
     character:PivotTo(target)
     local hum = character:FindFirstChildOfClass("Humanoid")
     if hum then
         hum:ChangeState(Enum.HumanoidStateType.Jumping)
     end
 
+    local location_names = HydroBlade.movement.inn_location_names(inn_name or point, inn)
     local clicked = false
     local chose = false
-    local last_click_err = nil
-    for _ = 1, 6 do
-        local npc = find_npc(npcName, target.Position)
+    local saw_dialogue = false
+    local last_error = "npc not found: " .. npcName
+    local deadline = os.clock() + 8
+    repeat
+        local npc = find_npc(npcName, target.Position, { location_names = location_names })
         local detector = find_click_detector(npc)
-        if detector and fireclickdetector then
-            local click_ok, click_err = pcall(fireclickdetector, detector)
-            clicked = clicked or click_ok
-            last_click_err = click_err
+        if npc then
+            pivot_to_instance(npc)
         end
 
-        local found_choice = HydroBlade.dialogue.wait_for_choice(choice, clicked and 0.85 or 0.2)
+        pcall(function()
+            HydroBlade.dialogue.fire_choice(choice, true)
+        end)
+
+        if not npc then
+            last_error = "npc not found: " .. npcName .. " near " .. tostring(inn_name or "target inn")
+        elseif not detector then
+            last_error = "click detector missing on " .. npcName
+        elseif not fireclickdetector then
+            last_error = "fireclickdetector unavailable"
+        else
+            local click_ok, click_err = pcall(fireclickdetector, detector)
+            clicked = clicked or click_ok
+            if not click_ok then
+                last_error = "fireclickdetector failed: " .. tostring(click_err)
+            end
+        end
+
+        if character_in_dialogue() then
+            saw_dialogue = true
+        end
+
+        local found_choice = HydroBlade.dialogue.wait_for_choice(choice, clicked and 0.45 or 0.15)
         if found_choice then
+            saw_dialogue = true
             local ok = HydroBlade.dialogue.fire_choice(found_choice, true)
             chose = ok == true or chose
             break
         end
 
-        local ok = HydroBlade.dialogue.fire_choice(choice, true)
-        chose = ok == true or chose
+        if character_in_dialogue() then
+            local ok, err = HydroBlade.dialogue.fire_choice(choice, true)
+            chose = ok == true or chose
+            if ok then
+                break
+            end
+            last_error = "dialogue choice fire failed: " .. tostring(err)
+        end
         task.wait(0.15)
-    end
+    until os.clock() >= deadline
 
     if not clicked then
-        return false, "inn npc click detector missing: " .. tostring(last_click_err or npcName)
+        return false, "inn npc interaction failed: " .. tostring(last_error)
+    end
+    if not saw_dialogue then
+        return false, "inn dialogue did not open after clicking " .. tostring(npcName)
     end
     if not chose then
         return false, "inn dialogue choice unavailable: " .. tostring(choice)
     end
 
+    task.wait(0.35)
     if is_alive() then
         character:BreakJoints()
     end
@@ -900,6 +1057,11 @@ function HydroBlade.dialogue.latest(max_age)
         return last_dialogue_data
     end
     return nil
+end
+
+function HydroBlade.dialogue.clear()
+    last_dialogue_data = nil
+    last_dialogue_received_at = 0
 end
 
 function HydroBlade.dialogue.find_recent_choice(target_choice, max_age)
@@ -1967,6 +2129,7 @@ end
 
 function HydroBlade.Reporter:fail(reason, detail, options)
     options = options or {}
+    local title = options.group_failure == true and "HydroBlade Group Failure" or "HydroBlade Rot Failure"
     local sent_to_exe = HydroBlade.send({
         method = "rot_failure",
         account_id = HydroBlade.account.id,
@@ -1981,14 +2144,19 @@ function HydroBlade.Reporter:fail(reason, detail, options)
         job_id = game.JobId,
         place_id = tostring(game.PlaceId),
     })
-    if not sent_to_exe then
+    if not sent_to_exe or options.force_lua_webhook == true then
         self:send(reason, detail, {
-            title = options.group_failure == true and "HydroBlade Group Failure" or "HydroBlade Rot Failure",
+            title = title,
             stage = options.stage,
         })
     end
     if options.kick_self ~= false then
-        HydroBlade.Session.new():kick(reason)
+        local kick_reason = tostring(reason or "HydroBlade stopped.")
+        local detail_text = trim_text(detail)
+        if detail_text ~= "" then
+            kick_reason = kick_reason .. ": " .. detail_text
+        end
+        HydroBlade.Session.new():kick(kick_reason)
     end
 end
 
@@ -2356,10 +2524,10 @@ function HydroBlade.RoleRunner:run_rot()
     self:start_survey()
     local ok, err = HydroBlade.movement.InnTeleport("Renova")
     if not ok then
-        return self:fail("renova inn teleport failed", err)
+        return self:fail("renova inn teleport failed", err, { force_lua_webhook = true, stage = "renova_inn" })
     end
     if not HydroBlade.wait_for_character(15) then
-        return self:fail("respawn failed after Renova inn teleport")
+        return self:fail("respawn failed after Renova inn teleport", nil, { force_lua_webhook = true, stage = "renova_respawn" })
     end
     if not self:pick("Glow Scroom", 650) then
         return false
@@ -2375,7 +2543,7 @@ function HydroBlade.RoleRunner:run_rot()
     end
     local home_ok, home_err = HydroBlade.movement.InnTeleport("Renova")
     if not home_ok then
-        return self:fail("renova return failed", home_err)
+        return self:fail("renova return failed", home_err, { force_lua_webhook = true, stage = "renova_return" })
     end
     HydroBlade.wait_for_character(15)
     local job = self:parent_job(15)

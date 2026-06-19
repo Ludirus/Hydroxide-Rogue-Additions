@@ -25617,9 +25617,12 @@ if is_hydroxide_supported_place() then
 
                 for _, root in ipairs(roots) do
                     if root then
-                        local banker = FindFirstChild(root, "Banker", true)
+                        local banker = FindFirstChild(root, "Banker")
                         if banker then
                             consider(banker)
+                        end
+                        for _, descendant in ipairs(root:GetDescendants()) do
+                            consider(descendant)
                         end
                     end
                 end
