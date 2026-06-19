@@ -36,6 +36,8 @@ target_link_libraries(HydroBlade PRIVATE
     shell32
     shlwapi
     ws2_32
+    iphlpapi
+    gdi32
     bcrypt
     gdiplus
     ole32

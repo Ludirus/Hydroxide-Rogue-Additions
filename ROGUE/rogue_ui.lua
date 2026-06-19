@@ -25578,21 +25578,96 @@ if is_hydroxide_supported_place() then
                 return ok
             end
 
+            trinket_bot.bank.instance_position = function(instance)
+                if not instance then
+                    return nil
+                end
+                if instance:IsA("BasePart") then
+                    return instance.Position
+                end
+                local primary = instance:IsA("Model") and instance.PrimaryPart or nil
+                local root = FindFirstChild(instance, "HumanoidRootPart") or primary or FindFirstChildWhichIsA(instance, "BasePart", true)
+                return root and root.Position or nil
+            end
+
             trinket_bot.bank.find_banker_click_detector = function()
                 local roots = {FindFirstChild(ws, "NPCs"), FindFirstChild(ws, "Live"), ws}
+                local best_detector = nil
+                local best_banker = nil
+                local best_position = nil
+                local best_distance = math.huge
+
+                local function consider(banker)
+                    if not banker or banker.Name ~= "Banker" then
+                        return
+                    end
+                    local detector = FindFirstChildWhichIsA(banker, "ClickDetector", true)
+                    if not detector then
+                        return
+                    end
+                    local position = trinket_bot.bank.instance_position(banker)
+                    local distance = position and (position - RARE_ARTIFACT_BANK_POINT).Magnitude or math.huge
+                    if distance < best_distance then
+                        best_detector = detector
+                        best_banker = banker
+                        best_position = position
+                        best_distance = distance
+                    end
+                end
+
                 for _, root in ipairs(roots) do
                     if root then
                         local banker = FindFirstChild(root, "Banker", true)
                         if banker then
-                            local detector = FindFirstChildWhichIsA(banker, "ClickDetector", true)
-                            if detector then
-                                return detector, banker
-                            end
+                            consider(banker)
                         end
                     end
                 end
 
-                return nil, nil
+                return best_detector, best_banker, best_position
+            end
+
+            trinket_bot.bank.wait_for_banker_click_detector = function(timeout)
+                local deadline = tick() + (timeout or 8)
+                repeat
+                    local detector, banker, position = trinket_bot.bank.find_banker_click_detector()
+                    if detector then
+                        return detector, banker, position
+                    end
+                    task.wait(0.2)
+                until tick() >= deadline or shared.is_unloading
+                return nil, nil, nil
+            end
+
+            trinket_bot.bank.interact_with_banker = function()
+                local detector, banker, banker_position = trinket_bot.bank.wait_for_banker_click_detector(8)
+                if not detector or not fireclickdetector then
+                    return nil, "Banker ClickDetector unavailable"
+                end
+
+                if banker_position and typeof(banker_position) == "Vector3" then
+                    SmoothTeleport(banker_position, true, true)
+                    task.wait(0.15)
+                end
+
+                last_dialogue_data = nil
+                last_dialogue_received_at = 0
+                for attempt = 1, 8 do
+                    pcall(fireclickdetector, detector)
+                    local yes_choice = trinket_bot.bank.wait_for_dialogue_choice("Yes.", attempt == 1 and 1.25 or 0.75)
+                    if yes_choice then
+                        return yes_choice, nil, banker
+                    end
+                    if banker_position and typeof(banker_position) == "Vector3" then
+                        local root = plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart")
+                        if root and (root.Position - banker_position).Magnitude > 18 then
+                            SmoothTeleport(banker_position, true, true)
+                        end
+                    end
+                    task.wait(0.15)
+                end
+
+                return nil, "Banker did not offer Yes."
             end
 
             trinket_bot.bank.get_bank_survey_radius = function()
@@ -25888,22 +25963,12 @@ if is_hydroxide_supported_place() then
                             return
                         end
 
-                        local detector = trinket_bot.bank.find_banker_click_detector()
-                        if not detector or not fireclickdetector then
-                            fail_to_kick("Banker ClickDetector unavailable")
-                            return
-                        end
-
-                        last_dialogue_data = nil
-                        last_dialogue_received_at = 0
-                        fireclickdetector(detector)
-
-                        local yes_choice = trinket_bot.bank.wait_for_dialogue_choice("Yes.", 8)
+                        local yes_choice, banker_err = trinket_bot.bank.interact_with_banker()
                         if not yes_choice then
                             if trinket_bot.bank.recent_dialogue_has_text("Could I have it back", 10) then
                                 fail_to_kick("Banker offered retrieval dialogue instead of deposit")
                             else
-                                fail_to_kick("Banker did not offer Yes.")
+                                fail_to_kick(banker_err or "Banker did not offer Yes.")
                             end
                             return
                         end

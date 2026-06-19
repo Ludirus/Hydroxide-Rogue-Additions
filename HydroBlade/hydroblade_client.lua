@@ -366,11 +366,11 @@ function HydroBlade.wait_for_place(place_id, timeout)
     return false, "timed out waiting for place " .. tostring(target) .. " from " .. tostring(game.PlaceId)
 end
 
-local function find_dialogue_remote()
+local function find_dialogue_remote(allow_direct)
     if dialogue_remote and dialogue_remote.Parent then
         return dialogue_remote
     end
-    if tonumber(game.PlaceId) == 14341521240 then
+    if allow_direct or tonumber(game.PlaceId) == 14341521240 then
         local requests = ReplicatedStorage:FindFirstChild("Requests")
         local dialogue = requests and requests:FindFirstChild("Dialogue")
         if dialogue and dialogue:IsA("RemoteEvent") then
@@ -776,7 +776,7 @@ function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
         return hum and hum.Health > 0
     end
 
-    HydroBlade.dialogue.fire_choice(choice)
+    HydroBlade.dialogue.fire_choice(choice, true)
 
     character:PivotTo(target)
     local hum = character:FindFirstChildOfClass("Humanoid")
@@ -784,14 +784,36 @@ function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
         hum:ChangeState(Enum.HumanoidStateType.Jumping)
     end
 
-    local npc = find_npc(npcName, target.Position)
-    local detector = find_click_detector(npc)
-    if detector and fireclickdetector then
-        pcall(fireclickdetector, detector)
+    local clicked = false
+    local chose = false
+    local last_click_err = nil
+    for _ = 1, 6 do
+        local npc = find_npc(npcName, target.Position)
+        local detector = find_click_detector(npc)
+        if detector and fireclickdetector then
+            local click_ok, click_err = pcall(fireclickdetector, detector)
+            clicked = clicked or click_ok
+            last_click_err = click_err
+        end
+
+        local found_choice = HydroBlade.dialogue.wait_for_choice(choice, clicked and 0.85 or 0.2)
+        if found_choice then
+            local ok = HydroBlade.dialogue.fire_choice(found_choice, true)
+            chose = ok == true or chose
+            break
+        end
+
+        local ok = HydroBlade.dialogue.fire_choice(choice, true)
+        chose = ok == true or chose
+        task.wait(0.15)
     end
 
-    local found_choice = HydroBlade.dialogue.wait_for_choice(choice, 1.5)
-    HydroBlade.dialogue.fire_choice(found_choice or choice)
+    if not clicked then
+        return false, "inn npc click detector missing: " .. tostring(last_click_err or npcName)
+    end
+    if not chose then
+        return false, "inn dialogue choice unavailable: " .. tostring(choice)
+    end
 
     if is_alive() then
         character:BreakJoints()
@@ -906,8 +928,8 @@ function HydroBlade.dialogue.wait_for_choice(choice, timeout)
     return nil
 end
 
-function HydroBlade.dialogue.fire_choice(choice)
-    local remote = find_dialogue_remote()
+function HydroBlade.dialogue.fire_choice(choice, allow_direct)
+    local remote = find_dialogue_remote(allow_direct)
     if not remote then
         return false, "dialogue remote not found"
     end
@@ -917,8 +939,8 @@ function HydroBlade.dialogue.fire_choice(choice)
     return ok, err
 end
 
-function HydroBlade.dialogue.fire_exit()
-    local remote = find_dialogue_remote()
+function HydroBlade.dialogue.fire_exit(allow_direct)
+    local remote = find_dialogue_remote(allow_direct)
     if not remote then
         return false, "dialogue remote not found"
     end
@@ -1945,11 +1967,13 @@ end
 
 function HydroBlade.Reporter:fail(reason, detail, options)
     options = options or {}
-    HydroBlade.send({
+    local sent_to_exe = HydroBlade.send({
         method = "rot_failure",
         account_id = HydroBlade.account.id,
         parent_id = HydroBlade.account.parent_id,
         role = HydroBlade.account.role,
+        username = HydroBlade.account.username,
+        user_id = HydroBlade.account.user_id,
         reason = tostring(reason or "unknown"),
         detail = tostring(detail or ""),
         group_failure = options.group_failure == true,
@@ -1957,10 +1981,12 @@ function HydroBlade.Reporter:fail(reason, detail, options)
         job_id = game.JobId,
         place_id = tostring(game.PlaceId),
     })
-    self:send(reason, detail, {
-        title = options.group_failure == true and "HydroBlade Group Failure" or "HydroBlade Rot Failure",
-        stage = options.stage,
-    })
+    if not sent_to_exe then
+        self:send(reason, detail, {
+            title = options.group_failure == true and "HydroBlade Group Failure" or "HydroBlade Rot Failure",
+            stage = options.stage,
+        })
+    end
     if options.kick_self ~= false then
         HydroBlade.Session.new():kick(reason)
     end

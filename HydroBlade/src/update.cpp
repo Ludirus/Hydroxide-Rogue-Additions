@@ -204,7 +204,7 @@ bool BuildLatest(const fs::path& source_dir, const fs::path& output) {
         Quote(source) +
         L" -o " +
         Quote(output) +
-        L" -Wl,--no-insert-timestamp -lcomctl32 -lwinhttp -lshell32 -lshlwapi -lws2_32 -lbcrypt -lgdiplus -lole32";
+        L" -Wl,--no-insert-timestamp -lcomctl32 -lwinhttp -lshell32 -lshlwapi -lws2_32 -liphlpapi -lgdi32 -lbcrypt -lgdiplus -lole32";
     return RunCommand(command);
 }
 

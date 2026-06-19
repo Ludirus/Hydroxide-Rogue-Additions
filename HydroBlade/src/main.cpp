@@ -11,6 +11,7 @@
 #include <winhttp.h>
 #include <windowsx.h>
 #include <bcrypt.h>
+#include <iphlpapi.h>
 
 #include <algorithm>
 #include <atomic>
@@ -45,6 +46,9 @@ constexpr int kContextInsertRotAlt = 5001;
 constexpr int kContextRemoveAccount = 5002;
 constexpr int kContextToggleSigil = 5003;
 constexpr int kSettingsBrowseFolder = 6101;
+#ifndef PW_RENDERFULLCONTENT
+#define PW_RENDERFULLCONTENT 0x00000002
+#endif
 
 enum ControlId {
     IdAccountName = 1001,
@@ -168,6 +172,7 @@ struct RuntimeAccount {
     std::wstring status;
     std::wstring statusDetail;
     uint64_t lastSeen = 0;
+    DWORD processId = 0;
 };
 
 std::recursive_mutex g_runtimeMutex;
@@ -645,6 +650,15 @@ std::string ReadWholeFile(const std::wstring& path) {
     std::ostringstream ss;
     ss << in.rdbuf();
     return ss.str();
+}
+
+bool WriteWholeFile(const std::wstring& path, const std::string& data) {
+    std::ofstream out(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
+    if (!out) {
+        return false;
+    }
+    out.write(data.data(), static_cast<std::streamsize>(data.size()));
+    return static_cast<bool>(out);
 }
 
 void SaveAccounts() {
@@ -1629,6 +1643,360 @@ std::string JsonPair(const char* key, const std::wstring& value) {
     return std::string("\"") + key + "\":\"" + EscapeJsonUtf8(Narrow(value)) + "\"";
 }
 
+std::wstring SanitizeFilePart(std::wstring value) {
+    if (value.empty()) {
+        value = L"account";
+    }
+    for (wchar_t& ch : value) {
+        if (ch == L'\\' || ch == L'/' || ch == L':' || ch == L'*' || ch == L'?' || ch == L'"' ||
+            ch == L'<' || ch == L'>' || ch == L'|' || std::iswcntrl(ch)) {
+            ch = L'_';
+        }
+    }
+    return value;
+}
+
+bool PngEncoderClsid(CLSID& clsid) {
+    UINT count = 0;
+    UINT size = 0;
+    if (Gdiplus::GetImageEncodersSize(&count, &size) != Gdiplus::Ok || size == 0) {
+        return false;
+    }
+    std::vector<unsigned char> buffer(size);
+    auto* encoders = reinterpret_cast<Gdiplus::ImageCodecInfo*>(buffer.data());
+    if (Gdiplus::GetImageEncoders(count, size, encoders) != Gdiplus::Ok) {
+        return false;
+    }
+    for (UINT i = 0; i < count; ++i) {
+        if (wcscmp(encoders[i].MimeType, L"image/png") == 0) {
+            clsid = encoders[i].Clsid;
+            return true;
+        }
+    }
+    return false;
+}
+
+struct WindowSearch {
+    DWORD processId = 0;
+    HWND hwnd = nullptr;
+};
+
+BOOL CALLBACK FindWindowForProcessProc(HWND hwnd, LPARAM lParam) {
+    auto* search = reinterpret_cast<WindowSearch*>(lParam);
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != search->processId || !IsWindowVisible(hwnd)) {
+        return TRUE;
+    }
+    RECT rect = {};
+    if (!GetWindowRect(hwnd, &rect) || rect.right <= rect.left || rect.bottom <= rect.top) {
+        return TRUE;
+    }
+    wchar_t title[256] = {};
+    GetWindowTextW(hwnd, title, 256);
+    const std::wstring lowered = ToLower(title);
+    if (!lowered.empty() && lowered.find(L"roblox") == std::wstring::npos) {
+        return TRUE;
+    }
+    search->hwnd = hwnd;
+    return FALSE;
+}
+
+HWND FindWindowForProcess(DWORD processId) {
+    if (processId == 0) {
+        return nullptr;
+    }
+    WindowSearch search;
+    search.processId = processId;
+    EnumWindows(FindWindowForProcessProc, reinterpret_cast<LPARAM>(&search));
+    return search.hwnd;
+}
+
+BOOL CALLBACK FindAnyRobloxWindowProc(HWND hwnd, LPARAM lParam) {
+    if (!IsWindowVisible(hwnd)) {
+        return TRUE;
+    }
+    RECT rect = {};
+    if (!GetWindowRect(hwnd, &rect) || rect.right <= rect.left || rect.bottom <= rect.top) {
+        return TRUE;
+    }
+    wchar_t title[256] = {};
+    GetWindowTextW(hwnd, title, 256);
+    if (ToLower(title).find(L"roblox") == std::wstring::npos) {
+        return TRUE;
+    }
+    *reinterpret_cast<HWND*>(lParam) = hwnd;
+    return FALSE;
+}
+
+HWND FindAnyRobloxWindow() {
+    HWND hwnd = nullptr;
+    EnumWindows(FindAnyRobloxWindowProc, reinterpret_cast<LPARAM>(&hwnd));
+    return hwnd;
+}
+
+bool CaptureWindowPng(HWND hwnd, const std::wstring& path) {
+    if (!hwnd || !IsWindow(hwnd)) {
+        return false;
+    }
+    RECT rect = {};
+    if (!GetWindowRect(hwnd, &rect)) {
+        return false;
+    }
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+
+    HDC windowDc = GetWindowDC(hwnd);
+    if (!windowDc) {
+        return false;
+    }
+    HDC memoryDc = CreateCompatibleDC(windowDc);
+    HBITMAP bitmap = CreateCompatibleBitmap(windowDc, width, height);
+    if (!memoryDc || !bitmap) {
+        if (bitmap) DeleteObject(bitmap);
+        if (memoryDc) DeleteDC(memoryDc);
+        ReleaseDC(hwnd, windowDc);
+        return false;
+    }
+
+    HGDIOBJ previous = SelectObject(memoryDc, bitmap);
+    BOOL painted = PrintWindow(hwnd, memoryDc, PW_RENDERFULLCONTENT);
+    if (!painted) {
+        painted = BitBlt(memoryDc, 0, 0, width, height, windowDc, 0, 0, SRCCOPY);
+    }
+    SelectObject(memoryDc, previous);
+    DeleteDC(memoryDc);
+    ReleaseDC(hwnd, windowDc);
+
+    if (!painted) {
+        DeleteObject(bitmap);
+        return false;
+    }
+
+    CLSID pngClsid = {};
+    if (!PngEncoderClsid(pngClsid)) {
+        DeleteObject(bitmap);
+        return false;
+    }
+    Gdiplus::Bitmap gdipBitmap(bitmap, nullptr);
+    const bool saved = gdipBitmap.Save(path.c_str(), &pngClsid, nullptr) == Gdiplus::Ok;
+    DeleteObject(bitmap);
+    return saved;
+}
+
+std::wstring RuntimeScreenshotPath(const RuntimeAccount& account) {
+    wchar_t temp[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, temp);
+    std::filesystem::path folder = std::filesystem::path(temp) / L"HydroBlade" / L"screenshots";
+    std::error_code ec;
+    std::filesystem::create_directories(folder, ec);
+    SYSTEMTIME now = {};
+    GetLocalTime(&now);
+    wchar_t stamp[64] = {};
+    swprintf_s(
+        stamp,
+        L"%04u%02u%02u_%02u%02u%02u_%03u",
+        now.wYear,
+        now.wMonth,
+        now.wDay,
+        now.wHour,
+        now.wMinute,
+        now.wSecond,
+        now.wMilliseconds);
+    const std::wstring name = SanitizeFilePart(!account.username.empty() ? account.username : account.accountId);
+    return (folder / (name + L"_" + stamp + L".png")).wstring();
+}
+
+std::wstring CaptureRuntimeScreenshot(const RuntimeAccount& account, std::wstring& source) {
+    HWND hwnd = FindWindowForProcess(account.processId);
+    if (hwnd) {
+        source = L"pid " + std::to_wstring(account.processId);
+    } else {
+        hwnd = FindAnyRobloxWindow();
+        if (hwnd) {
+            source = L"fallback visible Roblox window";
+        }
+    }
+    if (!hwnd) {
+        source = L"no Roblox window found";
+        return {};
+    }
+    const std::wstring path = RuntimeScreenshotPath(account);
+    if (!CaptureWindowPng(hwnd, path)) {
+        source = L"window capture failed";
+        return {};
+    }
+    return path;
+}
+
+bool WinHttpPostBytes(const std::wstring& url, const std::wstring& headers, const std::string& body, DWORD& status) {
+    status = 0;
+    URL_COMPONENTSW parts = {};
+    wchar_t host[256] = {};
+    wchar_t path[2048] = {};
+    parts.dwStructSize = sizeof(parts);
+    parts.lpszHostName = host;
+    parts.dwHostNameLength = _countof(host);
+    parts.lpszUrlPath = path;
+    parts.dwUrlPathLength = _countof(path);
+    parts.dwSchemeLength = 1;
+    parts.dwExtraInfoLength = static_cast<DWORD>(-1);
+    std::wstring mutableUrl = url;
+    if (!WinHttpCrackUrl(mutableUrl.data(), static_cast<DWORD>(mutableUrl.size()), 0, &parts)) {
+        return false;
+    }
+    std::wstring requestPath(path, parts.dwUrlPathLength);
+    if (parts.lpszExtraInfo && parts.dwExtraInfoLength > 0) {
+        requestPath.append(parts.lpszExtraInfo, parts.dwExtraInfoLength);
+    }
+
+    HINTERNET session = WinHttpOpen(
+        L"HydroBlade/1.0",
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME,
+        WINHTTP_NO_PROXY_BYPASS,
+        0);
+    if (!session) {
+        return false;
+    }
+    HINTERNET connect = WinHttpConnect(session, std::wstring(host, parts.dwHostNameLength).c_str(), parts.nPort, 0);
+    if (!connect) {
+        WinHttpCloseHandle(session);
+        return false;
+    }
+    HINTERNET request = WinHttpOpenRequest(
+        connect,
+        L"POST",
+        requestPath.c_str(),
+        nullptr,
+        WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES,
+        parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0);
+    if (!request) {
+        WinHttpCloseHandle(connect);
+        WinHttpCloseHandle(session);
+        return false;
+    }
+    BOOL ok = WinHttpSendRequest(
+        request,
+        headers.c_str(),
+        static_cast<DWORD>(headers.size()),
+        body.empty() ? WINHTTP_NO_REQUEST_DATA : const_cast<char*>(body.data()),
+        static_cast<DWORD>(body.size()),
+        static_cast<DWORD>(body.size()),
+        0);
+    ok = ok && WinHttpReceiveResponse(request, nullptr);
+    if (ok) {
+        DWORD statusSize = sizeof(status);
+        WinHttpQueryHeaders(
+            request,
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_HEADER_NAME_BY_INDEX,
+            &status,
+            &statusSize,
+            WINHTTP_NO_HEADER_INDEX);
+    }
+    WinHttpCloseHandle(request);
+    WinHttpCloseHandle(connect);
+    WinHttpCloseHandle(session);
+    return ok && status >= 200 && status < 300;
+}
+
+bool SendHydroBladeFailureWebhook(const RuntimeAccount& account, const std::string& reason, const std::string& detail, bool groupFailure) {
+    if (!g_failureWebhookEnabled || g_failureWebhook.empty()) {
+        return false;
+    }
+    std::wstring screenshotSource;
+    const std::wstring screenshotPath = CaptureRuntimeScreenshot(account, screenshotSource);
+    const std::string screenshotBytes = screenshotPath.empty() ? std::string() : ReadWholeFile(screenshotPath);
+    const std::string screenshotText = screenshotPath.empty() ? Narrow(screenshotSource) : Narrow(screenshotPath);
+    const std::string title = groupFailure ? "HydroBlade Group Failure" : "HydroBlade Rot Failure";
+
+    std::ostringstream payload;
+    payload
+        << "{\"username\":\"HydroBlade\",\"embeds\":[{"
+        << "\"title\":\"" << EscapeJsonUtf8(title) << "\","
+        << "\"description\":\"" << EscapeJsonUtf8(reason) << "\","
+        << "\"fields\":["
+        << "{\"name\":\"Account\",\"value\":\"" << EscapeJsonUtf8(Narrow(account.username)) << "\",\"inline\":true},"
+        << "{\"name\":\"User ID\",\"value\":\"" << EscapeJsonUtf8(Narrow(account.userId)) << "\",\"inline\":true},"
+        << "{\"name\":\"Job\",\"value\":\"" << EscapeJsonUtf8(Narrow(account.jobId)) << "\",\"inline\":false},"
+        << "{\"name\":\"Detail\",\"value\":\"" << EscapeJsonUtf8(detail.empty() ? "none" : detail) << "\",\"inline\":false},"
+        << "{\"name\":\"Screenshot Path\",\"value\":\"" << EscapeJsonUtf8(screenshotText.empty() ? "unavailable" : screenshotText) << "\",\"inline\":false}"
+        << "]";
+    if (!screenshotBytes.empty()) {
+        payload << ",\"image\":{\"url\":\"attachment://hydroblade_instance.png\"}";
+    }
+    payload << "}]" << (!screenshotBytes.empty() ? ",\"attachments\":[{\"id\":0,\"filename\":\"hydroblade_instance.png\"}]" : "") << "}";
+
+    DWORD status = 0;
+    if (screenshotBytes.empty()) {
+        const std::wstring headers = L"Content-Type: application/json\r\n";
+        const bool ok = WinHttpPostBytes(g_failureWebhook, headers, payload.str(), status);
+        SetStatus(ok ? L"Sent HydroBlade failure webhook without screenshot: " + Widen(reason)
+                     : L"HydroBlade failure webhook failed without screenshot. HTTP " + std::to_wstring(status));
+        return ok;
+    }
+
+    const std::string boundary = "HydroBladeBoundary" + std::to_string(GetTickCount64());
+    std::string body;
+    body += "--" + boundary + "\r\n";
+    body += "Content-Disposition: form-data; name=\"payload_json\"\r\n";
+    body += "Content-Type: application/json\r\n\r\n";
+    body += payload.str();
+    body += "\r\n--" + boundary + "\r\n";
+    body += "Content-Disposition: form-data; name=\"files[0]\"; filename=\"hydroblade_instance.png\"\r\n";
+    body += "Content-Type: image/png\r\n\r\n";
+    body += screenshotBytes;
+    body += "\r\n--" + boundary + "--\r\n";
+
+    const std::wstring headers = L"Content-Type: multipart/form-data; boundary=" + Widen(boundary) + L"\r\n";
+    const bool ok = WinHttpPostBytes(g_failureWebhook, headers, body, status);
+    SetStatus(ok ? L"Sent HydroBlade failure webhook with EXE screenshot: " + screenshotPath
+                 : L"HydroBlade failure screenshot webhook failed. HTTP " + std::to_wstring(status));
+    return ok;
+}
+
+DWORD ResolveClientProcessId(SOCKET client) {
+    sockaddr_in local = {};
+    sockaddr_in peer = {};
+    int localLen = sizeof(local);
+    int peerLen = sizeof(peer);
+    if (getsockname(client, reinterpret_cast<sockaddr*>(&local), &localLen) != 0 ||
+        getpeername(client, reinterpret_cast<sockaddr*>(&peer), &peerLen) != 0) {
+        return 0;
+    }
+
+    DWORD size = 0;
+    GetExtendedTcpTable(nullptr, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+    if (size == 0) {
+        return 0;
+    }
+    std::vector<unsigned char> buffer(size);
+    auto* table = reinterpret_cast<PMIB_TCPTABLE_OWNER_PID>(buffer.data());
+    if (GetExtendedTcpTable(table, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0) != NO_ERROR) {
+        return 0;
+    }
+
+    const DWORD localAddr = local.sin_addr.S_un.S_addr;
+    const DWORD peerAddr = peer.sin_addr.S_un.S_addr;
+    const DWORD serverPort = ntohs(local.sin_port);
+    const DWORD clientPort = ntohs(peer.sin_port);
+    for (DWORD i = 0; i < table->dwNumEntries; ++i) {
+        const auto& row = table->table[i];
+        const DWORD rowLocalPort = ntohs(static_cast<u_short>(row.dwLocalPort));
+        const DWORD rowRemotePort = ntohs(static_cast<u_short>(row.dwRemotePort));
+        if (row.dwLocalAddr == peerAddr && rowLocalPort == clientPort &&
+            row.dwRemoteAddr == localAddr && rowRemotePort == serverPort) {
+            return row.dwOwningPid;
+        }
+    }
+    return 0;
+}
+
 std::string AccountListJson() {
     std::lock_guard<std::recursive_mutex> lock(g_accountsMutex);
     std::ostringstream out;
@@ -1871,7 +2239,7 @@ size_t LaunchPendingRotForParent(const std::wstring& parentId, const std::wstrin
     return launched;
 }
 
-RuntimeAccount RuntimeFromMessage(const std::string& message) {
+RuntimeAccount RuntimeFromMessage(const std::string& message, DWORD processId = 0) {
     RuntimeAccount account;
     account.accountId = Widen(ExtractJsonString(message, "account_id").value_or(""));
     account.parentId = Widen(ExtractJsonString(message, "parent_id").value_or(""));
@@ -1887,6 +2255,7 @@ RuntimeAccount RuntimeFromMessage(const std::string& message) {
         account.statusDetail = Widen(*detail);
     }
     account.lastSeen = GetTickCount64();
+    account.processId = processId;
     return account;
 }
 
@@ -1938,6 +2307,7 @@ void UpsertRuntimeAccount(const RuntimeAccount& account) {
         stored.status = account.status;
         stored.statusDetail = account.statusDetail;
     }
+    if (account.processId != 0) stored.processId = account.processId;
     stored.lastSeen = account.lastSeen;
     displayName = !stored.username.empty() ? stored.username : (!stored.userId.empty() ? L"User " + stored.userId : stored.accountId);
     const bool placeChanged = !stored.placeId.empty() && stored.placeId != oldPlaceId;
@@ -1982,9 +2352,16 @@ std::string ClientRuntimeReply(const RuntimeAccount& account, const std::string&
     return out.str();
 }
 
-std::string MarkRotFailure(const std::string& message) {
-    RuntimeAccount account = RuntimeFromMessage(message);
+std::string MarkRotFailure(const std::string& message, DWORD processId) {
+    RuntimeAccount account = RuntimeFromMessage(message, processId);
     UpsertRuntimeAccount(account);
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_runtimeMutex);
+        const auto found = g_runtimeAccounts.find(account.accountId);
+        if (found != g_runtimeAccounts.end()) {
+            account = found->second;
+        }
+    }
     const bool groupFailure = ExtractJsonBool(message, "group_failure");
     const bool kickSelf = message.find("\"kick_self\"") == std::string::npos || ExtractJsonBool(message, "kick_self");
     const std::wstring groupId = GroupIdForRuntime(account.accountId, account.parentId, account.role);
@@ -1993,12 +2370,14 @@ std::string MarkRotFailure(const std::string& message) {
         g_failedGroups.insert(groupId);
     }
     const std::string reason = ExtractJsonString(message, "reason").value_or("rot failure");
+    const std::string detail = ExtractJsonString(message, "detail").value_or("");
     SetStatus(std::wstring(groupFailure ? L"Group-fatal Rot failure: " : L"Rot local failure: ") + Widen(reason));
+    SendHydroBladeFailureWebhook(account, reason, detail, groupFailure);
     return std::string("{\"type\":\"rot_failure_ack\",\"kick\":") + (kickSelf ? "true" : "false") + ",\"group_failure\":" + (groupFailure ? "true" : "false") + ",\"reason\":\"" + EscapeJsonUtf8(reason) + "\"}";
 }
 
-std::string MarkRotRequest(const std::string& message) {
-    RuntimeAccount account = RuntimeFromMessage(message);
+std::string MarkRotRequest(const std::string& message, DWORD processId) {
+    RuntimeAccount account = RuntimeFromMessage(message, processId);
     UpsertRuntimeAccount(account);
     std::wstring groupId = GroupIdForRuntime(account.accountId, account.parentId, account.role);
     if (groupId.empty()) {
@@ -2011,7 +2390,7 @@ std::string MarkRotRequest(const std::string& message) {
     return std::string("{\"type\":\"request_rots_ack\",\"rot_requested\":") + (!groupId.empty() ? "true" : "false") + "}";
 }
 
-std::string ExecuteWsCommand(const std::string& message) {
+std::string ExecuteWsCommand(const std::string& message, DWORD processId = 0) {
     const std::string method = ExtractJsonString(message, "method").value_or(message);
     if (method == "ping") {
         return "{\"type\":\"pong\",\"server\":\"HydroBlade\"}";
@@ -2020,7 +2399,7 @@ std::string ExecuteWsCommand(const std::string& message) {
         return "{\"type\":\"help\",\"methods\":[\"ping\",\"help\",\"listen\",\"repeat\",\"list_accounts\",\"set_active\",\"set_inactive\",\"start_sigils\",\"client_status\",\"parent_job\",\"request_rots\",\"rot_failure\"]}";
     }
     if (method == "listen") {
-        RuntimeAccount account = RuntimeFromMessage(message);
+        RuntimeAccount account = RuntimeFromMessage(message, processId);
         UpsertRuntimeAccount(account);
         LaunchPendingRotForParent(account.accountId, account.placeId, account.jobId, account.role);
         std::string reply = ClientRuntimeReply(account, "listening");
@@ -2047,22 +2426,22 @@ std::string ExecuteWsCommand(const std::string& message) {
         return "{\"type\":\"queued\",\"method\":\"start_sigils\"}";
     }
     if (method == "client_status") {
-        RuntimeAccount account = RuntimeFromMessage(message);
+        RuntimeAccount account = RuntimeFromMessage(message, processId);
         UpsertRuntimeAccount(account);
         LaunchPendingRotForParent(account.accountId, account.placeId, account.jobId, account.role);
         return ClientRuntimeReply(account, "client_status");
     }
     if (method == "parent_job") {
-        RuntimeAccount account = RuntimeFromMessage(message);
+        RuntimeAccount account = RuntimeFromMessage(message, processId);
         UpsertRuntimeAccount(account);
         const std::wstring job = ParentJobForAccount(account.accountId, account.parentId);
         return std::string("{\"type\":\"parent_job\",\"job_id\":\"") + EscapeJsonUtf8(Narrow(job)) + "\"}";
     }
     if (method == "request_rots") {
-        return MarkRotRequest(message);
+        return MarkRotRequest(message, processId);
     }
     if (method == "rot_failure") {
-        return MarkRotFailure(message);
+        return MarkRotFailure(message, processId);
     }
     return std::string("{\"type\":\"error\",\"message\":\"Unknown method: ") + EscapeJsonUtf8(method) + "\"}";
 }
@@ -2156,6 +2535,7 @@ private:
     }
 
     void HandleClient(SOCKET client) {
+        const DWORD clientProcessId = ResolveClientProcessId(client);
         std::string request;
         char buffer[1024] = {};
         while (request.find("\r\n\r\n") == std::string::npos && request.size() < 16384) {
@@ -2190,7 +2570,7 @@ private:
             if (!message.has_value()) {
                 break;
             }
-            const std::string reply = ExecuteWsCommand(message.value());
+            const std::string reply = ExecuteWsCommand(message.value(), clientProcessId);
             if (!SendWebSocketText(client, reply)) {
                 break;
             }
