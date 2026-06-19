@@ -914,6 +914,65 @@ function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
         return true
     end
 
+    local function pivot_near_click_detector(detector, npc)
+        local active_character = local_character() or character
+        if not active_character then
+            return nil, nil
+        end
+        local root = active_character:FindFirstChild("HumanoidRootPart")
+        local click_position = detector and detector.Parent and instance_position(detector.Parent) or instance_position(npc) or target.Position
+        if typeof(click_position) ~= "Vector3" then
+            return nil, nil
+        end
+        local max_distance = 12
+        pcall(function()
+            max_distance = tonumber(detector.MaxActivationDistance) or max_distance
+        end)
+        local current_position = root and root.Position or target.Position
+        local direction = current_position - click_position
+        if direction.Magnitude < 0.1 then
+            direction = Vector3.new(0, 0, 1)
+        else
+            direction = direction.Unit
+        end
+        local offset = math.max(1, math.min(2.5, max_distance * 0.35))
+        local next_position = click_position + Vector3.new(0, 1.5, 0) + direction * offset
+        active_character:PivotTo(CFrame.new(next_position, click_position))
+        root = active_character:FindFirstChild("HumanoidRootPart")
+        if root then
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.Velocity = Vector3.zero
+            return (root.Position - click_position).Magnitude, max_distance
+        end
+        return nil, max_distance
+    end
+
+    local function fire_click_detector_hardened(detector)
+        if not fireclickdetector then
+            return false, "fireclickdetector unavailable"
+        end
+        local max_distance = 12
+        pcall(function()
+            max_distance = tonumber(detector.MaxActivationDistance) or max_distance
+        end)
+        local fired = false
+        local ok, err = pcall(fireclickdetector, detector)
+        fired = fired or ok
+        local last_err = err
+        ok, err = pcall(fireclickdetector, detector, max_distance)
+        fired = fired or ok
+        last_err = err or last_err
+        ok, err = pcall(fireclickdetector, detector, 0)
+        fired = fired or ok
+        last_err = err or last_err
+        ok, err = pcall(fireclickdetector, detector, math.huge)
+        fired = fired or ok
+        if fired then
+            return true, nil
+        end
+        return false, tostring(err or last_err)
+    end
+
     HydroBlade.dialogue.clear()
     character:PivotTo(target)
     local hum = character:FindFirstChildOfClass("Humanoid")
@@ -935,7 +994,11 @@ function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
         })
         local detector = find_click_detector(npc)
         if npc then
-            pivot_to_instance((detector and detector.Parent) or npc)
+            if detector then
+                pivot_near_click_detector(detector, npc)
+            else
+                pivot_to_instance(npc)
+            end
         end
 
         pcall(function()
@@ -949,22 +1012,30 @@ function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
         elseif not fireclickdetector then
             last_error = "fireclickdetector unavailable"
         else
+            local root_distance, max_distance = pivot_near_click_detector(detector, npc)
             last_error = string.format(
-                "clicked nearest %s at %.1f studs%s",
+                "clicked nearest %s at %.1f studs%s, root %.1f/max %.1f from click detector",
                 npcName,
                 tonumber(npc_distance) or -1,
-                npc_location and (" location " .. tostring(npc_location)) or ""
+                npc_location and (" location " .. tostring(npc_location)) or "",
+                tonumber(root_distance) or -1,
+                tonumber(max_distance) or -1
             )
-            local click_ok, click_err = pcall(fireclickdetector, detector)
+            local click_ok, click_err = fire_click_detector_hardened(detector)
             clicked = clicked or click_ok
             if not click_ok then
                 last_error = "fireclickdetector failed: " .. tostring(click_err)
             end
         end
 
-        if character_in_dialogue() then
-            saw_dialogue = true
-        end
+        local dialogue_deadline = os.clock() + 0.75
+        repeat
+            if character_in_dialogue() then
+                saw_dialogue = true
+                break
+            end
+            RunService.Heartbeat:Wait()
+        until os.clock() >= dialogue_deadline
 
         local found_choice = HydroBlade.dialogue.wait_for_choice(choice, clicked and 0.45 or 0.15)
         if found_choice then
@@ -2165,6 +2236,8 @@ function HydroBlade.Reporter:fail(reason, detail, options)
         detail = tostring(detail or ""),
         group_failure = options.group_failure == true,
         kick_self = false,
+        failure_webhook = HydroBlade.account.failure_webhook,
+        failure_webhook_enabled = HydroBlade.account.failure_webhook_enabled == true,
         job_id = game.JobId,
         place_id = tostring(game.PlaceId),
     })
@@ -2175,6 +2248,9 @@ function HydroBlade.Reporter:fail(reason, detail, options)
         })
     end
     if options.kick_self ~= false then
+        if sent_to_exe then
+            task.wait(0.75)
+        end
         local kick_reason = tostring(reason or "HydroBlade stopped.")
         local detail_text = trim_text(detail)
         if detail_text ~= "" then
@@ -2598,6 +2674,7 @@ HydroBlade.bypasses = {
         no_insanity = true,
         no_stun = true,
         no_fall = true,
+        auto_fall = true,
         gate_anti_backfire = true,
         anti_backfire_viribus = true,
     },
@@ -2880,6 +2957,32 @@ function HydroBlade.bypasses.enable_auto_dialogue()
     return true
 end
 
+function HydroBlade.bypasses.enable_auto_fall()
+    if HydroBlade.bypasses._auto_fall then
+        return true
+    end
+    HydroBlade.bypasses._auto_fall = connect(RunService.Heartbeat, function()
+        if not HydroBlade.bypasses.config.auto_fall or not HydroBlade.runtime.running then
+            return
+        end
+        local character = local_character()
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        local hum = character and character:FindFirstChildOfClass("Humanoid")
+        if not root or not hum then
+            return
+        end
+        local state = hum:GetState()
+        local in_water = state == Enum.HumanoidStateType.Swimming or hum.FloorMaterial == Enum.Material.Water
+        if hum.FloorMaterial == Enum.Material.Air and not in_water then
+            local velocity = root.AssemblyLinearVelocity
+            if velocity.Y > -70 then
+                root.AssemblyLinearVelocity = Vector3.new(velocity.X, -70, velocity.Z)
+            end
+        end
+    end)
+    return true
+end
+
 function HydroBlade.bypasses.enable_remote_bypasses()
     if HydroBlade.bypasses._remote_hooked or not hookmetamethod or not getnamecallmethod or not newcclosure then
         return HydroBlade.bypasses._remote_hooked == true
@@ -2974,6 +3077,9 @@ function HydroBlade.bypasses.enable_all(options)
     end
     if HydroBlade.bypasses.config.auto_dialogue then
         HydroBlade.bypasses.enable_auto_dialogue()
+    end
+    if HydroBlade.bypasses.config.auto_fall then
+        HydroBlade.bypasses.enable_auto_fall()
     end
     if options.remote ~= false then
         HydroBlade.bypasses.enable_remote_bypasses()

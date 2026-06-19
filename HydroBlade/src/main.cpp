@@ -1905,12 +1905,26 @@ bool WinHttpPostBytes(const std::wstring& url, const std::wstring& headers, cons
     return ok && status >= 200 && status < 300;
 }
 
-bool SendHydroBladeFailureWebhook(const RuntimeAccount& account, const std::string& reason, const std::string& detail, bool groupFailure) {
-    if (!g_failureWebhookEnabled || g_failureWebhook.empty()) {
+bool SendHydroBladeFailureWebhook(
+    const RuntimeAccount& account,
+    const std::string& reason,
+    const std::string& detail,
+    bool groupFailure,
+    const std::wstring& webhookOverride = L"",
+    bool webhookOverrideEnabled = false) {
+    const std::wstring webhook = !webhookOverride.empty() ? webhookOverride : g_failureWebhook;
+    const bool webhookEnabled = !webhookOverride.empty() ? webhookOverrideEnabled : g_failureWebhookEnabled;
+    if (!webhookEnabled || webhook.empty()) {
         return false;
     }
     std::wstring screenshotSource;
-    const std::wstring screenshotPath = CaptureRuntimeScreenshot(account, screenshotSource);
+    std::wstring screenshotPath;
+    for (int attempt = 0; attempt < 4 && screenshotPath.empty(); ++attempt) {
+        screenshotPath = CaptureRuntimeScreenshot(account, screenshotSource);
+        if (screenshotPath.empty()) {
+            Sleep(250);
+        }
+    }
     const std::string screenshotBytes = screenshotPath.empty() ? std::string() : ReadWholeFile(screenshotPath);
     const std::string screenshotText = screenshotPath.empty() ? Narrow(screenshotSource) : Narrow(screenshotPath);
     const std::string title = groupFailure ? "HydroBlade Group Failure" : "HydroBlade Rot Failure";
@@ -1935,7 +1949,7 @@ bool SendHydroBladeFailureWebhook(const RuntimeAccount& account, const std::stri
     DWORD status = 0;
     if (screenshotBytes.empty()) {
         const std::wstring headers = L"Content-Type: application/json\r\n";
-        const bool ok = WinHttpPostBytes(g_failureWebhook, headers, payload.str(), status);
+        const bool ok = WinHttpPostBytes(webhook, headers, payload.str(), status);
         SetStatus(ok ? L"Sent HydroBlade failure webhook without screenshot: " + Widen(reason)
                      : L"HydroBlade failure webhook failed without screenshot. HTTP " + std::to_wstring(status));
         return ok;
@@ -1954,7 +1968,7 @@ bool SendHydroBladeFailureWebhook(const RuntimeAccount& account, const std::stri
     body += "\r\n--" + boundary + "--\r\n";
 
     const std::wstring headers = L"Content-Type: multipart/form-data; boundary=" + Widen(boundary) + L"\r\n";
-    const bool ok = WinHttpPostBytes(g_failureWebhook, headers, body, status);
+    const bool ok = WinHttpPostBytes(webhook, headers, body, status);
     SetStatus(ok ? L"Sent HydroBlade failure webhook with EXE screenshot: " + screenshotPath
                  : L"HydroBlade failure screenshot webhook failed. HTTP " + std::to_wstring(status));
     return ok;
@@ -2371,8 +2385,12 @@ std::string MarkRotFailure(const std::string& message, DWORD processId) {
     }
     const std::string reason = ExtractJsonString(message, "reason").value_or("rot failure");
     const std::string detail = ExtractJsonString(message, "detail").value_or("");
+    const std::wstring packetWebhook = Widen(ExtractJsonString(message, "failure_webhook").value_or(""));
+    const bool packetWebhookEnabled = message.find("\"failure_webhook_enabled\"") != std::string::npos
+        ? ExtractJsonBool(message, "failure_webhook_enabled")
+        : !packetWebhook.empty();
     SetStatus(std::wstring(groupFailure ? L"Group-fatal Rot failure: " : L"Rot local failure: ") + Widen(reason));
-    SendHydroBladeFailureWebhook(account, reason, detail, groupFailure);
+    SendHydroBladeFailureWebhook(account, reason, detail, groupFailure, packetWebhook, packetWebhookEnabled);
     return std::string("{\"type\":\"rot_failure_ack\",\"kick\":") + (kickSelf ? "true" : "false") + ",\"group_failure\":" + (groupFailure ? "true" : "false") + ",\"reason\":\"" + EscapeJsonUtf8(reason) + "\"}";
 }
 

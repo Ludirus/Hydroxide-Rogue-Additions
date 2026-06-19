@@ -1296,7 +1296,7 @@ if is_hydroxide_supported_place() then
 
             flight = false,
             noclip = false,
-            auto_fall = false,
+            auto_fall = true,
             flight_speed = 100,
             better_flight = false,
 
@@ -29770,7 +29770,7 @@ if is_hydroxide_supported_place() then
 
                 cheat_client.feature_connections.flight = utility:Connection(rs.RenderStepped, LPH_NO_VIRTUALIZE(function()
                     local isNoclipEnabled = Toggles and Toggles.noclip and Toggles.noclip.Value or false
-                    local isAutoFallEnabled = Toggles and Toggles.auto_fall and Toggles.auto_fall.Value or false
+                    local isAutoFallEnabled = (Toggles and Toggles.auto_fall and Toggles.auto_fall.Value) or (trinket_bot and trinket_bot.path_running) or false
 
                     local character = plr.Character
                     if character then
