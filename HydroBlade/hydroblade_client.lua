@@ -459,40 +459,54 @@ local function find_npc(name, near_position, options)
     local best = nil
     local best_distance = math.huge
     local best_priority = math.huge
+    local best_location = nil
 
     local function consider(candidate)
         if not candidate or candidate.Name ~= name then
             return
         end
         local priority = 1
+        local location = nil
         if type(options.location_names) == "table" then
-            local location = instance_value(candidate, "Location")
+            location = instance_value(candidate, "Location")
             if text_matches_any(location, options.location_names) then
                 priority = 0
             elseif options.require_location then
                 return
             end
         end
+        if options.require_click_detector and not candidate:FindFirstChildWhichIsA("ClickDetector", true) then
+            return
+        end
         if typeof(near_position) ~= "Vector3" then
             if priority < best_priority then
                 best = candidate
                 best_priority = priority
+                best_location = location
             end
             return
         end
         local position = instance_position(candidate)
         if not position then
-            if priority < best_priority then
+            if not options.prefer_nearest and priority < best_priority then
                 best = candidate
                 best_priority = priority
+                best_location = location
             end
             return
         end
         local distance = (position - near_position).Magnitude
-        if priority < best_priority or (priority == best_priority and distance < best_distance) then
+        local better = false
+        if options.prefer_nearest then
+            better = distance < best_distance or (distance == best_distance and priority < best_priority)
+        else
+            better = priority < best_priority or (priority == best_priority and distance < best_distance)
+        end
+        if better then
             best = candidate
             best_distance = distance
             best_priority = priority
+            best_location = location
         end
     end
 
@@ -507,7 +521,7 @@ local function find_npc(name, near_position, options)
             end
         end
     end
-    return best
+    return best, best_distance, best_location
 end
 
 local function find_click_detector(instance)
@@ -914,10 +928,14 @@ function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
     local last_error = "npc not found: " .. npcName
     local deadline = os.clock() + 8
     repeat
-        local npc = find_npc(npcName, target.Position, { location_names = location_names })
+        local npc, npc_distance, npc_location = find_npc(npcName, target.Position, {
+            location_names = location_names,
+            prefer_nearest = true,
+            require_click_detector = true,
+        })
         local detector = find_click_detector(npc)
         if npc then
-            pivot_to_instance(npc)
+            pivot_to_instance((detector and detector.Parent) or npc)
         end
 
         pcall(function()
@@ -925,12 +943,18 @@ function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
         end)
 
         if not npc then
-            last_error = "npc not found: " .. npcName .. " near " .. tostring(inn_name or "target inn")
+            last_error = "nearest clickable npc not found: " .. npcName .. " near " .. tostring(inn_name or "target inn")
         elseif not detector then
             last_error = "click detector missing on " .. npcName
         elseif not fireclickdetector then
             last_error = "fireclickdetector unavailable"
         else
+            last_error = string.format(
+                "clicked nearest %s at %.1f studs%s",
+                npcName,
+                tonumber(npc_distance) or -1,
+                npc_location and (" location " .. tostring(npc_location)) or ""
+            )
             local click_ok, click_err = pcall(fireclickdetector, detector)
             clicked = clicked or click_ok
             if not click_ok then
@@ -965,7 +989,7 @@ function HydroBlade.movement.InnTeleport(point, npcName, choiceOverride)
         return false, "inn npc interaction failed: " .. tostring(last_error)
     end
     if not saw_dialogue then
-        return false, "inn dialogue did not open after clicking " .. tostring(npcName)
+        return false, "inn dialogue did not open after " .. tostring(last_error)
     end
     if not chose then
         return false, "inn dialogue choice unavailable: " .. tostring(choice)
@@ -2140,7 +2164,7 @@ function HydroBlade.Reporter:fail(reason, detail, options)
         reason = tostring(reason or "unknown"),
         detail = tostring(detail or ""),
         group_failure = options.group_failure == true,
-        kick_self = options.kick_self ~= false,
+        kick_self = false,
         job_id = game.JobId,
         place_id = tostring(game.PlaceId),
     })
