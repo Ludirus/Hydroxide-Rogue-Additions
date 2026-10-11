@@ -1390,6 +1390,7 @@ if is_hydroxide_supported_place() then
             dayfarm_webhook = "",
             show_in_artifact_stream = false,
             auto_bank_arti = false,
+            kick_on_trinket = false,
 
             custom_name_spoof = "",
             custom_day_spoof = 1,
@@ -15052,28 +15053,31 @@ if is_hydroxide_supported_place() then
                 recent_logged_pickup_names[session_loot_key(item_name)] = tick() + 4
             end
 
+            local function artifact_compare_key(item_name)
+                return normalize_session_loot_name(item_name):lower():gsub("[^%w]", "")
+            end
+
             local function is_trinket_artifact_item(item_name)
-                item_name = normalize_session_loot_name(item_name)
+                local item_key = artifact_compare_key(item_name)
                 for _, artifact_name in ipairs(cheat_client.artifacts or {}) do
-                    if item_name == normalize_session_loot_name(artifact_name) then
+                    if artifact_compare_key(artifact_name) == item_key then
                         return true
                     end
                 end
 
-                return item_name == "Lannis's Amulet"
-                    or item_name == "Lannis Amulet"
-                    or item_name == "Phoenix Down"
-                    or item_name == "Phoenix Flower"
-                    or item_name == "Azael Horn"
-                    or item_name == "Mysterious Artifact"
-                    or item_name == "Rift Gem"
-                    or item_name == "Amulet of the White King"
-                    or item_name == "Night Stone"
-                    or item_name == "Howler Friend"
-            end
-
-            local function artifact_compare_key(item_name)
-                return normalize_session_loot_name(item_name):lower():gsub("[^%w]", "")
+                return item_key == "lannissamulet"
+                    or item_key == "lannisamulet"
+                    or item_key == "phoenixdown"
+                    or item_key == "phoenixflower"
+                    or item_key == "azaelhorn"
+                    or item_key == "mysteriousartifact"
+                    or item_key == "riftgem"
+                    or item_key == "amuletofthewhiteking"
+                    or item_key == "nightstone"
+                    or item_key == "howlerfriend"
+                    or item_key == "philosophersstone"
+                    or item_key == "fairfrozen"
+                    or item_key == "spidercloak"
             end
 
             local function selected_kick_artifact_name(item_name)
@@ -15083,13 +15087,16 @@ if is_hydroxide_supported_place() then
 
                 local item_key = artifact_compare_key(item_name)
                 for selected_name, enabled in next, Options.KickTrinketList.Value do
-                    if enabled and artifact_compare_key(selected_name) == item_key then
-                        return normalize_session_loot_name(selected_name)
+                    local cand_name = type(selected_name) == "string" and selected_name or (type(enabled) == "string" and enabled or nil)
+                    local is_enabled = (type(enabled) == "boolean" and enabled) or (type(selected_name) == "number" and type(enabled) == "string")
+                    if is_enabled and cand_name and artifact_compare_key(cand_name) == item_key then
+                        return normalize_session_loot_name(cand_name)
                     end
                 end
 
                 return nil
             end
+            trinket_bot.selected_kick_artifact_name = selected_kick_artifact_name
 
             local function should_route_to_rare_artifact_webhook(item_name)
                 local normalized_name = normalize_session_loot_name(item_name)
@@ -15109,6 +15116,7 @@ if is_hydroxide_supported_place() then
                     and is_trinket_artifact_item(item_name)
                     and selected_kick_artifact_name(item_name) ~= nil
             end
+            trinket_bot.is_auto_bank_artifact_candidate = is_auto_bank_artifact_candidate
 
             local function get_days_survived_text()
                 local days
@@ -15127,6 +15135,103 @@ if is_hydroxide_supported_place() then
                     return "Unknown"
                 end
                 return tostring(days)
+            end
+
+            trinket_bot.find_inventory_kick_artifact = function()
+                if not (Toggles and Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value) then
+                    return nil, nil
+                end
+
+                local containers = {plr.Backpack, plr.Character}
+                for _, container in ipairs(containers) do
+                    if container then
+                        for _, item in ipairs(container:GetChildren()) do
+                            if item:IsA("Tool") then
+                                local matched_name = selected_kick_artifact_name(item.Name)
+                                if matched_name then
+                                    return item, matched_name
+                                end
+                            end
+                        end
+                    end
+                end
+
+                return nil, nil
+            end
+
+            trinket_bot.perform_kick_on_artifact = function(item_name, reason)
+                if trinket_bot.is_kicking_on_artifact then
+                    return
+                end
+                trinket_bot.is_kicking_on_artifact = true
+                local item_display = normalize_session_loot_name(item_name or "Artifact")
+                warn(string.format("[LudSploit] KICK ON ARTIFACT: %s (%s)", item_display, tostring(reason or "Kick on Trinket Pickup")))
+
+                kick_debounce = true
+                trinket_bot.path_running = false
+
+                if trinket_bot.cancel_active_tween then
+                    pcall(trinket_bot.cancel_active_tween)
+                end
+
+                pcall(function()
+                    clear_trinket_bot_session_locks()
+                    mem:RemoveItem("botstarted")
+                    mem:RemoveItem("serverhop_count")
+                    mem:RemoveItem("trinket_bot_restart_after_hop")
+                    mem:RemoveItem("trinket_bot_restart_reason")
+                    mem:RemoveItem("trinket_bot_resume_after_hop")
+                    if TRINKET_SESSION_MEM_KEY then
+                        mem:RemoveItem(TRINKET_SESSION_MEM_KEY)
+                    end
+                    clear_trinket_end_deadline()
+                    clear_trinket_session_file()
+                end)
+
+                pcall(function()
+                    local alert_text = string.format("@everyone %s in inventory! Kicking immediately to protect artifact.", item_display)
+                    if utility and utility.plain_webhook then
+                        utility:plain_webhook(alert_text)
+                    end
+
+                    local target_webhook = get_trinket_rare_artifact_webhook()
+                    if target_webhook == "" then
+                        target_webhook = get_trinket_artifact_webhook()
+                    end
+                    if target_webhook == "" then
+                        target_webhook = get_trinket_general_webhook()
+                    end
+
+                    if target_webhook ~= "" then
+                        local serverName, serverRegion = get_server_info()
+                        local days_text = get_days_survived_text()
+                        local embed = {
+                            title = string.format("LudSploit | Kick on Trinket: %s", item_display),
+                            description = string.format(
+                                "**Item:** `%s`\n**Action:** `Player kicked immediately`\n**Reason:** `%s`\n**Days:** `%s`\n**Server:** `%s (%s)`",
+                                item_display,
+                                tostring(reason or "Kick on Trinket Pickup"),
+                                days_text,
+                                serverName ~= "" and serverName or "Unknown",
+                                serverRegion ~= "" and serverRegion or "Unknown"
+                            ),
+                            color = 0xFF0033,
+                            footer = {
+                                text = string.format("LudSploit • %s • Job: %s", plr.Name, game.JobId)
+                            },
+                            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                        }
+                        HXD_SEND_WEBHOOK(target_webhook, {
+                            username = cheat_client.config.webhook_username or "LudSploit",
+                            content = "@everyone",
+                            embeds = {embed}
+                        })
+                    end
+                end)
+
+                library:Notify(string.format("%s found! Kicking now...", item_display))
+                task.wait(0.5)
+                plr:Kick(string.format("[LudSploit] %s in inventory (Kick on Trinket)", item_display))
             end
 
             local function get_artifact_object_id(object)
@@ -15522,7 +15627,17 @@ if is_hydroxide_supported_place() then
                         for _, item in ipairs(container:GetChildren()) do
                             if item:IsA("Tool") then
                                 local item_key = item.Name:lower():gsub("%s+", "")
-                                if item_key == target_key or (target_key == "idolofwar" and item_key == "idolofwars") then
+                                local is_match = (item_key == target_key)
+                                if not is_match then
+                                    if target_key:sub(-5) == "candy" and item_key == (target_key:sub(1, -6) .. "candies") then
+                                        is_match = true
+                                    elseif target_key == "scarymask" and item_key == "scarymasks" then
+                                        is_match = true
+                                    elseif target_key == "idolofwar" and item_key == "idolofwars" then
+                                        is_match = true
+                                    end
+                                end
+                                if is_match then
                                     local quantity = FindFirstChild(item, "Quantity")
                                     if quantity and quantity:IsA("IntValue") then
                                         total = total + math.max(0, quantity.Value)
@@ -15651,10 +15766,14 @@ if is_hydroxide_supported_place() then
                 local serverName, serverRegion = get_server_info()
                 local hours, minutes, seconds = get_session_duration_parts()
                 local player_count = #plrs:GetPlayers()
-                local idol_count = get_inventory_tool_quantity("Idol of War")
-                local war_min = idol_count * 3
-                local war_max = idol_count * 6
-                local war_average = idol_count * 4.6
+                local scary_mask_count = get_inventory_tool_quantity("Scary Mask")
+                local red_candy = get_inventory_tool_quantity("Red Candy")
+                local orange_candy = get_inventory_tool_quantity("Orange Candy")
+                local green_candy = get_inventory_tool_quantity("Green Candy")
+                local black_candy = get_inventory_tool_quantity("Black Candy")
+                local white_candy = get_inventory_tool_quantity("White Candy")
+                local blue_candy = get_inventory_tool_quantity("Blue Candy")
+                local total_candy = red_candy + orange_candy + green_candy + black_candy + white_candy + blue_candy
                 local path_name = trinket_bot.current_path_name and trinket_bot.current_path_name ~= "" and trinket_bot.current_path_name or "None"
                 local time_left_text = format_trinket_time_left_text()
                 local time_left_line = time_left_text and string.format("\n**Time Left:** `%s`", time_left_text) or ""
@@ -15688,19 +15807,23 @@ if is_hydroxide_supported_place() then
                         {
                             name = "Inventory",
                             value = string.format(
-                                "**Value:** `%d`\n**Idol of War:** `%d`",
+                                "**Value:** `%d`\n**Scary Mask:** `%d`\n**Total Candy:** `%d`",
                                 get_inventory_value(),
-                                idol_count
+                                scary_mask_count,
+                                total_candy
                             ),
                             inline = true
                         },
                         {
-                            name = "War Points",
+                            name = "Candy",
                             value = string.format(
-                                "**Range:** `%d - %d`\n**Average:** `%.1f`",
-                                war_min,
-                                war_max,
-                                war_average
+                                "**Red:** `%d` • **Orange:** `%d`\n**Green:** `%d` • **Black:** `%d`\n**White:** `%d` • **Blue:** `%d`",
+                                red_candy,
+                                orange_candy,
+                                green_candy,
+                                black_candy,
+                                white_candy,
+                                blue_candy
                             ),
                             inline = true
                         },
@@ -15934,19 +16057,30 @@ if is_hydroxide_supported_place() then
 
             local function format_loot_summary()
                 local hours, minutes, seconds = get_session_duration_parts()
-                local idol_count = get_inventory_tool_quantity("Idol of War")
+                local scary_mask_count = get_inventory_tool_quantity("Scary Mask")
+                local red_candy = get_inventory_tool_quantity("Red Candy")
+                local orange_candy = get_inventory_tool_quantity("Orange Candy")
+                local green_candy = get_inventory_tool_quantity("Green Candy")
+                local black_candy = get_inventory_tool_quantity("Black Candy")
+                local white_candy = get_inventory_tool_quantity("White Candy")
+                local blue_candy = get_inventory_tool_quantity("Blue Candy")
+                local total_candy = red_candy + orange_candy + green_candy + black_candy + white_candy + blue_candy
                 local time_left_text = format_trinket_time_left_text()
                 local time_left_line = time_left_text and ("\n**Time Left:** " .. time_left_text) or ""
                 local days_text = get_days_survived_text()
 
                 return string.format(
-                    "**Inventory Value:** %d\n**Days:** %s\n**Idol of War:** %d\n**War Points:** %d-%d (avg %.1f)\n**Session:** %s%s\n**Last Looted:**\n%s\n%s",
+                    "**Inventory Value:** %d\n**Days:** %s\n**Scary Mask:** %d\n**Total Candy:** %d\n**Candy:** Red: %d, Orange: %d, Green: %d, Black: %d, White: %d, Blue: %d\n**Session:** %s%s\n**Last Looted:**\n%s\n%s",
                     get_inventory_value(),
                     days_text,
-                    idol_count,
-                    idol_count * 3,
-                    idol_count * 6,
-                    idol_count * 4.6,
+                    scary_mask_count,
+                    total_candy,
+                    red_candy,
+                    orange_candy,
+                    green_candy,
+                    black_candy,
+                    white_candy,
+                    blue_candy,
                     format_duration_text(hours, minutes, seconds),
                     time_left_line,
                     format_last_looted_text(),
@@ -17951,6 +18085,15 @@ if is_hydroxide_supported_place() then
             end
 
             trinket_bot.TrinketBotServerhop = function(reason, skip_test_mode_check, skip_return_to_menu, force_serverhop)
+                if Toggles and Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value and not trinket_bot.rare_artifact_bank_in_progress then
+                    local kick_tool, kick_name = trinket_bot.find_inventory_kick_artifact()
+                    if kick_tool and kick_name then
+                        warn(string.format("[LudSploit] Serverhop prevented: holding %s with Kick on Trinket enabled; kicking immediately!", kick_name))
+                        trinket_bot.perform_kick_on_artifact(kick_name, "Serverhop prevented by Kick on Trinket: " .. tostring(reason))
+                        return
+                    end
+                end
+
                 if not skip_test_mode_check and trinket_bot.test_mode then
                     library:Notify(string.format("Serverhop blocked (test mode): %s", reason or "Unknown"))
                     return
@@ -19305,9 +19448,9 @@ if is_hydroxide_supported_place() then
 
                 return false
             end
-            local kick_debounce = false
-            local kick_after_path = false
-            local kick_trinket_name = ""
+            kick_debounce = false
+            kick_after_path = false
+            kick_trinket_name = ""
             local proximity_warnings = {}
             local mana_initialized = false
             local emergency_gate_requested = nil
@@ -19326,10 +19469,22 @@ if is_hydroxide_supported_place() then
                     return
                 end
 
-                mark_trinket_bot_executing()
-
                 test_mode = test_mode or false
                 trinket_bot.test_mode = test_mode
+
+                if not test_mode and Toggles and Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value and not trinket_bot.rare_artifact_banked_this_session and not trinket_bot.rare_artifact_bank_in_progress then
+                    local kick_tool, kick_name = trinket_bot.find_inventory_kick_artifact()
+                    if kick_tool and kick_name then
+                        local bank_candidate = is_auto_bank_artifact_candidate(kick_name)
+                        if not (bank_candidate and trinket_bot.try_auto_bank_arti and trinket_bot.try_auto_bank_arti(kick_tool, kick_name)) then
+                            warn(string.format("[LudSploit] ExecutePath aborted: holding %s with Kick on Trinket enabled; kicking immediately!", kick_name))
+                            trinket_bot.perform_kick_on_artifact(kick_name, "Holding kick artifact at path start")
+                            return
+                        end
+                    end
+                end
+
+                mark_trinket_bot_executing()
 
                 droppedTools = {}
                 currently_dropping = false
@@ -20540,6 +20695,17 @@ if is_hydroxide_supported_place() then
                         return
                     end
 
+                    if not trinket_bot.is_kicking_on_artifact and Toggles and Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value and not trinket_bot.rare_artifact_bank_in_progress then
+                        local kick_tool, kick_name = trinket_bot.find_inventory_kick_artifact()
+                        if kick_tool and kick_name then
+                            local bank_candidate = is_auto_bank_artifact_candidate(kick_name)
+                            if not (bank_candidate and trinket_bot.try_auto_bank_arti and trinket_bot.try_auto_bank_arti(kick_tool, kick_name)) then
+                                trinket_bot.perform_kick_on_artifact(kick_name, "Holding kick artifact during path: " .. kick_name)
+                                return
+                            end
+                        end
+                    end
+
                     if stop_trinket_bot_for_end_deadline("path loop") then
                         return
                     end
@@ -20645,6 +20811,11 @@ if is_hydroxide_supported_place() then
                     end
 
                     if kick_after_path and not kick_gate_handled then
+                        if Toggles and Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value then
+                            trinket_bot.perform_kick_on_artifact(kick_trinket_name ~= "" and kick_trinket_name or "Artifact", "kick_after_path active with Kick on Trinket enabled")
+                            return
+                        end
+
                         local last_gate_index = nil
                         for j = #trinket_bot.path_points, 1, -1 do
                             if trinket_bot.path_points[j].is_gate_point then
@@ -22575,8 +22746,11 @@ if is_hydroxide_supported_place() then
 
             group_trinket_bot:AddToggle("KickOnTrinket", {
                 Text = "Kick on Trinket Pickup",
-                Default = false,
-                Tooltip = "Kicks and webhooks when selected trinket is picked up"
+                Default = cheat_client.config.kick_on_trinket == true,
+                Tooltip = "Kicks and webhooks when selected trinket is picked up",
+                Callback = function(value)
+                    cheat_client.config.kick_on_trinket = value == true
+                end
             })
 
             group_trinket_bot:AddToggle("AutoBankArti", {
@@ -25268,6 +25442,17 @@ if is_hydroxide_supported_place() then
             trinket_bot.scan_inventory_for_drop_items = function(scan_reason)
                 auto_drop_clear_stale_busy()
 
+                if not trinket_bot.is_kicking_on_artifact and Toggles and Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value and not trinket_bot.rare_artifact_bank_in_progress then
+                    local kick_tool, kick_name = trinket_bot.find_inventory_kick_artifact()
+                    if kick_tool and kick_name then
+                        local bank_candidate = is_auto_bank_artifact_candidate(kick_name)
+                        if not (bank_candidate and trinket_bot.try_auto_bank_arti and trinket_bot.try_auto_bank_arti(kick_tool, kick_name)) then
+                            trinket_bot.perform_kick_on_artifact(kick_name, "Inventory scan found " .. kick_name)
+                            return true
+                        end
+                    end
+                end
+
                 if not trinket_bot.auto_drop_bot_active() then
                     return false
                 end
@@ -25880,6 +26065,11 @@ if is_hydroxide_supported_place() then
                     could_have_back = tostring(trinket_bot.bank.recent_dialogue_has_text("Could I have it back", 10))
                 })
 
+                if Toggles and Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value then
+                    trinket_bot.perform_kick_on_artifact(item_name, "Auto Bank Arti fallback: " .. tostring(reason))
+                    return
+                end
+
                 local ok, message = trinket_bot.prepare_restart_from_point_one()
                 if ok then
                     library:Notify("Auto Bank Arti fallback: Deepforest restart prepared, continuing kick path")
@@ -26029,9 +26219,10 @@ if is_hydroxide_supported_place() then
                             task.wait(0.75)
                         end
 
-                        if kick_after_path then
-                            library:Notify("Auto Bank Arti picked up another kick artifact; continuing kick path")
+                        local second_kick_tool, second_kick_name = trinket_bot.find_inventory_kick_artifact()
+                        if second_kick_tool and second_kick_name and Toggles and Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value then
                             finish()
+                            trinket_bot.perform_kick_on_artifact(second_kick_name, "Holding kick artifact after Auto Bank Arti: " .. second_kick_name)
                             return
                         end
 
@@ -26085,45 +26276,52 @@ if is_hydroxide_supported_place() then
                 local character = plr.Character
                 if character then
                     trinket_bot.auto_drop_character_connection = utility:Connection(character.ChildAdded, function(obj)
-                        if obj and obj:IsA("Tool") and trinket_bot.auto_drop_bot_active() then
+                        if not obj or not obj:IsA("Tool") then return end
+
+                        if not trinket_bot.is_kicking_on_artifact and Toggles and Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value then
+                            local kick_name = trinket_bot.selected_kick_artifact_name(obj.Name)
+                            if kick_name then
+                                if is_auto_bank_artifact_candidate(kick_name) and trinket_bot.try_auto_bank_arti and trinket_bot.try_auto_bank_arti(obj, kick_name) then
+                                    print(string.format("[Auto Bank Arti] MATCH FOUND: %s - banking before resume/serverhop", obj.Name))
+                                    library:Notify(string.format("%s found! Auto Bank Arti starting...", kick_name))
+                                    return
+                                end
+
+                                trinket_bot.perform_kick_on_artifact(kick_name, "Picked up " .. kick_name)
+                                return
+                            end
+                        end
+
+                        if trinket_bot.auto_drop_bot_active() then
                             trinket_bot.request_auto_drop_scan("character_added")
                         end
                     end)
                 end
 
                 auto_drop_backpack_connection = utility:Connection(backpack.ChildAdded, function(obj)
-                    if not obj then return end
-
-                    if not trinket_bot.auto_drop_bot_active() then return end
-
-                    if not obj:IsA("Tool") then return end
+                    if not obj or not obj:IsA("Tool") then return end
 
                     task.wait(0.05)
+
+                    if not trinket_bot.is_kicking_on_artifact and Toggles and Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value then
+                        local kick_name = trinket_bot.selected_kick_artifact_name(obj.Name)
+                        if kick_name then
+                            if is_auto_bank_artifact_candidate(kick_name) and trinket_bot.try_auto_bank_arti and trinket_bot.try_auto_bank_arti(obj, kick_name) then
+                                print(string.format("[Auto Bank Arti] MATCH FOUND: %s - banking before resume/serverhop", obj.Name))
+                                library:Notify(string.format("%s found! Auto Bank Arti starting...", kick_name))
+                                return
+                            end
+
+                            trinket_bot.perform_kick_on_artifact(kick_name, "Picked up " .. kick_name)
+                            return
+                        end
+                    end
+
+                    if not trinket_bot.auto_drop_bot_active() then return end
 
                     if trinket_bot.get_auto_drop_list_name_for_tool(obj) then
                         task.spawn(trinket_bot.drop_item, obj)
                         return
-                    end
-
-                    if not kick_debounce and Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value and Options.KickTrinketList and Options.KickTrinketList.Value then
-                        local selected_trinkets = Options.KickTrinketList.Value
-                        for trinket_name, _ in next, selected_trinkets do
-                            if obj.Name:gsub(" ", "") == trinket_name:gsub(" ", "") then
-                                if trinket_bot.try_auto_bank_arti and trinket_bot.try_auto_bank_arti(obj, trinket_name) then
-                                    print(string.format("[Auto Bank Arti] MATCH FOUND: %s - banking before resume/serverhop", obj.Name))
-                                    library:Notify(string.format("%s found! Auto Bank Arti starting...", trinket_name))
-                                    return
-                                end
-
-                                kick_debounce = true
-                                kick_after_path = true
-                                kick_trinket_name = trinket_name
-                                print(string.format("[Kick on Trinket] MATCH FOUND: %s - will kick after reaching last point", obj.Name))
-                                utility:plain_webhook(string.format("@here %s found! Going to last point then kicking.", trinket_name))
-                                library:Notify(string.format("%s found! Going to last point...", trinket_name))
-                                return
-                            end
-                        end
                     end
 
                     task.wait(0.67)

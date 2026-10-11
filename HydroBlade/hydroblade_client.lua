@@ -2429,6 +2429,36 @@ function HydroBlade.RoleRunner:spawn()
     return true
 end
 
+function HydroBlade.RoleRunner:resume_after_menu(label, options)
+    options = options or {}
+    label = tostring(label or "respawn")
+    self:send_status(label .. "_waiting")
+    local ready, state_or_err = HydroBlade.wait_for_start_menu_or_character(
+        tonumber(options.menu_seconds) or 5,
+        tonumber(options.timeout) or 60,
+        tonumber(options.character_seconds) or 2
+    )
+    if not ready then
+        self:send_status(label .. "_failed", { error = state_or_err or "menu/character unavailable" })
+        return false, state_or_err or "menu/character unavailable"
+    end
+    if state_or_err == "menu" then
+        self:send_status(label .. "_leaving_menu")
+        local left_menu, leave_err = HydroBlade.leave_menu()
+        if not left_menu then
+            self:send_status(label .. "_failed", { error = leave_err or "StartMenu Play click failed" })
+            return false, leave_err or "StartMenu Play click failed"
+        end
+    end
+    local character = HydroBlade.wait_for_character(tonumber(options.character_timeout) or 45)
+    if not character then
+        self:send_status(label .. "_failed", { error = "character unavailable after menu" })
+        return false, "character unavailable after menu"
+    end
+    self:send_status(label .. "_ready")
+    return true
+end
+
 function HydroBlade.RoleRunner:fail(reason, detail, group_failure)
     self.reporter:fail(reason, detail, { group_failure = group_failure == true })
     return false, reason
@@ -2454,8 +2484,9 @@ function HydroBlade.RoleRunner:alchemy()
     if not ok then
         return self:fail("inn teleport failed", err)
     end
-    if not HydroBlade.wait_for_character(15) then
-        return self:fail("respawn failed after Alana inn teleport")
+    local resumed, resume_err = self:resume_after_menu("alana_inn_respawn")
+    if not resumed then
+        return self:fail("respawn failed after Alana inn teleport", resume_err)
     end
     if not self:pick("Dire Flower", 700) then
         return false
@@ -2465,8 +2496,9 @@ function HydroBlade.RoleRunner:alchemy()
         local_character():BreakJoints()
     end
     task.wait(7)
-    if not HydroBlade.wait_for_character(15) then
-        return self:fail("respawn failed before alchemy station")
+    resumed, resume_err = self:resume_after_menu("alchemy_reset_respawn", { timeout = 45 })
+    if not resumed then
+        return self:fail("respawn failed before alchemy station", resume_err)
     end
     local moved, move_err = HydroBlade.movement.tween_to(Vector3.new(2350, 64, 800), 4)
     if not moved then
@@ -2491,8 +2523,9 @@ function HydroBlade.RoleRunner:alana()
     if not ok then
         return self:fail("oresfall inn teleport failed", err)
     end
-    if not HydroBlade.wait_for_character(15) then
-        return self:fail("respawn failed after Oresfall inn teleport")
+    local resumed, resume_err = self:resume_after_menu("oresfall_inn_respawn")
+    if not resumed then
+        return self:fail("respawn failed after Oresfall inn teleport", resume_err)
     end
     local npc = find_npc("Alana", Vector3.new(2967.634, 288.85, -16))
     if not npc then
@@ -2626,8 +2659,9 @@ function HydroBlade.RoleRunner:run_rot()
     if not ok then
         return self:fail("renova inn teleport failed", err, { force_lua_webhook = true, stage = "renova_inn" })
     end
-    if not HydroBlade.wait_for_character(15) then
-        return self:fail("respawn failed after Renova inn teleport", nil, { force_lua_webhook = true, stage = "renova_respawn" })
+    local resumed, resume_err = self:resume_after_menu("renova_inn_respawn")
+    if not resumed then
+        return self:fail("respawn failed after Renova inn teleport", resume_err, { force_lua_webhook = true, stage = "renova_respawn" })
     end
     if not self:pick("Glow Scroom", 650) then
         return false
@@ -2645,7 +2679,7 @@ function HydroBlade.RoleRunner:run_rot()
     if not home_ok then
         return self:fail("renova return failed", home_err, { force_lua_webhook = true, stage = "renova_return" })
     end
-    HydroBlade.wait_for_character(15)
+    self:resume_after_menu("renova_return_respawn", { timeout = 45 })
     local job = self:parent_job(15)
     if not job then
         return self:fail("parent job unavailable", "sigil did not report a job id")
