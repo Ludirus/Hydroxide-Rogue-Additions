@@ -1320,6 +1320,7 @@ if is_hydroxide_supported_place() then
             deepforest_restart_for_uploaded_path = true,
             death_lives_check = true,
             kick_on_one_life = false,
+            menu_on_non_23 = false,
             trinket_end_in_hours = 0,
             trinket_debug_ping_user_id = "",
 
@@ -18049,6 +18050,185 @@ if is_hydroxide_supported_place() then
                 return false
             end
 
+            trinket_bot.get_current_server_player_count = function()
+                local live_count = #plrs:GetPlayers()
+                local serverInfo = FindFirstChild(rps, "ServerInfo")
+                local httpService = Services.HttpService
+
+                if serverInfo then
+                    local currentServer = FindFirstChild(serverInfo, game.JobId)
+                    local playersValue = currentServer and FindFirstChild(currentServer, "Players")
+
+                    if playersValue and playersValue:IsA("StringValue") then
+                        local success, playerData = pcall(function()
+                            return httpService:JSONDecode(playersValue.Value)
+                        end)
+
+                        if success and playerData and type(playerData) == "table" then
+                            return math.max(#playerData, live_count)
+                        end
+                    end
+                end
+
+                return live_count
+            end
+
+            trinket_bot.menu_on_non_23 = function(player_count)
+                trinket_bot.menu_only_stop = true
+                trinket_bot.path_running = false
+                pcall(clear_trinket_bot_session_locks)
+                mem:RemoveItem("botstarted")
+                mem:RemoveItem("serverhop_count")
+                mem:RemoveItem("trinket_bot_restart_after_hop")
+                mem:RemoveItem("trinket_bot_restart_reason")
+                mem:RemoveItem("trinket_bot_resume_after_hop")
+                mem:RemoveItem(TRINKET_SESSION_MEM_KEY)
+                pcall(clear_trinket_end_deadline)
+                pcall(clear_trinket_session_file)
+
+                if trinket_bot.connections then
+                    for _, connection in pairs(trinket_bot.connections) do
+                        if connection then
+                            pcall(function()
+                                connection:Disconnect()
+                            end)
+                        end
+                    end
+                    trinket_bot.connections = {}
+                end
+
+                if trinket_bot.illu_connections then
+                    for _, connection in ipairs(trinket_bot.illu_connections) do
+                        if connection then
+                            pcall(function()
+                                connection:Disconnect()
+                            end)
+                        end
+                    end
+                    trinket_bot.illu_connections = {}
+                end
+
+                if trinket_bot.gnav_connections then
+                    for _, connection in ipairs(trinket_bot.gnav_connections) do
+                        if connection then
+                            pcall(function()
+                                connection:Disconnect()
+                            end)
+                        end
+                    end
+                    trinket_bot.gnav_connections = {}
+                end
+
+                if loot_tracking_connection then
+                    pcall(function()
+                        loot_tracking_connection:Disconnect()
+                    end)
+                    loot_tracking_connection = nil
+                end
+
+                for _, connection in ipairs(quantity_connections) do
+                    if connection then
+                        pcall(function()
+                            connection:Disconnect()
+                        end)
+                    end
+                end
+                quantity_connections = {}
+
+                if active_tween_data then
+                    if active_tween_data.tween then
+                        pcall(function()
+                            active_tween_data.tween:Cancel()
+                        end)
+                        active_tween_data.tween = nil
+                    end
+                    if active_tween_data.connection then
+                        pcall(function()
+                            active_tween_data.connection:Disconnect()
+                        end)
+                        active_tween_data.connection = nil
+                    end
+                end
+
+                pcall(restore_bot_state)
+
+                local serverName, serverRegion = get_server_info()
+                local footer_text = string.format("LudSploit • Players: %d/23 • %s • Job: %s", player_count, plr.Name, game.JobId)
+                local embed = {
+                    title = "LudSploit | Menu on NON-23",
+                    description = string.format(
+                        "**Server:** `%s (%s)`\n**Player Count:** `%d/23`\n**Action:** Menu only, bot stopped",
+                        serverName ~= "" and serverName or "Unknown",
+                        serverRegion ~= "" and serverRegion or "Unknown",
+                        player_count
+                    ),
+                    color = 0xff0000,
+                    footer = {
+                        text = footer_text
+                    },
+                    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+                }
+
+                task.spawn(function()
+                    pcall(function()
+                        local webhook_url = get_trinket_general_webhook()
+                        if webhook_url ~= "" then
+                            HXD_SEND_WEBHOOK(webhook_url, {
+                                username = cheat_client.config.webhook_username or "LudSploit",
+                                content = "@everyone",
+                                embeds = {embed}
+                            })
+                        end
+                    end)
+                end)
+
+                library:Notify(string.format("Menu on NON-23 triggered (%d/23)", player_count))
+
+                task.spawn(function()
+                    local humanoid = plr.Character and FindFirstChildOfClass(plr.Character, "Humanoid")
+                    if humanoid then
+                        local deadline = tick() + 6
+                        while tick() < deadline do
+                            local state = humanoid:GetState()
+                            if state ~= Enum.HumanoidStateType.Freefall and state ~= Enum.HumanoidStateType.Flying and state ~= Enum.HumanoidStateType.Jumping then
+                                break
+                            end
+                            task.wait(0.1)
+                        end
+                    end
+
+                    local function try_menu()
+                        if rps.Requests and FindFirstChild(rps.Requests, "ReturnToMenu") and plr.Character then
+                            local ok = pcall(function()
+                                rps.Requests.ReturnToMenu:InvokeServer()
+                            end)
+                            return ok
+                        end
+                        return false
+                    end
+
+                    local menu_sent = try_menu()
+
+                    if not menu_sent then
+                        task.wait(1)
+                        menu_sent = try_menu()
+                        if not menu_sent then
+                            plr:Kick("Menu on NON-23: ReturnToMenu failed twice - kicked for safety")
+                            return
+                        end
+                    end
+
+                    task.wait(3)
+                    if plr and plr.Character then
+                        try_menu()
+                        task.wait(1)
+                        if plr and plr.Character then
+                            plr:Kick("Menu on NON-23: still in-game after menu retries - kicked for safety")
+                        end
+                    end
+                end)
+            end
+
             local teleport_debounce = false
             local function is_trinket_serverhop_urgent(reason)
                 local reason_text = tostring(reason or ""):lower()
@@ -18182,6 +18362,7 @@ if is_hydroxide_supported_place() then
                     kick_on_trinket = Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value or false,
                     kick_trinket_list = Options.KickTrinketList and Options.KickTrinketList.Value or {},
                     stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false,
+                    menu_on_non_23 = Toggles.MenuOnNon23 and Toggles.MenuOnNon23.Value or false,
                     reequip_gate_in_loop = Toggles.ReequipGateInLoop == nil and true or Toggles.ReequipGateInLoop.Value,
                     auto_restart_after_hop = Toggles.AutoRestartAfterHop == nil and true or Toggles.AutoRestartAfterHop.Value,
                     deepforest_restart_for_uploaded_path = Toggles.DeepforestRestartForUploadedPath == nil and true or Toggles.DeepforestRestartForUploadedPath.Value,
@@ -19471,6 +19652,10 @@ if is_hydroxide_supported_place() then
 
                 test_mode = test_mode or false
                 trinket_bot.test_mode = test_mode
+                trinket_bot.menu_only_stop = false
+                trinket_bot.menu_on_non_23_triggered = false
+                trinket_bot.last_non_23_check = 0
+                trinket_bot.last_non_23_count = 23
 
                 if not test_mode and Toggles and Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value and not trinket_bot.rare_artifact_banked_this_session and not trinket_bot.rare_artifact_bank_in_progress then
                     local kick_tool, kick_name = trinket_bot.find_inventory_kick_artifact()
@@ -19765,6 +19950,10 @@ if is_hydroxide_supported_place() then
                         death_connection = track_connection("death", utility:Connection(humanoid.Died, function()
                             if death_connection then
                                 pcall(function() death_connection:Disconnect() end)
+                            end
+
+                            if trinket_bot.menu_only_stop then
+                                return
                             end
 
                             local previous_lives = Get("Lives")
@@ -20344,6 +20533,24 @@ if is_hydroxide_supported_place() then
                 end
 
                 proximity_connection = track_connection("proximity", utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function()
+                    if not test_mode and Toggles.MenuOnNon23 and Toggles.MenuOnNon23.Value and trinket_bot.path_running and mem:HasItem("botstarted") and mem:GetItem("botstarted") == "true" then
+                        local now = tick()
+                        if now - (trinket_bot.last_non_23_check or 0) >= 1 then
+                            trinket_bot.last_non_23_check = now
+                            local player_count = trinket_bot.get_current_server_player_count()
+                            trinket_bot.last_non_23_count = player_count
+                            if player_count < 23 then
+                                if not trinket_bot.menu_on_non_23_triggered then
+                                    trinket_bot.menu_on_non_23_triggered = true
+                                    trinket_bot.menu_on_non_23(player_count)
+                                    return
+                                end
+                            else
+                                trinket_bot.menu_on_non_23_triggered = false
+                            end
+                        end
+                    end
+
                     if plr.Character and FindFirstChild(plr.Character, "HumanoidRootPart") then
                         local bot_pos = plr.Character.HumanoidRootPart.Position
                         local critical_distance = get_effective_critical_distance(60)
@@ -23074,6 +23281,7 @@ if is_hydroxide_supported_place() then
                 if Toggles.KickOnTrinket then Toggles.KickOnTrinket:SetValue(settings.kick_on_trinket or false) end
                 if Options.KickTrinketList then Options.KickTrinketList:SetValue(settings.kick_trinket_list or {}) end
                 if Toggles.StayInServer then Toggles.StayInServer:SetValue(settings.stay_in_server or false) end
+                if Toggles.MenuOnNon23 then Toggles.MenuOnNon23:SetValue(settings.menu_on_non_23 or false) end
                 if Toggles.ReequipGateInLoop then Toggles.ReequipGateInLoop:SetValue(settings.reequip_gate_in_loop == nil and true or settings.reequip_gate_in_loop) end
                 if Toggles.AutoRestartAfterHop then Toggles.AutoRestartAfterHop:SetValue(settings.auto_restart_after_hop == nil and true or settings.auto_restart_after_hop) end
                 if Toggles.DeepforestRestartForUploadedPath then Toggles.DeepforestRestartForUploadedPath:SetValue(settings.deepforest_restart_for_uploaded_path == nil and true or settings.deepforest_restart_for_uploaded_path) end
@@ -24382,6 +24590,7 @@ if is_hydroxide_supported_place() then
                             kick_on_trinket = Toggles.KickOnTrinket and Toggles.KickOnTrinket.Value or false,
                             kick_trinket_list = Options.KickTrinketList and Options.KickTrinketList.Value or {},
                             stay_in_server = Toggles.StayInServer and Toggles.StayInServer.Value or false,
+                            menu_on_non_23 = Toggles.MenuOnNon23 and Toggles.MenuOnNon23.Value or false,
                             reequip_gate_in_loop = Toggles.ReequipGateInLoop == nil and true or Toggles.ReequipGateInLoop.Value,
                             auto_restart_after_hop = Toggles.AutoRestartAfterHop == nil and true or Toggles.AutoRestartAfterHop.Value,
                             deepforest_restart_for_uploaded_path = Toggles.DeepforestRestartForUploadedPath == nil and true or Toggles.DeepforestRestartForUploadedPath.Value,
@@ -24690,6 +24899,12 @@ if is_hydroxide_supported_place() then
                 Text = "Stay in Server",
                 Default = false,
                 Tooltip = "Loops the path in the same server instead of serverhopping"
+            })
+
+            group_trinket_looping:AddToggle("MenuOnNon23", {
+                Text = "Menu on NON-23",
+                Default = cheat_client.config.menu_on_non_23 or false,
+                Tooltip = "Menus and stops botting if the current server drops below 23 players"
             })
 
             group_trinket_looping:AddToggle("AutoRestartAfterHop", {
