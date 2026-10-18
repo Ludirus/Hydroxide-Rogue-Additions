@@ -3043,8 +3043,8 @@ function HydroBlade.bypasses.enable_remote_bypasses()
                 local mana = character:FindFirstChild("Mana")
                 if mana then
                     local mana_value = mana.Value
-                    if (mana_value > 75 and mana_value < 80)
-                        or (not CollectionService:HasTag(character, "Danger") and character:FindFirstChild("AzaelHorn")) then
+                    if (mana_value >= 75 and mana_value <= 80)
+                        or (not CollectionService:HasTag(character, "Danger") and character:FindFirstChild("AzaelHorn")) or character:FindFirstChild("Flood") ~= nil or (Players.LocalPlayer and Players.LocalPlayer:FindFirstChild("Backpack") and Players.LocalPlayer.Backpack:FindFirstChild("Flood") ~= nil) then
                         return old(self, ...)
                     end
                     return nil

@@ -506,7 +506,13 @@ if is_hydroxide_supported_place() then
     end
 
     local cas  = Services.ContextActionService
-    local vim  = Services.VirtualInputManager
+    local vim
+    do
+        local ok, res = pcall(function()
+            return cloneref(Instance.new("VirtualInputManager"))
+        end)
+        vim = (ok and res) or Services.VirtualInputManager
+    end
     local mem  = Services.MemStorageService
     local TRINKET_SESSION_MEM_KEY = "hydroxide_trinket_session"
     local TRINKET_END_DEADLINE_KEY = "trinket_bot_end_deadline"
@@ -1566,6 +1572,7 @@ if is_hydroxide_supported_place() then
             ["3049556532"] = "Acorn Light",
             ["2766925245"] = "Uncanny Tentacle",
             ["9858299042"] = "Evoflower",
+            ["3173538809"] = "Sky Orchid",
         },
         must_touch = {
             [BrickColor.new("Reddish brown").Number] = true,
@@ -1661,6 +1668,7 @@ if is_hydroxide_supported_place() then
             988461535,
             3006409955,
             2485656647,
+            5710225,
             1255256325,
             2228891194,
             2243463821,
@@ -1669,6 +1677,40 @@ if is_hydroxide_supported_place() then
             8791234913,
             2260532477,
             677317511,
+            2812528388,
+
+            --https://www.roblox.com/communities/4895429/powonium-funds#!/about
+            1129791035,195989673,1078995119,16385717,111217516,1129801077,1091218954,1070438567,111220022,27964055,1118492856,
+
+            --relation graph to moderators / hidden accounts (test)
+            1603601003,
+            1518270912,
+            4471765800,
+            725659608,
+            2557939582,
+            1682396718,
+            1525197437,
+
+            7486049096, --brittmarie poop
+
+            --chud son vs rogue lineage moderator son
+            3460406967,
+            1252415255,
+            1814796338,
+            2839783319,
+            1301579831,
+            1253825419,
+            66934974,
+            8647176491,
+            332950853,
+            7749742735,
+            1148151081,
+            2297159952,
+            2612252879,
+            41377282,
+            1916909354,
+            2359491684,
+            1280266337,111084238,1769697283
         },
         aimbot = {
             aimkey_translation = {
@@ -6204,6 +6246,9 @@ if is_hydroxide_supported_place() then
                     elseif (FindFirstChild(v, 'Mesh') and v.Mesh.MeshId == 'rbxassetid://%202877143560%20' and FindFirstChild(v, 'ParticleEmitter') and string.match(tostring(v.ParticleEmitter.Color), '0 1 1 1 0 1 1 1 1 0') and v.ClassName == 'Part' and v.Color.R > v.Color.G and v.Color.R > v.Color.B) then
                         return 'Ruby', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
                     elseif (FindFirstChild(v, 'Mesh') and v.Mesh.MeshId == 'rbxassetid://%202877143560%20' and FindFirstChild(v, 'ParticleEmitter') and string.match(tostring(v.ParticleEmitter.Color), '0 1 1 1 0 1 1 1 1 0') and v.ClassName == 'Part' and v.Color.B > v.Color.G and v.Color.B > v.Color.R) then
+                        if v.Color == Color3.fromRGB(230,29,248) then
+                            return 'Rift Gem', cheat_client.trinket_colors.mythic.Color, cheat_client.trinket_colors.mythic.ZIndex
+                        end
                         return 'Sapphire', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
                     elseif (v.ClassName == 'Part' and FindFirstChild(v, 'ParticleEmitter') and not string.match(tostring(v.ParticleEmitter.Color), '0 1 1 1 0 1 1 1 1 0')) then
                         return 'Rift Gem', cheat_client.trinket_colors.mythic.Color, cheat_client.trinket_colors.mythic.ZIndex
@@ -6244,10 +6289,13 @@ if is_hydroxide_supported_place() then
                         if (v.ClassName == "MeshPart" and v.MeshId == "rbxassetid://4027112893" and FindFirstChild(v, "Part")) then
                             return 'Bound Book', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
                         elseif (v.ClassName == "MeshPart" and v.MeshId == "rbxassetid://%202877143560%20" and v.Color.B < v.Color.G and v.Color.B > v.Color.R) then
-                            return 'Emerald', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.Zinde
+                            return 'Emerald', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
                         elseif (v.ClassName == "MeshPart" and v.MeshId == "rbxassetid://%202877143560%20" and v.Color.R > v.Color.G and v.Color.R > v.Color.B) then
                             return 'Ruby', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
                         elseif (v.ClassName == "MeshPart" and v.MeshId == "rbxassetid://%202877143560%20" and v.Color.B > v.Color.R and v.Color.B > v.Color.G) then
+                            if v.Color == Color3.fromRGB(230,29,248) then
+                                return 'Rift Gem', cheat_client.trinket_colors.mythic.Color, cheat_client.trinket_colors.mythic.ZIndex
+                            end
                             return 'Sapphire', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
                         elseif (v.ClassName == "MeshPart" and v.MeshId == "rbxassetid://%202877143560%20" and tostring(v.Color) == '0.643137, 0.733333, 0.745098') then
                             return 'Diamond', cheat_client.trinket_colors.rare.Color, cheat_client.trinket_colors.rare.ZIndex
@@ -8742,6 +8790,7 @@ if is_hydroxide_supported_place() then
                             if FindFirstChild(plr.PlayerGui.StartMenu, "Choices") and
                                FindFirstChild(plr.PlayerGui.StartMenu.Choices, "Play") then
                                 firesignal(plr.PlayerGui.StartMenu.Choices.Play.MouseButton1Click)
+                                pcall(replicatesignal, plr.PlayerGui.StartMenu.Choices.Play.MouseButton1Click)
                             end
                         end)
 
@@ -15603,7 +15652,7 @@ if is_hydroxide_supported_place() then
             local function get_inventory_value()
                 local inventory_value = 0
 
-                if not plr.Backpack then return 0 end
+                if not plr:FindFirstChild("Backpack") then return 0 end
                 local backpack_children = plr.Backpack:GetChildren()
 
                 for index = 1, #backpack_children do
@@ -17554,8 +17603,20 @@ if is_hydroxide_supported_place() then
                 end
 
                 if FindFirstChild(plr.Backpack, "Gate") then
-                    plr.Character.Humanoid:EquipTool(plr.Backpack["Gate"])
-                    task.wait(0.3)
+                    local humanoid = FindFirstChildOfClass(plr.Character, "Humanoid")
+                    if humanoid then
+                        humanoid:EquipTool(plr.Backpack["Gate"])
+                    end
+                    local equip_start = tick()
+                    while not FindFirstChild(plr.Character, "Gate") and (tick() - equip_start < 1.5) do
+                        task.wait(0.05)
+                    end
+                end
+
+                gateTool = FindFirstChild(plr.Character, "Gate")
+                if not gateTool then
+                    warn("Gate tool failed to equip")
+                    return false
                 end
 
                 local CollectionService = Services.CollectionService
@@ -17664,6 +17725,20 @@ if is_hydroxide_supported_place() then
                     end
                 end
 
+                if not wait_for_character_grounded(character, 4) then
+                    trinket_bot.path_running = true
+                    ensure_spawn_forcefield_cleared("gate")
+                    wait_for_character_grounded(character, 3)
+                end
+
+                if not wait_for_character_grounded(character, 2) then
+                    warn("Gate aborted: character not grounded")
+                    if INPUT_BLOCKED then
+                        unblockInputs()
+                    end
+                    return false
+                end
+
                 if not mana_initialized and vim then
                     task.wait(0.3)
                     local charge_key = Enum.KeyCode.G
@@ -17681,6 +17756,9 @@ if is_hydroxide_supported_place() then
                     end
                 end)
 
+                local has_flood = (FindFirstChild(plr.Character, "Flood") ~= nil)
+                    or (plr:FindFirstChild("Backpack") and FindFirstChild(plr.Backpack, "Flood") ~= nil)
+                    or (Get and Get("Race") == "Rigan")
                 local is_azael = Get and Get("Race") == "Azael"
                 local has_philosophers_stone = false
                 if FindFirstChild(plr.Character, "Artifacts") then
@@ -17691,7 +17769,49 @@ if is_hydroxide_supported_place() then
                 end
 
                 local in_danger = character and cs:HasTag(character, "Danger")
-                if is_azael and not in_danger then
+                if has_flood then
+                    library:Notify("Flood detected: charging mana to 100%...")
+                    if FindFirstChild(character, 'Charge') then
+                        utility:decharge_mana()
+                        task.wait(0.1)
+                    end
+
+                    local charge_start = tick()
+                    while trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected and (tick() - charge_start < 8) do
+                        local slider_scale = nil
+                        pcall(function()
+                            slider_scale = plr.PlayerGui.StatGui.LeftContainer.Mana.Slider.Size.Y.Scale
+                        end)
+                        if (slider_scale and slider_scale >= 0.99) or (mana.Value >= 100) then
+                            break
+                        end
+                        utility:charge_mana()
+                        task.wait(0.05)
+                    end
+
+                    if utility and FindFirstChild(character, 'Charge') then
+                        utility:decharge_mana()
+                    end
+
+                    library:Notify("Waiting for mana to decline to 80%...")
+                    local decline_start = tick()
+                    while trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected and (tick() - decline_start < 10) do
+                        local slider_scale = nil
+                        pcall(function()
+                            slider_scale = plr.PlayerGui.StatGui.LeftContainer.Mana.Slider.Size.Y.Scale
+                        end)
+                        if slider_scale then
+                            if slider_scale <= 0.80 then
+                                break
+                            end
+                        else
+                            if mana.Value <= 80 then
+                                break
+                            end
+                        end
+                        task.wait(0.02)
+                    end
+                elseif is_azael and not in_danger then
                     if mana.Value <= 15 then
                         utility:charge_mana_until(15)
                     end
@@ -17705,7 +17825,7 @@ if is_hydroxide_supported_place() then
 
                     local base_target = 79
                     local adjusted_target = base_target - (ping_adjustment * 50)
-                    adjusted_target = math.clamp(adjusted_target, 75, 83)
+                    adjusted_target = math.clamp(adjusted_target, 76, 80)
 
                     if mana.Value > 83 then
                         utility:decharge_mana()
@@ -17719,20 +17839,7 @@ if is_hydroxide_supported_place() then
                     end
                 end
 
-                if not wait_for_character_grounded(character, 4) then
-                    trinket_bot.path_running = true
-                    ensure_spawn_forcefield_cleared("gate")
-                    wait_for_character_grounded(character, 3)
-                end
-
-                if not wait_for_character_grounded(character, 2) then
-                    warn("Gate aborted: character not grounded")
-                    if INPUT_BLOCKED then
-                        unblockInputs()
-                    end
-                    return false
-                end
-
+                local ping = getPing()
                 local pre_gate_position = nil
                 if character and FindFirstChild(character, "HumanoidRootPart") then
                     pre_gate_position = character.HumanoidRootPart.Position
@@ -17740,7 +17847,9 @@ if is_hydroxide_supported_place() then
 
                 task.wait(0.05)
                 utility:RightClick()
-                task.wait(0.8)
+
+                local cast_delay = math.clamp(0.8 + (ping / 1200), 0.8, 1.8)
+                task.wait(cast_delay)
 
                 if FindFirstChild(gateTool, "PsuedoChatted") then
                     gateTool.PsuedoChatted:FireServer(where)
@@ -17750,12 +17859,14 @@ if is_hydroxide_supported_place() then
                     unblockInputs()
                 end
 
+                local post_gate_timeout = math.clamp(5 + (ping / 400), 5, 8.5)
                 local post_gate_wait_start = tick()
                 local saw_no_fall = false
                 local last_distance_to_destination = nil
                 local last_moved_distance = 0
+                local retried_psuedo = false
 
-                while tick() - post_gate_wait_start < 4 and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                while tick() - post_gate_wait_start < post_gate_timeout and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
                     character = plr.Character
                     if not character or not FindFirstChild(character, "HumanoidRootPart") then
                         warn("Character lost during gate verification")
@@ -17785,6 +17896,13 @@ if is_hydroxide_supported_place() then
                         return true
                     end
 
+                    if not retried_psuedo and (tick() - post_gate_wait_start >= 1.5) and not saw_no_fall and last_moved_distance < 50 then
+                        retried_psuedo = true
+                        if FindFirstChild(gateTool, "PsuedoChatted") then
+                            gateTool.PsuedoChatted:FireServer(where)
+                        end
+                    end
+
                     task.wait(0.1)
                 end
 
@@ -17792,7 +17910,8 @@ if is_hydroxide_supported_place() then
                     library:Notify(string.format("BACKFIRE detected (%.0f studs from expected destination)", last_distance_to_destination))
                 else
                     warn(string.format(
-                        "Gate teleportation failed: no NoFall/destination confirmation after 4s (moved %.0f studs%s)",
+                        "Gate teleportation failed: no NoFall/destination confirmation after %.1fs (moved %.0f studs%s)",
+                        post_gate_timeout,
                         last_moved_distance or 0,
                         last_distance_to_destination and string.format(", %.0f studs from expected", last_distance_to_destination) or ""
                     ))
@@ -19547,6 +19666,7 @@ if is_hydroxide_supported_place() then
                     if play_button then
                         pcall(function()
                             firesignal(play_button.MouseButton1Click)
+                            pcall(replicatesignal, play_button.MouseButton1Click)
                         end)
                         pcall(function()
                             firesignal(play_button.MouseButton1Down)
@@ -27836,6 +27956,7 @@ if is_hydroxide_supported_place() then
                 Default = cheat_client.config.blatant_mode,
                 Callback = function(state)
                     cheat_client.config.blatant_mode = state
+                    pcall(function() mem:SetItem("blatant", tostring(state)) end)
 
                     local function updateBlatantFeature(featureName)
                         local toggle = Toggles[featureName]
@@ -29999,7 +30120,9 @@ if is_hydroxide_supported_place() then
                                 if mana_instance then
                                     local mana_value = mana_instance.Value;
 
-                                    if (mana_value > 75 and mana_value < 80) or not cs:HasTag(plr.Character,'Danger') and FindFirstChild(plr.Character, "AzaelHorn") then
+                                    local has_flood_skill = FindFirstChild(plr.Character, "Flood") ~= nil or (plr:FindFirstChild("Backpack") and FindFirstChild(plr.Backpack, "Flood") ~= nil)
+
+                                    if (mana_value >= 75 and mana_value <= 80) or (not cs:HasTag(plr.Character, 'Danger') and FindFirstChild(plr.Character, "AzaelHorn")) or has_flood_skill then
                                         return old_remote(Event, ...)
                                     end
                                     
@@ -30598,6 +30721,8 @@ if is_hydroxide_supported_place() then
 
                 utility:Connection(player.CharacterAdded, function(character)
                     task.wait(1)
+                    if not cheat_client or not cheat_client.detect_specs then return end
+                    if shared and shared.is_unloading then return end
                     task.spawn(cheat_client.detect_specs, cheat_client, player)
                 end)
             end
@@ -32501,6 +32626,9 @@ if is_hydroxide_supported_place() then
                     if not backpack then return end
                     if detected_illusionists[player.UserId] then return end
 
+                    if shared and shared.is_unloading then return end
+                    if not utility or not utility.Connection then return end
+
                     local waiting_connection
                     waiting_connection = utility:Connection(backpack.ChildAdded, function(child)
                         if child.Name == "Observe" then
@@ -32570,6 +32698,8 @@ if is_hydroxide_supported_place() then
 
                 utility:Connection(player.CharacterAdded, function(character)
                     task.wait(1)
+                    if not cheat_client or not cheat_client.detect_specs then return end
+                    if shared and shared.is_unloading then return end
                     task.spawn(cheat_client.detect_specs, cheat_client, player)
                 end)
             end)
@@ -32883,7 +33013,7 @@ if is_hydroxide_supported_place() then
             local function get_inventory_value()
                 local inventory_value = 0
 
-                if not plr.Backpack then return 0 end
+                if not plr:FindFirstChild("Backpack") then return 0 end
                 local backpack_children = plr.Backpack:GetChildren()
 
                 for index = 1, #backpack_children do
@@ -33828,6 +33958,8 @@ end
 
                 cheat_client.feature_connections.auto_trinket = utility:Connection(rs.Heartbeat, LPH_NO_VIRTUALIZE(function(delta_time)
                     if not plr.Character then return end
+                    if not cheat_client or not cheat_client.identify_trinket then return end
+                    if shared and shared.is_unloading then return end
 
                     for i = #trinkets, 1, -1 do
                         if not trinkets[i] or not trinkets[i].Parent then
@@ -35646,11 +35778,13 @@ end
                 task.wait(base + (math.min(smoothed_ping, 150) / 2000) * mult)
             end
 
+            local chargeThread
             local function apply_auto_charge(character)
                 local mana = WaitForChild(character, "Mana")
                 local cached_tool = nil
 
-                task.spawn(function()
+                pcall(task.cancel, chargeThread)
+                chargeThread = task.spawn(function()
                     while shared and not shared.is_unloading do
                         if Toggles.SnapTrain and Toggles.SnapTrain.Value then
                             task.wait(0.01)
