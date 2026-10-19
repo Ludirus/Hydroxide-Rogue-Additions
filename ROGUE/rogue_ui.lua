@@ -17756,10 +17756,13 @@ if is_hydroxide_supported_place() then
                     end
                 end)
 
-                local has_flood = (FindFirstChild(plr.Character, "Flood") ~= nil)
-                    or (plr:FindFirstChild("Backpack") and FindFirstChild(plr.Backpack, "Flood") ~= nil)
+                local is_rigan = (cheat_client and cheat_client.get_race and cheat_client:get_race(plr) == "Rigan")
                     or (Get and Get("Race") == "Rigan")
-                local is_azael = Get and Get("Race") == "Azael"
+                local has_flood = is_rigan
+                    or (FindFirstChild(plr.Character, "Flood") ~= nil)
+                    or (plr:FindFirstChild("Backpack") and FindFirstChild(plr.Backpack, "Flood") ~= nil)
+                local is_azael = (cheat_client and cheat_client.get_race and cheat_client:get_race(plr) == "Azael")
+                    or (Get and Get("Race") == "Azael")
                 local has_philosophers_stone = false
                 if FindFirstChild(plr.Character, "Artifacts") then
                     local artifacts = plr.Character.Artifacts
@@ -17773,7 +17776,7 @@ if is_hydroxide_supported_place() then
                     library:Notify("Flood detected: charging mana to 100%...")
                     if FindFirstChild(character, 'Charge') then
                         utility:decharge_mana()
-                        task.wait(0.1)
+                        task.wait(0.05)
                     end
 
                     local charge_start = tick()
@@ -17782,34 +17785,28 @@ if is_hydroxide_supported_place() then
                         pcall(function()
                             slider_scale = plr.PlayerGui.StatGui.LeftContainer.Mana.Slider.Size.Y.Scale
                         end)
-                        if (slider_scale and slider_scale >= 0.99) or (mana.Value >= 100) then
+                        if (slider_scale and slider_scale >= 0.99) or (mana and mana.Value >= 100) then
                             break
                         end
                         utility:charge_mana()
-                        task.wait(0.05)
+                        task.wait(0.04)
                     end
 
                     if utility and FindFirstChild(character, 'Charge') then
                         utility:decharge_mana()
                     end
 
-                    library:Notify("Waiting for mana to decline to 80%...")
+                    library:Notify("Waiting for mana to decline to 85%...")
                     local decline_start = tick()
                     while trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected and (tick() - decline_start < 10) do
                         local slider_scale = nil
                         pcall(function()
                             slider_scale = plr.PlayerGui.StatGui.LeftContainer.Mana.Slider.Size.Y.Scale
                         end)
-                        if slider_scale then
-                            if slider_scale <= 0.80 then
-                                break
-                            end
-                        else
-                            if mana.Value <= 80 then
-                                break
-                            end
+                        if (slider_scale and slider_scale <= 0.85) or (mana and mana.Value <= 85) then
+                            break
                         end
-                        task.wait(0.02)
+                        task.wait()
                     end
                 elseif is_azael and not in_danger then
                     if mana.Value <= 15 then
@@ -17825,12 +17822,12 @@ if is_hydroxide_supported_place() then
 
                     local base_target = 79
                     local adjusted_target = base_target - (ping_adjustment * 50)
-                    adjusted_target = math.clamp(adjusted_target, 76, 80)
+                    adjusted_target = math.clamp(adjusted_target, 76, 83)
 
-                    if mana.Value > 83 then
+                    if mana.Value > 85 then
                         utility:decharge_mana()
-                        while mana.Value > 83 and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
-                            task.wait(0.05)
+                        while mana.Value > 85 and trinket_bot.path_running and not emergency_gate_requested and not trinket_bot.moderator_detected do
+                            task.wait(0.04)
                         end
                     end
 
@@ -17845,10 +17842,9 @@ if is_hydroxide_supported_place() then
                     pre_gate_position = character.HumanoidRootPart.Position
                 end
 
-                task.wait(0.05)
                 utility:RightClick()
 
-                local cast_delay = math.clamp(0.8 + (ping / 1200), 0.8, 1.8)
+                local cast_delay = math.clamp(0.8 + (ping / 2500), 0.8, 1.2)
                 task.wait(cast_delay)
 
                 if FindFirstChild(gateTool, "PsuedoChatted") then
@@ -17859,7 +17855,7 @@ if is_hydroxide_supported_place() then
                     unblockInputs()
                 end
 
-                local post_gate_timeout = math.clamp(5 + (ping / 400), 5, 8.5)
+                local post_gate_timeout = math.clamp(4.5 + (ping / 500), 4.5, 6.5)
                 local post_gate_wait_start = tick()
                 local saw_no_fall = false
                 local last_distance_to_destination = nil
@@ -30120,9 +30116,11 @@ if is_hydroxide_supported_place() then
                                 if mana_instance then
                                     local mana_value = mana_instance.Value;
 
-                                    local has_flood_skill = FindFirstChild(plr.Character, "Flood") ~= nil or (plr:FindFirstChild("Backpack") and FindFirstChild(plr.Backpack, "Flood") ~= nil)
+                                    local has_flood_skill = (FindFirstChild(plr.Character, "Flood") ~= nil)
+                                        or (plr:FindFirstChild("Backpack") and FindFirstChild(plr.Backpack, "Flood") ~= nil)
+                                        or (cheat_client and cheat_client.get_race and cheat_client:get_race(plr) == "Rigan")
 
-                                    if (mana_value >= 75 and mana_value <= 80) or (not cs:HasTag(plr.Character, 'Danger') and FindFirstChild(plr.Character, "AzaelHorn")) or has_flood_skill then
+                                    if (mana_value >= 75 and mana_value <= 85) or (not cs:HasTag(plr.Character, 'Danger') and FindFirstChild(plr.Character, "AzaelHorn")) or has_flood_skill then
                                         return old_remote(Event, ...)
                                     end
                                     
